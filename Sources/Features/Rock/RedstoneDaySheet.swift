@@ -35,7 +35,7 @@ struct RedstoneDaySheet: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(Formatters.dayTitleWithWeekday(dayKey: day.date))
+            Text(Formatters.dayTitleWithWeekday(day.date))
                 .font(Typography.titleM)
                 .foregroundStyle(Theme.textPrimary)
             Spacer(minLength: 8)
