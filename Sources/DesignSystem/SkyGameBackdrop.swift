@@ -33,7 +33,7 @@ struct SkyGameBackdrop: View {
             ZStack(alignment: .topLeading) {
                 ForEach(Array(Self.stars.enumerated()), id: \.offset) { _, star in
                     Circle()
-                        .fill(Theme.textPrimary.opacity(star.opacity))
+                        .fill(Theme.trackArc.opacity(star.opacity))
                         .frame(width: star.size, height: star.size)
                         .position(x: w * star.x, y: h * star.y)
                 }
@@ -60,18 +60,25 @@ struct SkyGameBackdrop: View {
         .allowsHitTesting(false)
     }
 
+    /// 一层云。
+    ///
+    /// 关键在 `.blur`：纯色椭圆直接叠会在边界处留下硬边，浅色卡上看起来像"扫描线"。
+    /// 模糊 12pt 之后边缘化开，才像雾。颜色用 `trackArc`（蓝紫）而不是 `textPrimary`：
+    /// 后者在浅色模式是深灰，压在白卡上就是一道道脏印子。
     private func cloudLayer(width w: CGFloat, height h: CGFloat, index: Int) -> some View {
-        let baseY = 0.84 + CGFloat(index) * 0.055
-        let opacity = 0.05 + Double(index) * 0.035
-        let thickness = h * (0.16 - CGFloat(index) * 0.02)
+        let baseY = 0.86 + CGFloat(index) * 0.06
+        let opacity = 0.07 + Double(index) * 0.04
+        let thickness = h * (0.22 - CGFloat(index) * 0.02)
 
         return ZStack {
             ForEach(Array(Self.cloudBumps.enumerated()), id: \.offset) { _, bump in
                 Ellipse()
-                    .fill(Theme.textPrimary.opacity(opacity))
+                    .fill(Theme.trackArc.opacity(opacity))
                     .frame(width: w * bump.width, height: thickness)
-                    .position(x: w * bump.x, y: h * baseY + CGFloat(index) * 3)
+                    .position(x: w * bump.x, y: h * baseY + CGFloat(index) * 4)
             }
         }
+        .blur(radius: 12)
+        .allowsHitTesting(false)
     }
 }

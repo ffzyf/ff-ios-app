@@ -52,7 +52,8 @@ struct TodayBriefTrackCard: View {
             phase: phase,
             now: now,
             sunriseText: sunText(snapshot?.sunrise, isSunrise: true, now: now),
-            sunsetText: sunText(snapshot?.sunset, isSunrise: false, now: now)
+            sunsetText: sunText(snapshot?.sunset, isSunrise: false, now: now),
+            note: ritualText
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
@@ -80,22 +81,26 @@ struct TodayBriefTrackCard: View {
 
     // MARK: - 正文
 
-    /// 服务端 `body` 切成「首句 + 补充行」。切不出来就退到农历 / 生日 / 一句提示。
-    private var bodyParts: (headline: String, lines: [String]) {
-        var lines: [String] = []
-
-        // 宜忌摘要：简报站原文里最有信息量的一行，且天然适合压在地平线上方
-        var ritual: [String] = []
+    /// 宜 / 忌：放在地平线以下的那行注脚。
+    ///
+    /// 简报站原文里信息密度最高的一行，但它属于"历书"，不是正文 ——
+    /// 塞进天空区会被地平线亮边切开，所以走 SkyCard 的 `note` 位。
+    private var ritualText: String? {
+        var parts: [String] = []
         if let yi = snapshot?.yi, !yi.isEmpty {
-            ritual.append("宜 " + yi.prefix(2).joined(separator: "、"))
+            parts.append("宜 " + yi.prefix(2).joined(separator: "、"))
         }
         if let ji = snapshot?.ji, !ji.isEmpty {
-            ritual.append("忌 " + ji.prefix(1).joined(separator: "、"))
+            parts.append("忌 " + ji.prefix(1).joined(separator: "、"))
         }
-        if !ritual.isEmpty {
-            lines.append(ritual.joined(separator: " · "))
-        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
+    /// 服务端 `body` 切成「首句 + 一行续文」。
+    ///
+    /// 只给一行续文是硬约束：天空区到地平线只有这么多高度，多一行就会压线。
+    /// 想读全文点进简报 Tab。
+    private var bodyParts: (headline: String, lines: [String]) {
         guard let raw = snapshot?.body?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             // 正文还没生成：不编内容，只说今天是什么日子
             let fallback = snapshot?.lunar ?? snapshot?.birthday ?? "简报还没生成"
@@ -104,17 +109,14 @@ struct TodayBriefTrackCard: View {
 
         // 拆首句：中文句读 + 换行都算
         let separators = CharacterSet(charactersIn: "。！？\n")
-        if let range = raw.rangeOfCharacter(from: separators) {
-            let head = String(raw[raw.startIndex..<range.upperBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let tail = String(raw[range.upperBound...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tail.isEmpty {
-                lines.insert(tail, at: 0)
-            }
-            return (head, Array(lines.prefix(2)))
+        guard let range = raw.rangeOfCharacter(from: separators) else {
+            return (raw, [])
         }
-        return (raw, Array(lines.prefix(1)))
+        let head = String(raw[raw.startIndex..<range.upperBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = String(raw[range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (head, tail.isEmpty ? [] : [tail])
     }
 
     // MARK: - 文案

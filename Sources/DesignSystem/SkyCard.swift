@@ -61,6 +61,11 @@ struct SkyCard<Content: View>: View {
     /// 日出 / 日落时刻文案（`06:05`），由调用方从 `SunClock` 取
     let sunriseText: String
     let sunsetText: String
+    /// 地面区的一行小字（简报卡用它放「宜 / 忌」）。
+    ///
+    /// 为什么单独一个参数而不是塞进 content：地平线是硬的，任何正文越过它都会被那条
+    /// 亮边切开。宜忌属于"地面上的注脚"，放在地平线**以下**才不会被弧线穿过。
+    var note: String? = nil
     var cornerRadius: CGFloat = Radius.card
     private let content: Content
 
@@ -68,12 +73,14 @@ struct SkyCard<Content: View>: View {
          now: Date,
          sunriseText: String,
          sunsetText: String,
+         note: String? = nil,
          cornerRadius: CGFloat = Radius.card,
          @ViewBuilder content: () -> Content) {
         self.phase = phase
         self.now = now
         self.sunriseText = sunriseText
         self.sunsetText = sunsetText
+        self.note = note
         self.cornerRadius = cornerRadius
         self.content = content()
     }
@@ -161,16 +168,24 @@ struct SkyCard<Content: View>: View {
     // MARK: - 底部：日出 / 日落（落在地面区）
 
     private func footerRow(_ sky: Theme.SkyColors) -> some View {
-        HStack(spacing: 0) {
-            Text(sunriseText)
-                .font(Typography.caption)
-                .foregroundStyle(sky.inkDim)
-                .monospacedDigit()
-            Spacer(minLength: 8)
-            Text(sunsetText)
-                .font(Typography.caption)
-                .foregroundStyle(sky.inkDim)
-                .monospacedDigit()
+        VStack(alignment: .leading, spacing: 4) {
+            if let note, !note.isEmpty {
+                Text(note)
+                    .font(Typography.captionXS)
+                    .foregroundStyle(sky.inkDim.opacity(0.82))
+                    .lineLimit(1)
+            }
+            HStack(spacing: 0) {
+                Text(sunriseText)
+                    .font(Typography.caption)
+                    .foregroundStyle(sky.inkDim)
+                    .monospacedDigit()
+                Spacer(minLength: 8)
+                Text(sunsetText)
+                    .font(Typography.caption)
+                    .foregroundStyle(sky.inkDim)
+                    .monospacedDigit()
+            }
         }
     }
 }
