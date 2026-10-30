@@ -1,3 +1,17 @@
+# 本文件由主理人维护，任何改动都需要重新粘贴到仓库的 .github/workflows/build-ipa.yml
+#
+# 目标：macos-26（GA，Xcode 26 / iOS 26 SDK）上产出未签名 SkyApp.ipa，
+#       并用模拟器截一张首页图作为「液态玻璃有没有糊成一片」的视觉证据。
+#
+# 两个 job：
+#   build        生成工程 → 无签名构建 → 打 SkyApp.ipa → 上传 artifact（失败即红）
+#   screenshots  模拟器构建 → 动态选机器 → 装包 → 启动 → 截图（continue-on-error，不阻塞交付）
+#
+# 约定（与 V1 一致，已验证有效）：
+#   · 工程可能位于仓库根目录，也可能位于 ios/ 等子目录，统一用 `Locate project directory` 定位
+#   · 构建必须用 -scheme + -destination，否则 -derivedDataPath 不生效、产物路径不对
+#   · 打包 step 用 set -uo pipefail（不带 -e）+ `|| true`，避免 find 找不到目录时提前退出、
+#     以及 `find | head` 的 SIGPIPE(141) 直接杀掉 step
 name: Build Unsigned IPA
 
 on:
@@ -5,10 +19,13 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 30
+    runs-on: macos-26
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,10 +33,9 @@ jobs:
       - name: Show toolchain
         run: |
           xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
           sw_vers
 
-      # 工程可能位于仓库根目录，也可能位于 ios/ 子目录，
-      # 这里自动定位 project.yml 所在目录，避免路径写死后构建失败。
       - name: Locate project directory
         id: locate
         run: |
@@ -64,9 +80,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      # 注意这里用 set -uo pipefail（不带 -e）：find 目录不存在时返回 1，
-      # 若开 -e 会直接终止 step，让下面的排错分支变成死代码。
-      # 另外 `find | head` 的 SIGPIPE(141) 也必须用 `|| true` 兜住。
       - name: Package IPA
         env:
           PROJECT_DIR: ${{ steps.locate.outputs.dir }}
@@ -93,4 +106,138 @@ jobs:
         with:
           name: SkyApp-unsigned-ipa
           path: SkyApp.ipa
+          retention-days: 30
+
+  # 视觉证据：模拟器上跑起来截一张首页。设备型号动态解析（runner 上的 iPhone 型号会变），
+  # 不写死 iPhone 16 Pro；不切 Tab（切 Tab 需要额外 URL scheme，本版不为此发明机制）。
+  screenshots:
+    needs: build
+    continue-on-error: true
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate project directory
+        id: locate
+        run: |
+          set -euo pipefail
+          if [ -f project.yml ]; then
+            project_dir="."
+          elif [ -f ios/project.yml ]; then
+            project_dir="ios"
+          else
+            found="$(find . -maxdepth 4 -name project.yml -not -path './.git/*' -print 2>/dev/null | head -n 1 || true)"
+            if [ -z "$found" ]; then
+              echo "project.yml not found" >&2
+              exit 1
+            fi
+            project_dir="$(dirname "$found")"
+          fi
+          echo "Project directory: $project_dir"
+          echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Install xcodegen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: xcodegen generate
+
+      # 模拟器构建不需要任何签名参数。
+      - name: Build for simulator
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SkyApp.xcodeproj \
+            -scheme SkyApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath simbuild \
+            build
+
+      - name: Boot simulator
+        id: sim
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          set -uo pipefail
+          xcrun simctl list devices available -j > /tmp/simctl-devices.json
+          python3 - <<'PY' > /tmp/sim-udid.txt
+          import json
+          import sys
+
+          try:
+              with open("/tmp/simctl-devices.json", "r", encoding="utf-8") as handle:
+                  data = json.load(handle)
+          except Exception as error:
+              print("", end="")
+              sys.stderr.write("simctl json parse failed: %s\n" % error)
+              raise SystemExit(0)
+
+          devices = data.get("devices") or {}
+          runtimes = sorted(devices.keys(), reverse=True)
+          picked = ""
+          for runtime in runtimes:
+              if "iOS" not in runtime:
+                  continue
+              for device in devices.get(runtime) or []:
+                  name = str(device.get("name") or "")
+                  if not name.startswith("iPhone"):
+                      continue
+                  if not device.get("isAvailable", True):
+                      continue
+                  picked = str(device.get("udid") or "")
+                  sys.stderr.write("picked: %s (%s)\n" % (name, runtime))
+                  break
+              if picked:
+                  break
+          print(picked, end="")
+          PY
+          UDID="$(cat /tmp/sim-udid.txt)"
+          if [ -z "$UDID" ]; then
+            echo "::error::no available iPhone simulator found"
+            xcrun simctl list devices available | head -n 60 || true
+            exit 1
+          fi
+          echo "Simulator UDID: $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100 || true
+
+      - name: Install and launch
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -uo pipefail
+          echo "== .app candidates under simbuild =="
+          find simbuild -maxdepth 6 -name '*.app' -type d -print 2>/dev/null || true
+          APP="$(find simbuild -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1 || true)"
+          if [ -z "${APP:-}" ]; then
+            echo "::error::no simulator .app produced"
+            ls -R simbuild 2>/dev/null | head -n 120 || true
+            exit 1
+          fi
+          echo "APP=$APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" top.skyzyf.skyapp
+          sleep 12
+
+      - name: Screenshot
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -uo pipefail
+          xcrun simctl io "$UDID" screenshot shot-overview.png || true
+          ls -lh shot-overview.png || true
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyApp-screenshot
+          path: shot-overview.png
+          if-no-files-found: warn
           retention-days: 30
