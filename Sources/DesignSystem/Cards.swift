@@ -90,7 +90,7 @@ struct GlassListRow: View {
                 if let icon = icon {
                     Image(systemName: icon)
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.lime)
+                        .foregroundStyle(Theme.limeInk)
                         .frame(width: 22, alignment: .center)
                 }
                 Text(title)
@@ -155,7 +155,7 @@ struct StatusPill: View {
 
     private var foreground: Color {
         switch kind {
-        case .newVersion: return Theme.bgBase
+        case .newVersion: return Theme.onLime
         case .upToDate: return Theme.statusOk
         case .pending: return Theme.textTertiary
         case .failed: return Theme.statusError
@@ -165,17 +165,17 @@ struct StatusPill: View {
     private var background: Color {
         switch kind {
         case .newVersion: return Theme.lime
-        case .upToDate: return Color.white.opacity(0.06)
-        case .pending: return Color.white.opacity(0.04)
+        case .upToDate: return Theme.surfaceTint3
+        case .pending: return Theme.surfaceTint2
         case .failed: return Theme.statusError.opacity(0.12)
         }
     }
 
     private var border: Color {
         switch kind {
-        case .newVersion: return Color.white.opacity(0.20)
-        case .upToDate: return Color.white.opacity(0.10)
-        case .pending: return Color.white.opacity(0.08)
+        case .newVersion: return Theme.glassStrokeTop
+        case .upToDate: return Theme.divider
+        case .pending: return Theme.surfaceTint4
         case .failed: return Theme.statusError.opacity(0.35)
         }
     }

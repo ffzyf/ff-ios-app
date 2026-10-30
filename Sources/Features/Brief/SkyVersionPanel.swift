@@ -26,10 +26,10 @@ struct SkyVersionPanel: View {
         HStack(spacing: 8) {
             Text(text)
                 .font(Typography.footnote)
-                .foregroundStyle(Theme.lime)
+                .foregroundStyle(Theme.limeInk)
             Image(systemName: "arrow.right")
                 .font(Typography.caption)
-                .foregroundStyle(Theme.lime)
+                .foregroundStyle(Theme.limeInk)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 4)

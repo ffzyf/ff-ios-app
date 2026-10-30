@@ -14,7 +14,7 @@ struct ArticleRowCard: View {
     var body: some View {
         PressableGlassCard(
             level: .card,
-            tint: pinned ? Color.white.opacity(0.02) : nil,
+            tint: pinned ? Theme.surfaceTint1 : nil,
             action: {
                 action()
             }

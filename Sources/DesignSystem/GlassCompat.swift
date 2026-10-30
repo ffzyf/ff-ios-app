@@ -5,6 +5,11 @@ import SwiftUI
 /// 核心原则：**玻璃表达「浮在内容之上」，不表达「这是一个盒子」**。
 /// 所以只有 4 层，且「越靠上越厚 —— 但 Tab 栏例外」（Tab 栏视觉最上层却用最薄的材质，
 /// 因为它必须透出滚动内容才能证明自己在浮）。
+///
+/// 双主题改造（批次 1）：这里原本返回 4 个 `Double`（`whiteFill` / `topStroke` / …），
+/// 由调用方"就地给白色加透明度"来造色 —— 浅色模式下这些值全都会失效（白叠白等于没叠）。
+/// 现在改成**返回 token**：`GlassLevel` 只负责"这一层用哪一档"，具体明暗交给 `Theme`。
+/// 这样 iOS 18–25 的手工路径也自动双主题，不需要在 `HandGlass` 里读任何环境。
 enum GlassLevel: String, CaseIterable {
     /// 层 1：弹层 / 全屏图片查看
     case sheet
@@ -25,38 +30,36 @@ enum GlassLevel: String, CaseIterable {
         }
     }
 
-    /// 白色叠层：材质本身不够「亮」，深底上会显脏，用纯白叠层提亮
-    var whiteFill: Double {
+    /// 白叠层：材质本身不够「亮」，深底上会显脏，用一层白提亮。
+    /// 深色 = 白 10% / 6%，浅色 = 白 88% / 72%（PRD §3.2 `glassFillStrong` / `glassFill`）。
+    var fillColor: Color {
         switch self {
-        case .sheet: return 0.10
-        case .floating: return 0.08
-        case .card: return 0.06
-        case .chrome: return 0.06
+        case .sheet, .floating: return Theme.glassFillStrong
+        case .card, .chrome: return Theme.glassFill
         }
     }
 
-    /// 顶缘描边不透明度 —— **深色背景下玻璃与背景唯一的分界线**，没有它卡片就是一块脏背景
-    var topStroke: Double {
-        switch self {
-        case .sheet: return 0.22
-        default: return 0.18
-        }
-    }
+    /// 顶缘描边 —— **深色背景下玻璃与背景唯一的分界线**，没有它卡片就是一块脏背景；
+    /// 浅色下换成白 90%，作用从"接光"变成"提亮"（PRD §3.2 玻璃层脚注）
+    var strokeTopColor: Color { return Theme.glassStrokeTop }
 
-    /// 下缘描边不透明度
-    var bottomStroke: Double { return 0.04 }
+    /// 下缘描边。浅色用 `#0F1A26` 8%，不用白 —— 白描边压在白底上等于没有
+    var strokeBottomColor: Color { return Theme.glassStrokeBottom }
 
     /// 内侧顶部 1pt 高光（模拟折射，玻璃「有厚度」的感觉 90% 来自这两条边）
-    var innerHighlight: Double { return 0.14 }
+    var highlightColor: Color { return Theme.glassHighlight }
 
-    /// 外投影：投影是「浮起来」最直接的证据，比加 blur 有效得多
-    var shadowOpacity: Double {
+    /// 外投影：投影是「浮起来」最直接的证据，比加 blur 有效得多。
+    /// 浅色换低饱和灰蓝（`#1B2E3F`），黑影在浅底上会发灰显脏（PRD §3.1 第 4 条）
+    var shadowColor: Color {
         switch self {
-        case .card: return 0.35
-        default: return 0.45
+        case .card: return Theme.glassShadowSoft
+        default: return Theme.glassShadow
         }
     }
 
+    /// 几何固定不随外观变（设计文档 §1.1.4 的取舍：浅色要求 18 而这里是 24，差 6pt 肉眼不可辨，
+    /// 真正的观感目标由 `shadowColor` 换灰蓝 + 双层阴影达成）
     var shadowRadius: CGFloat {
         switch self {
         case .card: return 18
@@ -85,6 +88,9 @@ extension View {
     ///   - shape: 形状，必须是 `InsettableShape`（`inset(by:)` 与 `strokeBorder` 需要它）
     ///   - tint: 只用于状态类染色（青柠 8%），普通卡片传 nil
     ///   - interactive: 是否允许系统按压形变（浮层按钮 / Tab 栏传 true）
+    ///
+    /// 签名与 V2 完全一致（30+ 个调用点零改动）：批次 1 只把里面的颜色换成 token、
+    /// 把影子抽成 `GlassShadow` 修饰符。
     @ViewBuilder
     func glassSurface<S: InsettableShape>(
         _ level: GlassLevel,
@@ -102,12 +108,24 @@ extension View {
                 self.modifier(HandGlass(level: level, shape: shape, tint: tint))
             }
         }
-        .shadow(
-            color: Color.black.opacity(level.shadowOpacity),
-            radius: level.shadowRadius,
-            x: 0,
-            y: level.shadowY
-        )
+        .modifier(GlassShadow(level: level))
+    }
+}
+
+// MARK: - 影子（双主题的关键一层）
+
+/// 玻璃投影。抽成 `ViewModifier` 而不是写在 `glassSurface` 里的原因：
+/// 影子颜色是 token（自动跟随外观），但**浅色要多一层"近场接触影"**才能压住白底，
+/// 而这层在深色下必须是完全透明 —— 写成修饰符后，这一条逻辑只有一处，且不在 View 里判深浅。
+struct GlassShadow: ViewModifier {
+    let level: GlassLevel
+
+    func body(content: Content) -> some View {
+        content
+            // 远场扩散影（两套值都在 token 里）
+            .shadow(color: level.shadowColor, radius: level.shadowRadius, x: 0, y: level.shadowY)
+            // 近场接触影：深色 token 是全透明（0%）→ 深色像素零变化；浅色 5% 灰蓝
+            .shadow(color: Theme.glassShadowNear, radius: 2, x: 0, y: 1)
     }
 }
 

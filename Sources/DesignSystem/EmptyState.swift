@@ -12,9 +12,9 @@ struct EmptyStateView: View {
         VStack(spacing: 16) {
             ZStack {
                 Circle()
-                    .fill(Color.white.opacity(0.04))
+                    .fill(Theme.surfaceTint2)
                 Circle()
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                    .strokeBorder(Theme.divider, lineWidth: 1)
                 Image(systemName: icon)
                     .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(Theme.textTertiary)

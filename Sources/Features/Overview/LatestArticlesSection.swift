@@ -38,7 +38,7 @@ struct LatestArticlesSection: View {
             }) {
                 Text("全部 ›")
                     .font(Typography.footnoteMedium)
-                    .foregroundStyle(Theme.lime)
+                    .foregroundStyle(Theme.limeInk)
                     .padding(.vertical, 6)
                     .padding(.leading, 8)
                     .contentShape(Rectangle())

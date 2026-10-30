@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// 骨架块：`rgba(255,255,255,0.07)` 纯色块（骨架不是玻璃，PRD §4.4 层 5）。
+/// 骨架块：`Theme.skeleton` 纯色块（骨架不是玻璃，PRD §4.4 层 5）。
+///
+/// 双主题：深色是白 7%（与 V2 同值），浅色换成深灰蓝 6% ——
+/// 浅色下如果沿用白 7%，骨架块与 `#F7F9F6` 页面几乎同色，加载态等于不存在（PRD §4 #6）。
 ///
 /// 动效选型：**不用** `TimelineView` / `phaseAnimator`（签名与行为差异大、不好在 Linux 上确认），
 /// 用最稳的 `withAnimation + repeatForever` 位移一道 40% 宽的高光带（PRD §4.6：1.4s 循环）。
@@ -21,7 +24,10 @@ struct SkeletonBlock: View {
     }
 }
 
-/// 斜向光带：白 8% → 18% → 8%，带宽 40%，1.4s 循环
+/// 斜向光带：暗 → 亮 → 暗，带宽 40%，1.4s 循环
+///
+/// 双主题：V2 是 white 8% → 18% → 8%。浅色下白 8% 压在 `#0F1A26 6%` 的骨架块上**完全看不见**，
+/// 等于没有加载态（PRD §4 #6），所以浅色换成深灰蓝 6% → 12% → 6%。
 private struct ShimmerBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase: CGFloat = 0
@@ -53,9 +59,9 @@ private struct ShimmerBand: View {
     var body: some View {
         LinearGradient(
             colors: [
-                Color.white.opacity(0.08),
-                Color.white.opacity(0.18),
-                Color.white.opacity(0.08)
+                Theme.skeletonShimmerLow,
+                Theme.skeletonShimmerMid,
+                Theme.skeletonShimmerLow
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing

@@ -52,11 +52,13 @@ struct BadgePill: View {
         }
     }
 
+    /// 字色。青柠底的两种徽标（公告 / NEW）统一走 `onLime`（PRD §3.2「面上字」）：
+    /// 深色 `#0A0D14` 与 V2 的 `bgBase` 是同一个值 → 深色零变化；浅色 `#0F2410`，5.4:1。
     private var foreground: Color {
         switch kind {
-        case .announce: return Theme.bgBase
-        case .pinned: return Theme.lime
-        case .newVersion: return Theme.bgBase
+        case .announce: return Theme.onLime
+        case .pinned: return Theme.limeInk
+        case .newVersion: return Theme.onLime
         case .neutral: return Theme.textTertiary
         }
     }
@@ -66,16 +68,17 @@ struct BadgePill: View {
         case .announce: return Theme.limeBright
         case .pinned: return Color.clear
         case .newVersion: return Theme.lime
-        case .neutral: return Color.white.opacity(0.06)
+        case .neutral: return Theme.surfaceTint3
         }
     }
 
     private var border: Color {
         switch kind {
         case .announce: return Color.clear
-        case .pinned: return Theme.lime.opacity(0.60)
-        case .newVersion: return Color.white.opacity(0.18)
-        case .neutral: return Color.white.opacity(0.08)
+        // 置顶徽标的描边是「青柠色的线」→ 跟着字色走 limeInk（深色 60% 与 V2 完全一致）
+        case .pinned: return Theme.limeInk.opacity(0.60)
+        case .newVersion: return Theme.glassStrokeTop
+        case .neutral: return Theme.surfaceTint4
         }
     }
 }

@@ -38,7 +38,7 @@ struct ListBlock: View {
         if ordered {
             Text("\(index + 1).")
                 .font(Typography.callout.weight(.semibold))
-                .foregroundStyle(Theme.lime)
+                .foregroundStyle(Theme.limeInk)
                 .monospacedDigit()
                 .frame(width: 24, alignment: .trailing)
                 .padding(.top, 1)

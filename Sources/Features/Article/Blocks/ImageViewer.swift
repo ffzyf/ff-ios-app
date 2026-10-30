@@ -13,6 +13,7 @@ struct ImageViewer: View {
 
     var body: some View {
         ZStack {
+            // lint:allow: 全屏看图必须是纯黑画布（PRD 例外，白底看图会破坏对比判断）
             Color.black.ignoresSafeArea()
 
             Image(uiImage: image)

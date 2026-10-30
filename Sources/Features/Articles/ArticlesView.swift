@@ -131,7 +131,7 @@ struct ArticlesView: View {
         if isLoadingMore {
             HStack(spacing: 8) {
                 ProgressView()
-                    .tint(Theme.lime)
+                    .tint(Theme.limeInk)
                     .scaleEffect(0.8)
                 Text("正在加载更多")
                     .font(Typography.captionXS)

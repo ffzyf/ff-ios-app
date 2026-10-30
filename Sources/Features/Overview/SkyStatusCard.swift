@@ -76,7 +76,7 @@ struct SkyStatusCard: View {
             Spacer(minLength: 4)
             Text("简报 ›")
                 .font(Typography.captionXS)
-                .foregroundStyle(Theme.lime)
+                .foregroundStyle(Theme.limeInk)
         }
     }
 

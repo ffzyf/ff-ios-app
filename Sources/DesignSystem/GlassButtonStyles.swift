@@ -22,14 +22,14 @@ struct PrimaryCTAStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Typography.footnoteMedium)
-            .foregroundStyle(Theme.bgBase)
+            .foregroundStyle(Theme.onLime)
             .padding(.horizontal, 22)
             .padding(.vertical, 13)
             .background {
                 Capsule().fill(Theme.lime)
             }
             .overlay {
-                Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                Capsule().strokeBorder(Theme.glassStrokeTop, lineWidth: 1)
             }
             .shadow(color: Theme.limeGlow, radius: 14, x: 0, y: 6)
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
@@ -68,7 +68,7 @@ struct CapsuleGlassButton: View {
                 if let icon = icon {
                     Image(systemName: icon)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.lime)
+                        .foregroundStyle(Theme.limeInk)
                 }
                 Text(title)
                     .font(Typography.footnoteMedium)

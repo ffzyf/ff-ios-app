@@ -72,7 +72,7 @@ struct VersionRecordCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+                .fill(Theme.surfaceTint2)
         }
     }
 

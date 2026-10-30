@@ -17,7 +17,7 @@ struct SettingsAboutCard: View {
                     .font(Typography.footnote)
                     .foregroundStyle(Theme.textSecondary)
                     .lineSpacing(Typography.lineSpacing(fontSize: 13, multiple: 1.6))
-                Text("本版固定深色。浅色主题在计划里，还没做好，所以先不给。")
+                Text("浅色和深色都做好了。在「外观」里三选一：跟随系统、始终浅色、始终深色，选了立刻生效。")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
                     .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))

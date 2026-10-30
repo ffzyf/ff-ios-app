@@ -38,7 +38,7 @@ enum InlineMarkdown {
         }
         for target in targets {
             if target.isLink {
-                result[target.range].foregroundColor = Theme.lime
+                result[target.range].foregroundColor = Theme.limeInk
                 // 显式构造 `Text.LineStyle`：不依赖 `.single` 这类简写成员能否推断出
                 // `AttributedString` 的 `underlineStyle` 值类型。
                 result[target.range].underlineStyle = Text.LineStyle(pattern: .solid)

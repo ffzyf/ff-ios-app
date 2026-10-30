@@ -1,45 +1,17 @@
 import SwiftUI
 
-/// 三个一级 Tab（PRD §2.1）：概览 / 文章 / 简报。
-/// 不做「我的」——设置齿轮挂在概览页右上角。
-enum AppTab: Int, CaseIterable, Identifiable {
-    case overview = 0
-    case articles = 1
-    case brief = 2
-
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .overview: return "概览"
-        case .articles: return "文章"
-        case .brief: return "简报"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .overview: return "sparkles"
-        case .articles: return "doc.text"
-        case .brief: return "bell.badge"
-        }
-    }
-
-    /// DesignSystem 不认识 AppTab（分层要求），只认识这个纯数据描述。
-    var spec: TabSpec {
-        TabSpec(id: rawValue, title: title, icon: icon)
-    }
-}
-
 /// 根视图。
 ///
 /// 刻意**不用** `TabView`：PRD §2.1 / §4.3 要的是「浮动胶囊、左右内缩 24pt、高 56pt、距底 16pt」，
 /// 系统 TabBar 无法满足（隐藏系统 bar 再自绘会让安全区塌陷）。
 /// 所以：`ZStack` 内容 + `safeAreaInset(edge: .bottom)` 挂自绘 Tab 栏。
 ///
-/// 三个页面**常驻**在层级里（`ZStack` + `opacity`），不用 `if` / `.id()` 重建：
+/// 五个页面**常驻**在层级里（`ZStack` + `opacity`），不用 `if` / `.id()` 重建：
 /// 内容型页面一旦销毁重建，滚动位置和已加载的分页数据都会丢，
-/// 而 `.opacity(0)` 的代价只是三个 ScrollView 各留一份布局（本 App 单页内容量很小）。
+/// 而 `.opacity(0)` 的代价只是五个页面各留一份布局（本 App 单页内容量很小）。
+///
+/// 批次 1 的变化：3 Tab → 5 Tab（PRD §2.2）。红石与更多先用 `PagePlaceholder` 占位，
+/// 批次 2 / 批次 3 各替换一行即可 —— 那时 Tab 顺序、图标、`AppTab` 都不用再动。
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tab: AppTab = .overview
@@ -54,6 +26,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
+            // 文章列表是阅读页，保持中性（PRD §4.1：光斑只留在概览与简报）
             PageBackground(glow: tab != .articles)
             content
         }
@@ -95,10 +68,28 @@ struct RootView: View {
         ZStack {
             OverviewView(selectedTab: $tab, onOpenArticle: openArticle)
                 .modifier(TabVisibility(isActive: tab == .overview))
-            ArticlesView(isActive: tab == .articles, onOpenArticle: openArticle)
-                .modifier(TabVisibility(isActive: tab == .articles))
+
+            // 批次 2 替换成 `RockCalendarView()`（红石日历）
+            PagePlaceholder(
+                title: AppTab.rock.title,
+                icon: AppTab.rock.icon,
+                summary: "月历、当日场次、规律说明和攻略都收在这一页。等排期接上就开门。"
+            )
+            .modifier(TabVisibility(isActive: tab == .rock))
+
             BriefView()
                 .modifier(TabVisibility(isActive: tab == .brief))
+
+            ArticlesView(isActive: tab == .articles, onOpenArticle: openArticle)
+                .modifier(TabVisibility(isActive: tab == .articles))
+
+            // 批次 3 替换成 `MoreView()`（问卷 / 监控 / 设置 / 关于）
+            PagePlaceholder(
+                title: AppTab.more.title,
+                icon: AppTab.more.icon,
+                summary: "问卷工作台、推送监控、设置和关于会收在这一页。"
+            )
+            .modifier(TabVisibility(isActive: tab == .more))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }

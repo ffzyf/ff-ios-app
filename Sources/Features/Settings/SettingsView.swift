@@ -22,6 +22,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.sectionGap) {
                     header
+                    group("外观") { AppearanceSection() }
                     group("版本") { versionRow }
                     group("数据来源") { sourceRows }
                     group("缓存") { cacheRow }

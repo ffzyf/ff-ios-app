@@ -16,7 +16,7 @@ struct BriefLuckChips: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !yi.isEmpty {
-                row(label: "宜", items: yi, color: Theme.lime)
+                row(label: "宜", items: yi, color: Theme.limeInk)
             }
             if !ji.isEmpty {
                 row(label: "忌", items: ji, color: Theme.statusError)
@@ -75,7 +75,7 @@ struct BriefHoroscopeSection: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "sparkles")
                     .font(Typography.caption)
-                    .foregroundStyle(Theme.lime)
+                    .foregroundStyle(Theme.limeInk)
                 Text(title)
                     .font(Typography.titleM)
                     .foregroundStyle(Theme.textPrimary)

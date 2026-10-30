@@ -52,17 +52,6 @@ struct ErrorStateView: View {
     }
 }
 
-/// 顶部离线细条（PRD §5.2「离线（有缓存）」）：不遮内容，只提示「这是上次看到的」。
-struct OfflineBanner: View {
-    var text: String = "现在没网。先把上次看到的给你。"
-
-    var body: some View {
-        Text(text)
-            .font(Typography.captionXS)
-            .foregroundStyle(Theme.textSecondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassSurface(.chrome, in: Capsule())
-    }
-}
+// 说明：`OfflineBanner` 已移到 `Sources/DesignSystem/OfflineBanner.swift`（批次 1 双主题改造，
+// 从"一行灰字"扩成离线 / 可能过期 / 部分失败三态）。这里刻意不再保留第二份定义，
+// 否则同名 `struct` 在同一 target 内会直接编译失败。

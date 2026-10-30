@@ -4,10 +4,13 @@ import SwiftUI
 ///
 /// 后端 article **没有** cover 字段（PRD F1），所以不能留灰块占位。规则：
 /// `coverSeed`（0–3，服务端 `fnv1a(id) % 4`）映射到 4 组青柠/深空渐变 +
-/// 标题首字水印（48pt Bold，白 12%）+ 极细噪点（0.04，避免纯渐变的塑料感）。
+/// 标题首字水印（48pt Bold）+ 极细噪点（避免纯渐变的塑料感）。
 ///
 /// 这个方案是「不完美但体面」的取舍：与其显示一堆灰色占位方块，
 /// 不如让每篇文章有独一无二的渐变身份；P1 拿到真实封面后只替换图片层，布局不变。
+///
+/// 双主题（批次 1）：4 组渐变的两套停靠点全部在 Theme 的 coverLime / coverDeep / coverAmber / coverCool 里
+/// （PRD §3.2 末表逐行照抄），本文件只剩"水印 + 噪点"两个不透明度，也各自有 token。
 struct CoverArt: View {
     let seed: Int
     let title: String
@@ -27,7 +30,7 @@ struct CoverArt: View {
             }
             Text(initial)
                 .font(.system(size: watermarkSize, weight: .bold))
-                .foregroundStyle(Color.white.opacity(0.12))
+                .foregroundStyle(Theme.coverWatermark)
                 .lineLimit(1)
                 .minimumScaleFactor(0.4)
         }
@@ -50,7 +53,7 @@ private struct CoverGrain: View {
                 let fx = CGFloat((index * 37) % 240) / 240.0
                 let fy = CGFloat((index * 91) % 240) / 240.0
                 let dot = CGRect(x: fx * size.width, y: fy * size.height, width: 1, height: 1)
-                context.fill(Path(dot), with: .color(Color.white.opacity(0.05)))
+                context.fill(Path(dot), with: .color(Theme.coverGrain))
             }
         }
         .blendMode(.overlay)

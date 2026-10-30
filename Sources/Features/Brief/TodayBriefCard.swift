@@ -90,10 +90,10 @@ struct TodayBriefCard: View {
                 Spacer(minLength: 0)
                 Text(expanded ? "收起" : "展开全文")
                     .font(Typography.footnoteMedium)
-                    .foregroundStyle(Theme.lime)
+                    .foregroundStyle(Theme.limeInk)
                 Image(systemName: expanded ? "chevron.up" : "chevron.down")
                     .font(Typography.captionXS)
-                    .foregroundStyle(Theme.lime)
+                    .foregroundStyle(Theme.limeInk)
             }
             .contentShape(Rectangle())
         }
