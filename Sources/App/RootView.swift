@@ -22,6 +22,9 @@ struct RootView: View {
     @State private var openedArticle: ArticleSummary?
     /// 各页滚动偏移保活：只存「当前 tab 对应那页」的偏移，页面卸载也不丢（RootView 常驻）。
     @State private var scrollPositions: [AppTab: ScrollPosition] = [:]
+    /// 配色主题。`Theme.*` 是全局静态 token，SwiftUI 不会替我们追踪它的变化，
+    /// 所以切换时靠下面的 `.id(themeId)` 把内容区整块重建一次（滚动位置存在字典里，不受影响）。
+    @ObservedObject private var appearance = AppearanceStore.shared
 
     /// 显式写空 init：避免「私有属性把自动生成的 memberwise init 降级成 private」
     /// 导致跨文件 `RootView()` 编译不过。属性包装器各自用自己的默认值初始化。
@@ -34,6 +37,8 @@ struct RootView: View {
             // 条件渲染：同一时刻只有 1 个页面在视图树里（B3）
             page(for: tab)
         }
+        // 换配色 → 整块重建。挂在 ZStack 上而不是 RootView 上，`tab` 等 @State 不会被重置。
+        .id(appearance.themeId)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             FloatingTabBar(tabs: AppTab.tabBarTabs.map { $0.spec }, selection: tabSelection)
                 .padding(.horizontal, Spacing.tabBarInset)

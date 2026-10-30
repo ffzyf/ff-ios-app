@@ -23,7 +23,77 @@ struct AppearanceSection: View {
                 .foregroundStyle(Theme.textTertiary)
                 .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
                 .padding(.horizontal, 4)
+
+            Rectangle()
+                .fill(Theme.divider)
+                .frame(height: 1)
+                .padding(.vertical, 6)
+
+            themePicker
         }
+    }
+
+    // MARK: - 配色
+
+    /// 五套配色：色板 + 名称。
+    ///
+    /// 为什么不做成"整行单选"（跟上面深浅三档一样）：配色是**看**出来的，不是读出来的 ——
+    /// 一列文字里出现五个"暮紫/暖砂"，不如直接给五枚色点。点一下即换，选中项加一圈描边。
+    private var themePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("配色")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.horizontal, 4)
+
+            HStack(spacing: 6) {
+                ForEach(Theme.Palette.all) { palette in
+                    swatch(palette)
+                }
+            }
+            .padding(.horizontal, 2)
+
+            Text("每套配色都自带深色版本，和上面的深浅设置任意组合。")
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textTertiary)
+                .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+                .padding(.horizontal, 4)
+        }
+    }
+
+    private func swatch(_ palette: Theme.Palette) -> some View {
+        let isSelected = (store.themeId == palette.id)
+        return Button {
+            Haptics.light()
+            // 换肤是整屏变化，跟玻璃出现同一条缓动，避免硬切像闪屏
+            withAnimation(Motion.glassIn) {
+                store.selectTheme(palette.id)
+            }
+        } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(palette.swatch)
+                        .frame(width: 30, height: 30)
+                    if isSelected {
+                        Circle()
+                            .strokeBorder(Theme.textPrimary.opacity(0.9), lineWidth: 2)
+                            .frame(width: 38, height: 38)
+                    }
+                }
+                .frame(width: 38, height: 38)
+
+                Text(palette.name)
+                    .font(Typography.captionXS)
+                    .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(palette.name)
+        .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }
 
     private func row(_ mode: AppearanceMode) -> some View {

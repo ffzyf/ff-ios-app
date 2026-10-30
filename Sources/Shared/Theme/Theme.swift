@@ -18,16 +18,27 @@ import UIKit
 /// 所以 `Color(uiColor:)` 包一层之后依然是动态的。
 enum Theme {
 
+    // MARK: - 当前配色（V3.2 主题系统）
+
+    /// 当前生效的一套配色。改它 → 下一次视图重算就换肤。
+    ///
+    /// 为什么用 `static var` 而不是 Environment 注入：全工程 100+ 处 `Theme.xxx` 调用点
+    /// **一处都不用改** —— 这是主题化能做到的最低风险路径。代价是 SwiftUI 感知不到
+    /// 这个变量的变化，所以 `RootView` 在切换时给内容区换 `.id(themeId)` 强制重建子树。
+    ///
+    /// 默认 `.lime`：与 V2 逐像素一致，也是 Widget 进程里读不到 App 偏好时的兜底。
+    static var active: Palette = .lime
+
     // MARK: - 背景三层（同一条规则：越靠前越亮，浅色下越靠前越白）
 
     /// 屏幕最底（窗口底、Tab 栏外侧）
-    static let bgBase = dyn(dark: "#0A0D14", light: "#EDF1EC")
+    static var bgBase: Color { dyn(active.bgBase) }
     /// 页面大面积渐变主段
-    static let bgRaise = dyn(dark: "#121826", light: "#F7F9F6")
+    static var bgRaise: Color { dyn(active.bgRaise) }
     /// 比页面更前的非玻璃块（视频未加载底、输入框底）
-    static let bgElevated = dyn(dark: "#171F2E", light: "#FFFFFF")
+    static var bgElevated: Color { dyn(active.bgElevated) }
     /// 弹层遮罩
-    static let scrim = dyna(dark: ("#000000", 0.45), light: ("#0F1A26", 0.28))
+    static var scrim: Color { dyna(active.scrim) }
 
     // MARK: - 玻璃层（PRD §3.2 玻璃层 7 条）
 
@@ -55,7 +66,7 @@ enum Theme {
     /// PRD §3.1 第 4 条：浅色不能靠黑影做投影（发灰、显脏），必须双层灰蓝。
     static let glassShadowNear = dyna(dark: ("#000000", 0.00), light: ("#1B2E3F", 0.05))
     /// 状态类卡片的青柠染色
-    static let glassTintLime = dyna(dark: ("#6BDB5C", 0.08), light: ("#3FA83A", 0.08))
+    static var glassTintLime: Color { dyna(active.glassTint) }
 
     // MARK: - 二级玻璃（静态配方，不采样背景，B 批次新增）
 
@@ -72,23 +83,23 @@ enum Theme {
     /// 【面】只允许出现在 `fill` / `strokeBorder` / `LinearGradient` / 徽标底 / 进度条填充。
     /// **禁止** `foregroundStyle(Theme.lime)` —— 需要"青柠色的字"请用 `limeInk`。
     /// 浅色 `#3FA83A` 作为面 ≥3:1，配 `onLime` 文字 5.4:1。
-    static let lime = dyn(dark: "#6BDB5C", light: "#3FA83A")
+    static var lime: Color { dyn(active.lime) }
     /// 【字】≤17pt 的青柠色文字、可点击图标、状态标签。深色与 `lime` 同值（`#6BDB5C`），
     /// 所以全项目"把文字色从 lime 改成 limeInk"在深色下**零像素变化** —— 这是无回归的保证。
     /// 浅色 `#1F6B22`，6.2:1。
-    static let limeInk = dyn(dark: "#6BDB5C", light: "#1F6B22")
+    static var limeInk: Color { dyn(active.limeInk) }
     /// 【面上的字】只与 `Theme.lime` 背景成对出现。深色 `#0A0D14` 9.3:1 / 浅色 `#0F2410` 5.4:1
-    static let onLime = dyn(dark: "#0A0D14", light: "#0F2410")
+    static var onLime: Color { dyn(active.onLime) }
     /// 渐变第二停靠点（仅作面，不承载文字）
-    static let limeBright = dyn(dark: "#D4F36E", light: "#A8E88F")
+    static var limeBright: Color { dyn(active.limeBright) }
     /// 按下态、渐变暗端
-    static let limeDeep = dyn(dark: "#3FA83A", light: "#2F7A2C")
+    static var limeDeep: Color { dyn(active.limeDeep) }
     /// 光晕。浅色必须减半，否则整屏发绿
-    static let limeGlow = dyna(dark: ("#6BDB5C", 0.35), light: ("#6BDB5C", 0.16))
+    static var limeGlow: Color { dyna(active.limeGlow) }
     /// 图表柱（Swift Charts 的 `BarMark`）。值与 `lime` 完全相同，单独命名的唯一理由：
     /// lint 规则 4 会把 `foregroundStyle(Theme.lime)` 判成「lime 当文字色」，
     /// 而图表柱是**面**。给它一个独立 token，View 层既不用写 hex，也不用 `lint:allow` 破例。
-    static let chartBar = dyn(dark: "#6BDB5C", light: "#3FA83A")
+    static var chartBar: Color { dyn(active.lime) }
 
     // MARK: - 文字三级 + 元信息（PRD 已实测对比度）
 
@@ -228,6 +239,12 @@ enum Theme {
         #endif
     }
 
+    /// `dyn` 的配色对重载：`Palette` 里存的是 `(dark, light)` 字面量，
+    /// 用这个入口让 12 个主题 token 的写法保持一行（不必在 body 里拆两次调用）。
+    private static func dyn(_ spec: (dark: String, light: String)) -> Color {
+        dyn(dark: spec.dark, light: spec.light)
+    }
+
     /// 带透明度的动态色 —— 这一条替代了全项目 30 处 `Color.white.opacity(...)`。
     ///
     /// 注意透明度是在**闭包内部**算进 UIColor 的：同一份 alpha 对两种外观各自生效，
@@ -242,4 +259,150 @@ enum Theme {
         return Color(hex: dark.0).opacity(dark.1)
         #endif
     }
+
+    /// `dyna` 的配色对重载（带 alpha 的版本），与 `dyn(_:)` 同理。
+    private static func dyna(_ spec: (dark: (String, Double), light: (String, Double))) -> Color {
+        dyna(dark: spec.dark, light: spec.light)
+    }
+}
+
+// MARK: - 主题配色（V3.2 新增）
+
+extension Theme {
+
+    /// 一套主题配色。
+    ///
+    /// 只包含**品牌色 + 背景三层**。文字 / 玻璃 / 状态 / 骨架 / 封面这些中性 token
+    /// 五套主题共用 —— 换主题不该让任何一处的对比度失守，PRD 里那批实测值继续有效。
+    ///
+    /// 每个值都是 `(深色, 浅色)` 一对：**深色模式不是"另一套主题"**，而是同一套的第二个值。
+    /// 所以每套主题天然自带深色版本，不需要单独维护 5×2 份配色。
+    struct Palette: Identifiable {
+        let id: String
+        let name: String
+        let bgBase: (dark: String, light: String)
+        let bgRaise: (dark: String, light: String)
+        let bgElevated: (dark: String, light: String)
+        let scrim: (dark: (String, Double), light: (String, Double))
+        /// 品牌面色
+        let lime: (dark: String, light: String)
+        /// 品牌字色
+        let limeInk: (dark: String, light: String)
+        /// 面上的字
+        let onLime: (dark: String, light: String)
+        let limeBright: (dark: String, light: String)
+        let limeDeep: (dark: String, light: String)
+        let limeGlow: (dark: (String, Double), light: (String, Double))
+        let glassTint: (dark: (String, Double), light: (String, Double))
+    }
+}
+
+extension Theme.Palette {
+
+    /// 五套主题（设置页按这个顺序排）
+    static let all: [Theme.Palette] = [.lime, .violet, .sand, .ocean, .sakura]
+
+    /// 按 id 取主题；认不出就退回青柠（**绝不崩**，旧版本写入的 id 也能开机）
+    static func with(id: String) -> Theme.Palette {
+        all.first { $0.id == id } ?? .lime
+    }
+}
+
+extension Theme.Palette {
+
+    /// 色板预览用的品牌面。
+    ///
+    /// 放在这里而不是设置页里，是为了守住「hex 只出现在 Theme.swift」这条闸门：
+    /// View 层只需要 `palette.swatch`，不碰任何颜色字面量。
+    /// 跟随外观取值（浅色用浅色那一档），所以设置页在深色下看到的就是深色下的观感。
+    var swatch: Color {
+        #if canImport(UIKit)
+        return Color(uiColor: UIColor { trait in
+            let hex = (trait.userInterfaceStyle == .light) ? lime.light : lime.dark
+            return UIColor(Color(hex: hex))
+        })
+        #else
+        return Color(hex: lime.dark)
+        #endif
+    }
+
+    /// 0 青柠 —— 品牌原色，V2 至今的基线（深色值逐字沿用，零像素变化）
+    static let lime = Theme.Palette(
+        id: "lime", name: "青柠",
+        bgBase: ("#0A0D14", "#EDF1EC"),
+        bgRaise: ("#121826", "#F7F9F6"),
+        bgElevated: ("#171F2E", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#0F1A26", 0.28)),
+        lime: ("#6BDB5C", "#3FA83A"),
+        limeInk: ("#6BDB5C", "#1F6B22"),
+        onLime: ("#0A0D14", "#0F2410"),
+        limeBright: ("#D4F36E", "#A8E88F"),
+        limeDeep: ("#3FA83A", "#2F7A2C"),
+        limeGlow: (("#6BDB5C", 0.35), ("#6BDB5C", 0.16)),
+        glassTint: (("#6BDB5C", 0.08), ("#3FA83A", 0.08))
+    )
+
+    /// 1 暮紫 —— 夜航感，背景往靛紫压（不是把绿换成紫就完事）
+    static let violet = Theme.Palette(
+        id: "violet", name: "暮紫",
+        bgBase: ("#0B0912", "#F3F1F8"),
+        bgRaise: ("#14101F", "#FAF9FC"),
+        bgElevated: ("#1A1528", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#1A1528", 0.28)),
+        lime: ("#A78BFA", "#7C5CE0"),
+        limeInk: ("#A78BFA", "#5B3FB8"),
+        onLime: ("#120E1F", "#FFFFFF"),
+        limeBright: ("#C4B5FD", "#A78BFA"),
+        limeDeep: ("#7C3AED", "#5B3FB8"),
+        limeGlow: (("#A78BFA", 0.38), ("#7C5CE0", 0.16)),
+        glassTint: (("#A78BFA", 0.10), ("#7C5CE0", 0.08))
+    )
+
+    /// 2 暖砂 —— 米纸 + 琥珀，长文阅读最不刺眼的一套
+    static let sand = Theme.Palette(
+        id: "sand", name: "暖砂",
+        bgBase: ("#12100C", "#F6F2EA"),
+        bgRaise: ("#1B1813", "#FBF8F2"),
+        bgElevated: ("#221E17", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#221E17", 0.28)),
+        lime: ("#E8B96A", "#B37D2A"),
+        limeInk: ("#E8B96A", "#7A5212"),
+        onLime: ("#1A1206", "#2A1C05"),
+        limeBright: ("#F5D89A", "#D9AE6A"),
+        limeDeep: ("#C4913F", "#8F6120"),
+        limeGlow: (("#E8B96A", 0.32), ("#B37D2A", 0.15)),
+        glassTint: (("#E8B96A", 0.10), ("#B37D2A", 0.08))
+    )
+
+    /// 3 海蓝 —— 冷调，配红石/夜空的卡最协调
+    static let ocean = Theme.Palette(
+        id: "ocean", name: "海蓝",
+        bgBase: ("#060D14", "#EDF3F7"),
+        bgRaise: ("#0D1822", "#F7FAFC"),
+        bgElevated: ("#13202C", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#0D1822", 0.28)),
+        lime: ("#4FC3F7", "#1E88C7"),
+        limeInk: ("#4FC3F7", "#0F5C8A"),
+        onLime: ("#04141C", "#04202E"),
+        limeBright: ("#9CE4FF", "#7FD0F0"),
+        limeDeep: ("#2196C9", "#14688F"),
+        limeGlow: (("#4FC3F7", 0.36), ("#1E88C7", 0.16)),
+        glassTint: (("#4FC3F7", 0.10), ("#1E88C7", 0.08))
+    )
+
+    /// 4 樱粉 —— 唯一一套"面浅字深"的：浅色下粉底必须压深字，白字对比不够
+    static let sakura = Theme.Palette(
+        id: "sakura", name: "樱粉",
+        bgBase: ("#100A0E", "#F9EFF3"),
+        bgRaise: ("#191016", "#FDF8FA"),
+        bgElevated: ("#20141B", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#20141B", 0.28)),
+        lime: ("#F79BB8", "#D9598A"),
+        limeInk: ("#F79BB8", "#A3325C"),
+        onLime: ("#1F0A12", "#3A0D1E"),
+        limeBright: ("#FFC2D6", "#F2A7C0"),
+        limeDeep: ("#E07A9E", "#B04068"),
+        limeGlow: (("#F79BB8", 0.32), ("#D9598A", 0.15)),
+        glassTint: (("#F79BB8", 0.10), ("#D9598A", 0.08))
+    )
 }
