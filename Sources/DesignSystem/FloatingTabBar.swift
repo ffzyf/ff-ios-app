@@ -95,8 +95,15 @@ struct FloatingTabBar: View {
     ///
     /// 选中时给一枚 46pt 青柠渐变圆（带投影），图标换成 `onLime` 字色；
     /// 未选中时不给底，只有图标本身 —— 五项并排不会变成五块玻璃互相打架。
+    ///
+    /// **槽位对齐（V3.2 修正「文字隔一条河」）**：槽高恒为 `knobSize`（46pt），
+    /// 但图标**底部对齐槽底**，不在槽心 —— 旧的居中写法让未选中图标下方空出 17pt，
+    /// 再叠 3pt 间距，图标与文字之间就横了一条 20pt 的河。
+    /// 选中时用 `padding(.bottom:)` 把图标抬回圆心（圆 46、图标约 21 → 底部留 12.5），
+    /// 所以「圆底 → 文字」与「图标底 → 文字」都是 3pt，切换时文字位置不动。
     private func knob(icon: String, badge: String?, selected: Bool) -> some View {
-        ZStack {
+        let glyph = selected ? iconSize + 1 : iconSize
+        return ZStack(alignment: .bottom) {
             if selected {
                 Circle()
                     .fill(
@@ -112,10 +119,12 @@ struct FloatingTabBar: View {
                     .matchedGeometryEffect(id: "tab.knob", in: knobNamespace)
             }
             Image(systemName: icon)
-                .font(.system(size: selected ? iconSize + 1 : iconSize, weight: .semibold))
+                .font(.system(size: glyph, weight: .semibold))
                 .foregroundStyle(selected ? Theme.onLime : Theme.textTertiary)
+                // 选中：抬到圆心；未选中：贴槽底，让文字接在图标脚下
+                .padding(.bottom, selected ? (knobSize - glyph) / 2 - 1 : 0)
         }
-        .frame(width: knobSize + 8, height: knobSize + 8)
+        .frame(width: knobSize + 8, height: knobSize, alignment: .bottom)
         .overlay(alignment: .topTrailing) {
             badgeView(badge)
         }

@@ -20,9 +20,17 @@ struct TrackCard<Content: View>: View {
     /// 光轨颜色，默认淡蓝紫
     var tint: Color = Theme.trackArc
     var cornerRadius: CGFloat = Radius.card
-    /// 底部光轨带高度（**绝对值**）。内容区右下角会自动让出同样高度，
-    /// 弧线与文字在布局层面分离。首页卡给 44；桌面小组件不走这个容器。
-    var arcBand: CGFloat = 44
+    /// 底部光轨带高度（**绝对值**，贴卡片底边）。桌面小组件不走这个容器。
+    ///
+    /// 留白怎么算：容器给内容加的是 `arcBand + arcGap`，而弧线带只占底部 `arcBand`。
+    /// 于是「末行文字 → 带顶（弧线最高点）」恒为 `arcGap`，与卡片多高、内容多少都无关 ——
+    /// 这就是"文字永远在弧线之上"从布局上被钉死的原因。
+    var arcBand: CGFloat = 52
+    /// 文字与弧线带之间额外留的呼吸。
+    ///
+    /// 不能省：发光节点的光晕半径就有 16pt（`nodeRadius 4.5 × 3.6`），
+    /// 节点走到弧顶时光晕会向上溢出 16pt。留 22pt 才能保证光晕不蹭到末行文字。
+    var arcGap: CGFloat = 22
     /// 弧顶横向位置
     var peak: CGFloat = 0.66
     private let content: Content
@@ -30,13 +38,15 @@ struct TrackCard<Content: View>: View {
     init(progress: CGFloat,
          tint: Color = Theme.trackArc,
          cornerRadius: CGFloat = Radius.card,
-         arcBand: CGFloat = 44,
+         arcBand: CGFloat = 52,
+         arcGap: CGFloat = 22,
          peak: CGFloat = 0.66,
          @ViewBuilder content: () -> Content) {
         self.progress = progress
         self.tint = tint
         self.cornerRadius = cornerRadius
         self.arcBand = arcBand
+        self.arcGap = arcGap
         self.peak = peak
         self.content = content()
     }
@@ -48,8 +58,8 @@ struct TrackCard<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 先让出光轨带，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉
-            .padding(.bottom, arcBand)
+            // 先让出「光轨带 + 呼吸」，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉
+            .padding(.bottom, arcBand + arcGap)
             .background {
                 ZStack {
                     LinearGradient(

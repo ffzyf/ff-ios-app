@@ -45,6 +45,8 @@ enum Endpoint {
     static let articlePath = "/api/app/article"
     /// 今日简报
     static let briefPath = "/api/app/brief"
+    /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
+    static let earningsPath = "/api/app/earnings"
 
     // MARK: - 构造
 

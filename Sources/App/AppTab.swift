@@ -16,18 +16,28 @@ enum AppTab: Int, CaseIterable, Identifiable {
     case rock = 1
     /// 简报：今日简报全文 + 光遇版本
     case brief = 2
-    /// 文章：列表 + 详情
-    case articles = 3
+    /// 收益：收益工作站（V3.2 新增，顶替原「文章」的 Tab 位）
+    case earnings = 3
     /// 更多：问卷 / 监控 / 设置 / 关于（批次 3 落地，本批占位）
     case more = 4
+    /// 文章：列表 + 详情。
+    ///
+    /// **不再占 Tab 位**（V3.2：用户要求把第 4 格换成收益工作站），但页面保留 ——
+    /// 概览页的「查看全部文章」仍跳到这里。rawValue 取 5 是为了让前 5 个枚举值与
+    /// Tab 栏位置 0…4 对齐，`allCases` 的顺序不会把「文章」插进可见的 5 格里。
+    case articles = 5
 
     var id: Int { rawValue }
+
+    /// Tab 栏显示的 5 项（顺序即视觉顺序）。`articles` 不在其中。
+    static let tabBarTabs: [AppTab] = [.overview, .rock, .brief, .earnings, .more]
 
     var title: String {
         switch self {
         case .overview: return "概览"
         case .rock: return "红石"
         case .brief: return "简报"
+        case .earnings: return "收益"
         case .articles: return "文章"
         case .more: return "更多"
         }
@@ -39,6 +49,7 @@ enum AppTab: Int, CaseIterable, Identifiable {
         case .overview: return "sparkles"
         case .rock: return "moon.stars"
         case .brief: return "bell.badge"
+        case .earnings: return "chart.line.uptrend.xyaxis"
         case .articles: return "doc.text"
         case .more: return "square.grid.2x2"
         }

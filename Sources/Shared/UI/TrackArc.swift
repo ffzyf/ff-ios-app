@@ -197,19 +197,26 @@ struct TrackArcBackdrop: View {
     /// 底部压暗强度（0 关闭）
     var scrimOpacity: Double = 0.10
 
+    /// 算「带子多高、带子上沿在哪」—— 两种模式共用。
+    ///
+    /// 为什么抽成方法而不是在 `body` 里写 `if/else`：`GeometryReader` 的闭包是 `@ViewBuilder`，
+    /// 它会把 `if {…} else {…}` 一律当成**视图分支**去拼 `_ConditionalContent`，
+    /// 而赋值语句返回 `()`，于是报 `type '()' cannot conform to 'View'`。
+    private func bandMetrics(in h: CGFloat) -> (height: CGFloat, offsetY: CGFloat) {
+        if let fixed = bandHeight {
+            let bh = min(max(fixed, 12), h)
+            return (bh, h - bh)
+        }
+        let bh = max(8, h * (bandBottom - bandTop))
+        return (bh, h * bandTop)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            // 两种模式算同一组东西：带子高度 + 带子上沿的 y
-            let bandH: CGFloat
-            let bandOffsetY: CGFloat
-            if let fixed = bandHeight {
-                bandH = min(max(fixed, 12), h)
-                bandOffsetY = h - bandH
-            } else {
-                bandH = max(8, h * (bandBottom - bandTop))
-                bandOffsetY = h * bandTop
-            }
+            let metrics = bandMetrics(in: h)
+            let bandH = metrics.height
+            let bandOffsetY = metrics.offsetY
             let g = ArcGeometry(width: geo.size.width,
                                 height: bandH,
                                 ratio: 1,

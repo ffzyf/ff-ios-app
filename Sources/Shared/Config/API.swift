@@ -137,6 +137,11 @@ enum API {
         return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.authLogoutPath)
     }
 
+    /// 收益总览（`GET /api/app/earnings`）。必须带 `Cookie: ce_auth=…`，否则 401。
+    static func earnings() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsPath)
+    }
+
     // MARK: - 收益站鉴权（与问卷站同一套路径，但域名不同）
 
     /// 收益站登录。**路径与问卷站完全一致**（`/api/auth/login`），只有域名不同

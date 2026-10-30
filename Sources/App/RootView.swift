@@ -35,7 +35,7 @@ struct RootView: View {
             page(for: tab)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            FloatingTabBar(tabs: AppTab.allCases.map { $0.spec }, selection: tabSelection)
+            FloatingTabBar(tabs: AppTab.tabBarTabs.map { $0.spec }, selection: tabSelection)
                 .padding(.horizontal, Spacing.tabBarInset)
                 .padding(.bottom, Spacing.tabBarBottomGap)
                 .padding(.top, 6)
@@ -91,6 +91,8 @@ struct RootView: View {
             RockCalendarView(scrollPosition: scrollBinding(tab))
         case .brief:
             BriefView(scrollPosition: scrollBinding(tab))
+        case .earnings:
+            EarningsView(scrollPosition: scrollBinding(tab))
         case .articles:
             ArticlesView(scrollPosition: scrollBinding(tab), onOpenArticle: openArticle)
         case .more:
