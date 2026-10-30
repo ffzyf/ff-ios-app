@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 深空双层背景（PRD §4.1）：
 /// 1. 线性渐变（顶）`bgRaise` → `bgBase`（底部 60% 处）
@@ -40,22 +41,27 @@ private struct LimeGlow: View {
 
     /// V2 渐变里的青柠不透明度 / PRD 的强度基准 → 0.2（推导见 `PageBackground` 注释）
     private static let alphaRatio: Double = 0.2
-    /// V2 的半径基准：屏宽 × 1.1（`metrics.glowRadius` 深色正好等于 220，所以深色除出来是 1.0）
-    private static let radiusRatio: CGFloat = 1.1
-    private static let radiusBaseline: CGFloat = 220
+    /// 光斑半径改用「屏幕最大边的相对比例」（B7）：不再用 `GeometryReader` 读 `width`，
+    /// 避免 tab 切换动画里每帧重测布局、重建渐变。屏幕尺寸是常量，半径只算一次，不参与动画。
+    private static let radiusRatio: CGFloat = 0.9
 
     var body: some View {
-        GeometryReader { proxy in
-            let width = max(proxy.size.width, 1)
-            RadialGradient(
-                colors: [
-                    Theme.lime.opacity(metrics.glowOpacity * Self.alphaRatio),
-                    Theme.lime.opacity(0)
-                ],
-                center: UnitPoint(x: 0.2, y: -0.1),
-                startRadius: 0,
-                endRadius: width * Self.radiusRatio * (metrics.glowRadius / Self.radiusBaseline)
-            )
-        }
+        // 半径与几何布局无关（取自 UIScreen，恒定），不再进 GeometryReader 的每帧布局路径
+        let maxDimension = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+        RadialGradient(
+            gradient: Self.gradient(opacity: metrics.glowOpacity),
+            center: UnitPoint(x: 0.2, y: -0.1),
+            startRadius: 0,
+            endRadius: maxDimension * Self.radiusRatio
+        )
+    }
+
+    /// 颜色停靠点固定（只随外观变、不随布局变）：抽成函数，避免每次 body 重建 `Gradient` 对象。
+    /// `metrics.glowOpacity` 在外观切换外是稳定的，所以渐变不会随 tab 动画每帧重算。
+    private static func gradient(opacity: Double) -> Gradient {
+        Gradient(colors: [
+            Theme.lime.opacity(opacity * alphaRatio),
+            Theme.lime.opacity(0)
+        ])
     }
 }

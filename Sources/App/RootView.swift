@@ -6,14 +6,10 @@ import SwiftUI
 /// 系统 TabBar 无法满足（隐藏系统 bar 再自绘会让安全区塌陷）。
 /// 所以：`ZStack` 内容 + `safeAreaInset(edge: .bottom)` 挂自绘 Tab 栏。
 ///
-/// 五个页面**常驻**在层级里（`ZStack` + `opacity`），不用 `if` / `.id()` 重建：
-/// 内容型页面一旦销毁重建，滚动位置和已加载的分页数据都会丢，
-/// 而 `.opacity(0)` 的代价只是五个页面各留一份布局（本 App 单页内容量很小）。
-///
-/// 批次 1：3 Tab → 5 Tab（PRD §2.2），红石与更多先占位。
-/// 批次 2：红石占位已换成 `RockCalendarView`（Tab 顺序 / 图标 / `AppTab` 一行没动）；
-/// 批次 3：「更多」占位换成 `MoreView`（问卷工作台 / 推送监控 / 设置 / 关于）。
-/// 五个页面至此全部落地，`PagePlaceholder` 只剩批次 4 的推送监控在用。
+/// 五个页面**条件渲染**（B 批次性能点 B3）：只渲染当前 `tab` 对应的 1 个页面，其余不进视图树。
+/// 这样「参与渲染的全屏视图」从 5 降到 1，真玻璃采样层、body 重算量都随之骤降。
+/// 滚动位置用 `RootView` 持有的 `scrollPositions` 字典保活（键值随 RootView 常驻，不随页面卸载丢），
+/// 切回 Tab 时 `ScrollView.scrollPosition(_:)` 读回上次偏移，大致回到原位。
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     /// 红石数据（批次 2）。根视图只负责"启动时先拉一次" —— 概览卡与红石日历都要用，
@@ -24,6 +20,8 @@ struct RootView: View {
     /// 阅读页必须独占全屏（浮动 Tab 栏、青柠光斑都要让位给正文），
     /// 同时保留自己的玻璃导航条与返回手势。
     @State private var openedArticle: ArticleSummary?
+    /// 各页滚动偏移保活：只存「当前 tab 对应那页」的偏移，页面卸载也不丢（RootView 常驻）。
+    @State private var scrollPositions: [AppTab: ScrollPosition] = [:]
 
     /// 显式写空 init：避免「私有属性把自动生成的 memberwise init 降级成 private」
     /// 导致跨文件 `RootView()` 编译不过。属性包装器各自用自己的默认值初始化。
@@ -33,7 +31,8 @@ struct RootView: View {
         ZStack {
             // 文章列表是阅读页，保持中性（PRD §4.1：光斑只留在概览与简报）
             PageBackground(glow: tab != .articles)
-            content
+            // 条件渲染：同一时刻只有 1 个页面在视图树里（B3）
+            page(for: tab)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             FloatingTabBar(tabs: AppTab.allCases.map { $0.spec }, selection: tabSelection)
@@ -73,26 +72,30 @@ struct RootView: View {
         )
     }
 
-    private var content: some View {
-        ZStack {
-            OverviewView(selectedTab: $tab, onOpenArticle: openArticle)
-                .modifier(TabVisibility(isActive: tab == .overview))
+    /// 把某个 tab 的滚动偏移做成 `Binding<ScrollPosition>`：读自 `scrollPositions` 字典，
+    /// 写回字典。字典挂在 RootView（常驻），页面切走再切回时偏移仍在，大致回到原位。
+    private func scrollBinding(_ tab: AppTab) -> Binding<ScrollPosition> {
+        Binding(
+            get: { scrollPositions[tab] ?? ScrollPosition(point: .zero) },
+            set: { scrollPositions[tab] = $0 }
+        )
+    }
 
-            // 批次 2：红石日历（月历 / 场次浮层 / 规律 / 攻略）
-            RockCalendarView()
-                .modifier(TabVisibility(isActive: tab == .rock))
-
-            BriefView()
-                .modifier(TabVisibility(isActive: tab == .brief))
-
-            ArticlesView(isActive: tab == .articles, onOpenArticle: openArticle)
-                .modifier(TabVisibility(isActive: tab == .articles))
-
-            // 批次 3：更多页（问卷工作台 / 推送监控 / 设置 / 关于）
-            MoreView()
-                .modifier(TabVisibility(isActive: tab == .more))
+    /// 条件渲染：只实例化当前 tab 对应的 1 个页面（B3）。其余页面不进视图树，不参与渲染。
+    @ViewBuilder
+    private func page(for tab: AppTab) -> some View {
+        switch tab {
+        case .overview:
+            OverviewView(selectedTab: $tab, scrollPosition: scrollBinding(tab))
+        case .rock:
+            RockCalendarView(scrollPosition: scrollBinding(tab))
+        case .brief:
+            BriefView(scrollPosition: scrollBinding(tab))
+        case .articles:
+            ArticlesView(scrollPosition: scrollBinding(tab), onOpenArticle: openArticle)
+        case .more:
+            MoreView(scrollPosition: scrollBinding(tab))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// 打开文章详情：把选中的摘要交给 `fullScreenCover(item:)`。
@@ -100,21 +103,5 @@ struct RootView: View {
     /// （列表接口不返回 content，PRD F3，不能拿列表数据兜底正文）。
     private func openArticle(_ article: ArticleSummary) {
         openedArticle = article
-    }
-}
-
-/// Tab 切换的显隐修饰符：淡入淡出 + 轻微位移（PRD §4.6：不做横向滑动分页）。
-///
-/// 隐藏页必须同时关掉命中测试与无障碍焦点，否则 `opacity(0)` 仍然会吃掉点击。
-private struct TabVisibility: ViewModifier {
-    let isActive: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(isActive ? 1 : 0)
-            .offset(y: isActive ? 0 : 8)
-            .allowsHitTesting(isActive)
-            .accessibilityHidden(!isActive)
-            .zIndex(isActive ? 1 : 0)
     }
 }

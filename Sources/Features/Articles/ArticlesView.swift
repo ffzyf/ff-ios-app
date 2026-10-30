@@ -6,11 +6,12 @@ import SwiftUI
 /// 新一页**追加**到已有 items 后面，所以本页不再自己攒一份缓冲 —— 直接读 `model.articles`，
 /// 页码读 `model.feedPage`。这样概览页与列表页看到的是同一份数据，翻页不会把首页顶掉。
 ///
-/// 滚动位置保持：本页不参与销毁重建（RootView 用 ZStack + opacity 保活），
-/// 所以切 Tab 回来时 ScrollView 的偏移天然还在，不需要 `ScrollPosition` 兜底。
+/// 滚动位置保持（B3）：本页在 RootView 里**条件渲染**（切走即卸载），所以靠 RootView 注入的
+/// `scrollPosition` Binding 把偏移存到常驻字典，切回时 `ScrollView` 读回，大致回到原位。
 struct ArticlesView: View {
     @EnvironmentObject private var model: AppModel
-    private let isActive: Bool
+    /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
+    private let scrollPosition: Binding<ScrollPosition>
     private let onOpenArticle: (ArticleSummary) -> Void
 
     /// 只在「本页正在追加」时置真，避免同一页被触发两次
@@ -18,8 +19,8 @@ struct ArticlesView: View {
     /// 追加失败（不是首屏失败）：停止自动翻页，把决定权还给用户的「下拉刷新」
     @State private var didFailLoadingMore: Bool = false
 
-    init(isActive: Bool, onOpenArticle: @escaping (ArticleSummary) -> Void) {
-        self.isActive = isActive
+    init(scrollPosition: Binding<ScrollPosition>, onOpenArticle: @escaping (ArticleSummary) -> Void) {
+        self.scrollPosition = scrollPosition
         self.onOpenArticle = onOpenArticle
     }
 
@@ -38,6 +39,7 @@ struct ArticlesView: View {
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }
+        .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         // PRD §5.2「离线（有缓存）」：有内容但这次刷新失败 → 顶部细条。
         // 用 `safeAreaInset` 而不是 overlay：细条占据自己的高度，不压住标题、不遮内容。
@@ -51,16 +53,13 @@ struct ArticlesView: View {
         .refreshable {
             await refreshArticles()
         }
-        // 全站共享的轻提示：刷新失败不清空内容，只弹这一条（1.8s 自动消失）
+        // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）：
+        // 刷新失败不清空内容，只弹这一条（2.5s 自动消失）
         .overlay(alignment: .bottom) {
-            PageToast(message: model.toastMessage)
+            PageToast()
         }
         .onChange(of: feedIDs) { _, _ in
             resetPagingFlags()
-        }
-        .onChange(of: isActive) { _, active in
-            guard active else { return }
-            Task { await loadMoreIfNeeded() }
         }
         .onAppear {
             resetPagingFlags()
@@ -169,7 +168,7 @@ struct ArticlesView: View {
     }
 
     private var paginationKey: String {
-        return "\(model.articles.count)-\(model.hasMoreArticles)-\(isActive)-\(didFailLoadingMore)"
+        return "\(model.articles.count)-\(model.hasMoreArticles)-\(didFailLoadingMore)"
     }
 
     // MARK: - 动作
@@ -192,12 +191,15 @@ struct ArticlesView: View {
     }
 
     /// 触底追加下一页。三个不变量：
-    /// · 只有本页可见时才真的发请求（隐藏页不预取，省流量）；
+    /// · 本页在 RootView 里条件渲染，挂载即表示「当前可见」，所以不必再判 isActive；
     /// · `hasMore` 是唯一判停依据（`total` 只用于展示，不拿来算页码）；
     /// · 一页什么都没追加进来就停手，避免 `hasMore` 恒真时死循环。
+    ///
+    /// 数据守卫：`feedState.hasContent` 为真才追加（首屏数据由 `RootView.task` 的
+    /// `loadOverview` 拉取，切 Tab 回来时早已存在，因此「已有数据就不重载」，不会闪烁/重复请求，B3）。
     @MainActor
     private func loadMoreIfNeeded() async {
-        guard isActive, !isLoadingMore, !didFailLoadingMore else { return }
+        guard !isLoadingMore, !didFailLoadingMore else { return }
         guard model.feedState.hasContent, model.hasMoreArticles else { return }
 
         isLoadingMore = true

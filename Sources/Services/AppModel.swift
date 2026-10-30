@@ -16,8 +16,8 @@ final class AppModel: ObservableObject {
     /// 文章详情（T07）。进详情页才请求，详情关掉时 `clearArticle()`
     @Published private(set) var articleState: LoadState<ArticleDetail> = .idle
     @Published private(set) var isRefreshing: Bool = false
-    /// 底部 toast（1.8s 自动消失）。刷新失败不清空内容，只弹这个。
-    @Published var toastMessage: String?
+    /// 底部 toast 已拆分到独立的 `ToastStore`（B 批次）：本类不再持有 toast 状态，
+    /// 只用 `showToast(_:)` 转调，避免 `@Published` 订阅面连累所有 `@EnvironmentObject model` 页面。
     @Published private(set) var lastUpdatedAt: Date?
     /// 最近一次 feed 失败（**即使内容没丢**也记下来）：PRD §5.2「离线（有缓存）」的顶部细条依据。
     ///
@@ -30,7 +30,6 @@ final class AppModel: ObservableObject {
 
     private let client: APIClient
     private var didLoad = false
-    private var toastTask: Task<Void, Never>?
 
     init(client: APIClient = APIClient.shared) {
         self.client = client
@@ -164,25 +163,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - toast
 
-    /// 弹一条 toast，1.8s 后自动消失（PRD §5.2）。先取消旧任务（否则旧任务会按自己的节奏
-    /// 清掉新 toast）；用 `[weak self]`；清理前比对文案（已换一条或已被清空就不动手）。
+    /// 弹一条 toast，2.5s 后自动清零（PRD §5.2）。
+    ///
+    /// 转发到独立的 `ToastStore`：toast 与 feed / brief 数据无关，拆出后只有真正订阅
+    /// `ToastStore` 的视图会在 toast 变化时重算 `body`（性能点 B3.3）。
     func showToast(_ message: String) {
-        toastTask?.cancel()
-        toastMessage = message
-        toastTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.8))
-            guard !Task.isCancelled else { return }
-            guard let self = self else { return }
-            if self.toastMessage == message {
-                self.toastMessage = nil
-            }
-        }
-    }
-
-    func dismissToast() {
-        toastTask?.cancel()
-        toastTask = nil
-        toastMessage = nil
+        ToastStore.shared.show(message)
     }
 
     // MARK: - 失败归并（铁律：有内容就绝不清空，只弹 toast）

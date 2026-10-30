@@ -75,10 +75,22 @@ enum GlassLevel: String, CaseIterable {
     }
 }
 
-// MARK: - 唯一入口
+// MARK: - 二级玻璃样式（不采样背景）
+
+/// 二级玻璃样式（不采样背景的廉价配方，见 `View.glassStatic`）。
+///
+/// 与 `GlassLevel` 刻意分开：真玻璃入口 `glassSurface` 的层级表是「采样背景」那一套，
+/// 它的 `switch` 是穷尽的（30+ 调用点依赖它不变），不能因为加了一个「不采样」的级别就改它的 `switch`。
+/// 这里只描述「静态配方」的几种圆角/填充档位，由调用方显式选择是否走廉价路径。
+enum SurfaceStyle {
+    /// 内容卡片档（与 `GlassLevel.card` 同圆角语义）
+    case card
+}
+
+// MARK: - 唯一入口（真玻璃）
 
 extension View {
-    /// 全工程**唯一**的玻璃入口。
+    /// 全工程**唯一**的玻璃入口（真玻璃，采样背景）。
     ///
     /// 调用方永远不写 `#available`：iOS 26 走系统 `glassEffect`，iOS 18–25 走手工配方，
     /// 两条轨用同一套 token、同一张层级表、同一个函数签名。
@@ -112,6 +124,28 @@ extension View {
     }
 }
 
+// MARK: - 二级入口（静态玻璃，不采样背景）
+
+extension View {
+    /// 二级玻璃：不采样背景，用 theme-aware 渐变填充 + 顶缘 1pt 半透高光 + 1pt 描边。
+    ///
+    /// GPU 成本 ≈ 0，视觉接近真玻璃，用于列表卡等「一屏几十张」、不需要透出滚动内容的场景。
+    /// 真玻璃（`glassSurface`）保留给 Tab 栏 / 浮层 / 置顶卡（红石倒计时卡、概览顶部卡）。
+    ///
+    /// 颜色全部走 Theme token：深底白线、浅底黑线由 `glassStaticHighlight` / `glassStaticStroke`
+    /// 反向给出，深浅双主题都不必在这里判外观。
+    ///
+    /// 这是与 `glassSurface` 并行的**另一条路径**，由调用方选择；`glassSurface` 本身不变。
+    @ViewBuilder
+    func glassStatic<S: InsettableShape>(
+        _ style: SurfaceStyle = .card,
+        in shape: S,
+        tint: Color? = nil
+    ) -> some View {
+        self.modifier(StaticGlass(shape: shape, tint: tint))
+    }
+}
+
 // MARK: - 影子（双主题的关键一层）
 
 /// 玻璃投影。抽成 `ViewModifier` 而不是写在 `glassSurface` 里的原因：
@@ -126,6 +160,60 @@ struct GlassShadow: ViewModifier {
             .shadow(color: level.shadowColor, radius: level.shadowRadius, x: 0, y: level.shadowY)
             // 近场接触影：深色 token 是全透明（0%）→ 深色像素零变化；浅色 5% 灰蓝
             .shadow(color: Theme.glassShadowNear, radius: 2, x: 0, y: 1)
+    }
+}
+
+// MARK: - 静态玻璃（不采样背景）
+
+/// 静态玻璃：不采样背景的廉价配方。
+///
+/// 配方 = theme-aware 渐变填充 + 顶部 1pt 半透高光（深色白 12% / 浅色黑 8%）+ 1pt 描边（反向）。
+/// 视觉接近真玻璃，但零 backdrop 采样，是「列表卡」这类一屏几十张场景的最大性能收益点（B1）。
+///
+/// 三条叠加与 `HandGlass` 一致：填充打底 → 顶部渐亮模拟折射 → 描边做分界线 → 顶缘 1pt 内高光。
+/// 唯一区别是**不采样背景**，所以填充用 token 实色而非 `Material`，GPU 上几乎是免费的圆角矩形。
+struct StaticGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var tint: Color?
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                shape
+                    .fill(Theme.glassStaticFill)
+                    .overlay {
+                        if let tint = tint {
+                            shape.fill(tint)
+                        }
+                    }
+                    .overlay {
+                        // 顶部向内渐亮：模拟玻璃折射，让静态填充也有"厚度"
+                        shape.fill(
+                            LinearGradient(
+                                colors: [Theme.glassStaticHighlight, Theme.glassHighlightFade],
+                                startPoint: .top,
+                                endPoint: .center
+                            )
+                        )
+                    }
+            }
+            .overlay {
+                // 1pt 描边：深浅反向（深底白线 / 浅底黑线），玻璃与背景的分界线
+                shape.strokeBorder(Theme.glassStaticStroke, lineWidth: 1)
+            }
+            .overlay {
+                // 顶缘 1pt 内高光：与真玻璃同样的"折射感"来源
+                shape
+                    .inset(by: 0.5)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Theme.glassStaticHighlight, Theme.glassHighlightFade],
+                            startPoint: .top,
+                            endPoint: UnitPoint(x: 0.5, y: 0.38)
+                        ),
+                        lineWidth: 1
+                    )
+            }
     }
 }
 

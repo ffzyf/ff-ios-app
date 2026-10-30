@@ -12,13 +12,12 @@ struct ArticleRowCard: View {
     let action: () -> Void
 
     var body: some View {
-        PressableGlassCard(
-            level: .card,
-            tint: pinned ? Theme.surfaceTint1 : nil,
-            action: {
-                action()
-            }
-        ) {
+        // B1：列表卡改二级静态玻璃（glassStatic）。一屏几十张列表行，真玻璃每层都要 backdrop 采样，
+        // 静态配方不采样背景、GPU 成本≈0，视觉接近真玻璃；真玻璃留给 Tab 栏 / 置顶卡。
+        Button {
+            Haptics.light()
+            action()
+        } label: {
             HStack(alignment: .top, spacing: 12) {
                 thumbnail
                 VStack(alignment: .leading, spacing: 6) {
@@ -42,7 +41,14 @@ struct ArticleRowCard: View {
             .padding(Spacing.smallCardPadding)
             // 用 minHeight 而不是固定高度：大字号（AX1+）下文字会换行，固定高会裁字
             .frame(minHeight: pinned ? 124 : 116, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassStatic(
+                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous),
+                tint: pinned ? Theme.surfaceTint1 : nil
+            )
         }
+        .buttonStyle(PressableStyle())
+        .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     private var thumbnail: some View {

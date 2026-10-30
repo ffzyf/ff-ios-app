@@ -16,8 +16,12 @@ struct RockCalendarView: View {
     @State private var showsGuide: Bool = false
 
     /// 显式空 init：`@State` / `@EnvironmentObject` 是 private 存储属性，会把自动生成的
-    /// memberwise init 降级成 private，跨文件 `RockCalendarView()` 就编译不过（同 `RootView`）。
-    init() {}
+    /// memberwise init 降级成 private，跨文件 `RockCalendarView(scrollPosition:)` 就编译不过（同 `RootView`）。
+    let scrollPosition: Binding<ScrollPosition>
+
+    init(scrollPosition: Binding<ScrollPosition>) {
+        self.scrollPosition = scrollPosition
+    }
 
     var body: some View {
         ScrollView {
@@ -34,6 +38,7 @@ struct RockCalendarView: View {
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }
+        .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         // 顶部细条占自己的高度，不压标题、不遮内容（与概览页同一手法）
         .safeAreaInset(edge: .top, spacing: 0) {

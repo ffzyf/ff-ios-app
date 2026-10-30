@@ -4,27 +4,28 @@ import Foundation
 /// 概览首页（Tab 1，PRD §3.1 / 设计文档 T05）。
 ///
 /// 职责边界（这里比 PRD 少一样东西，写清楚免得被当成漏做）：
-/// · 本页负责「日期头 + 光遇状态卡 + 最近写的 + 快捷入口」四段；
-/// · PRD §3.1 第 5 条「今日简报摘要卡」的数据域归简报页（T08）。做一张假占位卡比不做更糟
-///   （用户会以为数据坏了），所以本批不画，等 T08 的 `BriefView` 落地后由主理人决定放哪。
+/// · 本页负责「日期头 + 光遇状态卡 + 快捷入口」三段；
+/// · PRD §3.1 第 5 条「今日简报摘要卡」的数据域归简报页（T08）。
 ///
 /// 数据只从 `AppModel` 读（页面绝不自己发请求），Tab 状态由 RootView 通过 `selectedTab` 注入。
+///
+/// B 批次首页精简（任务 5）：删除「最近写的」区块（连同其整文件、快照属性、变更订阅与同步逻辑、
+/// 以及只为它服务的 `onOpenArticle` 参数一并移除）。
+/// 首页只留：红石倒计时卡 / 光遇状态卡 / 快捷入口，整体更短更清爽。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
     /// 红石数据（批次 2 新增）。概览只读它来画置顶倒计时卡，不发任何红石请求
     /// （请求由 `RootView` 的 task 统一发起，页面绝不自己开请求，§7.3）
     @EnvironmentObject private var rock: RockStore
     @Binding private var selectedTab: AppTab
-    private let onOpenArticle: (ArticleSummary) -> Void
+    /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入，切 Tab 回来大致回到原位。
+    private let scrollPosition: Binding<ScrollPosition>
 
     @State private var showsSettings: Bool = false
-    /// 「最近写的」快照：只认 feed 第 1 页。列表页翻页后 `feedState.articles.page` 会涨到 N，
-    /// 首页不该跟着换成第 N 页的内容（否则会出现很早的文章），所以这里按页码守住快照。
-    @State private var latest: [ArticleSummary] = []
 
-    init(selectedTab: Binding<AppTab>, onOpenArticle: @escaping (ArticleSummary) -> Void) {
+    init(selectedTab: Binding<AppTab>, scrollPosition: Binding<ScrollPosition>) {
         self._selectedTab = selectedTab
-        self.onOpenArticle = onOpenArticle
+        self.scrollPosition = scrollPosition
     }
 
     var body: some View {
@@ -40,6 +41,7 @@ struct OverviewView: View {
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }
+        .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         // PRD §5.2「离线（有缓存）」：有内容但这次刷新失败 → 顶部细条。
         // 用 `safeAreaInset` 而不是 overlay：细条占据自己的高度，不压住标题、不遮内容。
@@ -53,18 +55,13 @@ struct OverviewView: View {
         .refreshable {
             await model.refresh()
         }
-        // 全站共享的轻提示：刷新失败不清空内容，只弹这一条（1.8s 自动消失）
+        // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）：
+        // 刷新失败不清空内容，只弹这一条（2.5s 自动消失）
         .overlay(alignment: .bottom) {
-            PageToast(message: model.toastMessage)
+            PageToast()
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
-        }
-        .onChange(of: articleIDs) { _, _ in
-            syncLatest()
-        }
-        .onAppear {
-            syncLatest()
         }
     }
 
@@ -103,15 +100,6 @@ struct OverviewView: View {
                     selectedTab = .brief
                 }
             }
-            LatestArticlesSection(
-                articles: latest,
-                onSelect: onOpenArticle,
-                onOpenAll: {
-                    withAnimation(Motion.tab) {
-                        selectedTab = .articles
-                    }
-                }
-            )
             QuickEntryRow(entries: quickEntries, onSelect: handleQuickEntry)
         }
     }
@@ -151,16 +139,6 @@ struct OverviewView: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// 用于 `onChange` 判定的轻量指纹：只比 id，不比整个模型（`LoadState` 不是 `Equatable`）
-    private var articleIDs: [String] {
-        return model.articles.map { $0.id }
-    }
-
-    private var feedPage: Int {
-        guard let feed = model.feedState.value else { return 1 }
-        return feed.articles.page
-    }
-
     private var firstError: APIError? {
         if let error = model.feedState.error {
             return error
@@ -178,17 +156,11 @@ struct OverviewView: View {
 
     /// 倒计时卡点击 → 切到红石 Tab。
     ///
-    /// 走现有的 `selectedTab` binding，**不新建导航栈**：根视图是 5 个常驻页面 + 自绘 Tab 栏，
-    /// 再塞一个 `NavigationStack` 会让 Tab 栏与页面层级打架（也会把 5 个页面重新包一层容器）。
+    /// 走现有的 `selectedTab` binding，**不新建导航栈**：根视图是条件渲染的 5 个页面 + 自绘 Tab 栏，
+    /// 再塞一个 `NavigationStack` 会让 Tab 栏与页面层级打架（也会把当前页面重新包一层容器）。
     private func openRock() {
         withAnimation(Motion.tab) {
             selectedTab = .rock
         }
-    }
-
-    private func syncLatest() {
-        // 只在第 1 页时认账；翻页造成的第 N 页结果一律忽略
-        guard feedPage <= 1 else { return }
-        latest = Array(model.articles.prefix(2))
     }
 }

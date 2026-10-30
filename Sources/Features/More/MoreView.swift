@@ -21,10 +21,14 @@ struct MoreView: View {
     @State private var showsMonitor: Bool = false
     @State private var showsSettings: Bool = false
     @State private var showsAbout: Bool = false
+    /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
+    let scrollPosition: Binding<ScrollPosition>
 
     /// 显式空 init：`@State` / `@ObservedObject` 都是 private 存储属性，
-    /// 会把自动生成的 memberwise init 降级成 private，跨文件 `MoreView()` 就调不到。
-    init() {}
+    /// 会把自动生成的 memberwise init 降级成 private，跨文件 `MoreView(scrollPosition:)` 就调不到。
+    init(scrollPosition: Binding<ScrollPosition>) {
+        self.scrollPosition = scrollPosition
+    }
 
     var body: some View {
         ScrollView {
@@ -82,6 +86,7 @@ struct MoreView: View {
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }
+        .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         .overlay(alignment: .bottom) {
             PageToast(message: store.toast)

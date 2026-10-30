@@ -11,8 +11,12 @@ import SwiftUI
 /// 2. 出现用 `Motion.glassIn`、消失用 `Motion.glassOut`（消失比出现快，感觉更利落，PRD §4.6）；
 /// 3. 不吃点击（`allowsHitTesting(false)`）—— toast 盖在内容上，用户点它不该没反应。
 struct PageToast: View {
-    /// nil 或空串时不显示任何东西（连占位都不留）
+    /// 外部直接给文案时使用（Monitor / Survey 等独立 store 的 toast）。
+    /// 传 nil 时回退到全局 `ToastStore.shared`（AppModel 的 toast，B 批次后唯一来源）。
     let message: String?
+    /// 观察全局 toast：这样 `PageToast()` 不传文案时也能随着 `ToastStore` 变化重绘，
+    /// 而不必在调用方手动传 `ToastStore.shared.message`（那样读取值不会触发订阅）。
+    @ObservedObject private var globalToast = ToastStore.shared
 
     var body: some View {
         Group {
@@ -38,8 +42,9 @@ struct PageToast: View {
 
     /// 空白文案当作「没有 toast」：`Text("")` 会渲染出一枚空胶囊，比不弹更糟
     private var displayText: String? {
-        guard let message = message else { return nil }
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = message ?? globalToast.message
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 

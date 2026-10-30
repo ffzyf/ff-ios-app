@@ -17,15 +17,14 @@ struct TabSpec: Identifiable, Equatable {
 /// 为什么自绘（设计文档 §5.1 #4）：PRD 要的是「左右内缩 24pt、高 56pt、距底 16pt、不贴边」，
 /// 系统 TabView 的 bar 无法满足；`.toolbar(.hidden, for: .tabBar)` 再自绘会让安全区塌陷。
 ///
-/// 三层结构 = 玻璃底（glassSurface 唯一入口）+ 高亮胶囊（matchedGeometryEffect）+ 图标文字。
-/// 高亮刻意用 `matchedGeometryEffect` 而不是系统玻璃容器的 morph 效果：
-/// iOS 18–25 没有 morph，靠系统 morph 会导致「换台设备动效就消失」（设计文档 §5.3-①）。
+/// 三层结构 = 玻璃底（glassSurface 唯一入口）+ 高亮胶囊（滑动）+ 图标文字。
 ///
-/// 批次 1 的三处改动：
-/// 1. 从 3 项扩到 5 项 —— 每项 `frame(maxWidth: .infinity)` 均分，项间间距随项数收窄，
-///    图标 15pt / 文字 10pt 保持不变（PRD §2.2 的定稿字号，不要动）；
-/// 2. 选中态从 `lime` 改成 `limeInk`（深色同值 `#6BDB5C` → 零变化；浅色 `#1F6B22` 才读得清）；
-/// 3. 支持 `TabSpec.showsDot`（「更多」的青柠小圆点）。
+/// **iOS 26 液态玻璃（候选，⚠️ 待验证）**：用 `GlassEffectContainer` 包住整个 Tab 栏、
+/// 选中项叠加 `.glassEffect(in: Capsule())` + `.glassEffectID("tabHighlight", in: tabNS)`，
+/// 与全部 5 个 tab 项共享同一 `Namespace`，切台时「tabHighlight」这块玻璃在容器内液态 morph 到新位置。
+/// 但该分支依赖 iOS 26 专有符号（GlassEffectContainer / glassEffect / glassEffectID），
+/// 本工程以 iOS 18 SDK 编译会直接报「symbol not found」，**整段注释**（见文件末尾），
+/// 待 macos-26 runner + 真机验证后再点亮。下面这条 iOS 18–25 分支是**当前生效路径**，已保证可编译可运行。
 struct FloatingTabBar: View {
     let tabs: [TabSpec]
     @Binding var selection: Int
@@ -53,6 +52,8 @@ struct FloatingTabBar: View {
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity)
         .frame(height: Spacing.tabBarHeight)
+        // Tab 栏保留真玻璃：它是「必须透出滚动内容才能证明自己浮着」的唯一上层元素（B1 设计 §5.3.2），
+        // 不改成静态配方。
         .glassSurface(.floating, in: Capsule(), interactive: true)
     }
 
@@ -77,12 +78,7 @@ struct FloatingTabBar: View {
             .frame(height: Spacing.tabBarHeight - 14)
             .background {
                 if isSelected {
-                    Capsule()
-                        .fill(Theme.lime.opacity(0.14))
-                        .overlay {
-                            Capsule().strokeBorder(Theme.lime.opacity(0.35), lineWidth: 1)
-                        }
-                        .matchedGeometryEffect(id: "tab.highlight", in: highlightNamespace)
+                    selectedHighlight
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -101,4 +97,47 @@ struct FloatingTabBar: View {
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }
+
+    /// 选中态胶囊（iOS 18–25 降级分支，观感明显优于现版）：
+    /// 填充从 14% 提到约 22% + 1pt 描边（青柠 50%），并叠一层**顶部高光渐变**模拟玻璃折射，
+    /// 让胶囊有「浮起玻璃」的反射感，比现版「14% 填充 + 1pt 描边」更通透。
+    /// 滑动仍由 `matchedGeometryEffect` 承担 —— iOS 18 没有 morph API，靠它会「换台设备动效消失」。
+    private var selectedHighlight: some View {
+        Capsule()
+            .fill(Theme.lime.opacity(0.22))
+            .overlay {
+                // 顶部高光：玻璃边缘的折射感（走 token，不写白/黑 opacity）
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: [Theme.glassSheen, Theme.glassHighlightFade],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+            }
+            .overlay {
+                Capsule().strokeBorder(Theme.lime.opacity(0.5), lineWidth: 1)
+            }
+            // 与全部 5 个 tab 项共享 namespace，选中项在容器内液态滑动到新位置
+            .matchedGeometryEffect(id: "tab.highlight", in: highlightNamespace)
+    }
 }
+
+/*
+ ⚠️ 待验证 · iOS 26 液态玻璃候选分支（macos-26 runner 验证后再启用）
+ ───────────────────────────────────────────────────────────────────────
+ 本段整段注释，原因是它引用 iOS 26 专有符号（GlassEffectContainer / glassEffect / glassEffectID），
+ 当前以 iOS 18 SDK 编译会直接失败。验证通过后再替换进上面的 `body` / `tabItem` / 选中胶囊逻辑，
+ 且务必包在 `if #available(iOS 26.0, *)` 里，并保留下方 iOS 18–25 分支作为降级。
+
+ 改造要点：
+ 1. 外层 `glassSurface(.floating, ...)` 改为 `GlassEffectContainer(spacing: 0, in: highlightNamespace) { ... }`
+    —— 液态玻璃要求「容器内多块玻璃融合」，外层不能再是玻璃（否则玻璃套玻璃、双重采样且 morph 失效）。
+ 2. 选中项：`.glassEffect(Glass.regular.interactive(true), in: Capsule())`
+            `.glassEffectID("tabHighlight", in: highlightNamespace)`
+ 3. 未选中项：普通 `Button { ... }`（无玻璃），与选中项同处一个 `GlassEffectContainer`、共享 `highlightNamespace`，
+    这样「tabHighlight」这块玻璃会在切换时从旧位置液态 morph 到新位置。
+ 4. 删除 `matchedGeometryEffect`，改用玻璃容器自己的 morph。
+
+ 降级的「反向」红线（绝不可引入未登记的 morph 相关私有 API）。
+ 仅允许使用 GlassEffectContainer / glassEffect / glassEffectID 这套已登记待验证的 API。
+ */

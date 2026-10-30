@@ -16,6 +16,12 @@ struct BriefView: View {
     /// 用单例观察而不是再注入一个环境对象：简报页只需要它的两个字段（最近推送 / 时段），
     /// 多一层注入就多一处「模态没继承环境对象」的运行期风险。
     @ObservedObject private var monitor = MonitorStore.shared
+    /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
+    let scrollPosition: Binding<ScrollPosition>
+
+    init(scrollPosition: Binding<ScrollPosition>) {
+        self.scrollPosition = scrollPosition
+    }
 
     var body: some View {
         ScrollView {
@@ -28,6 +34,7 @@ struct BriefView: View {
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }
+        .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         .refreshable {
             await model.loadBrief()
@@ -38,9 +45,10 @@ struct BriefView: View {
         .task {
             await monitor.load()
         }
-        // 全站共享的轻提示：刷新失败只弹这一条，不遮内容
+        // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）：
+        // 刷新失败只弹这一条，不遮内容
         .overlay(alignment: .bottom) {
-            PageToast(message: model.toastMessage)
+            PageToast()
         }
     }
 

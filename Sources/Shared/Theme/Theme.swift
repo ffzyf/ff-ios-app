@@ -57,6 +57,16 @@ enum Theme {
     /// 状态类卡片的青柠染色
     static let glassTintLime = dyna(dark: ("#6BDB5C", 0.08), light: ("#3FA83A", 0.08))
 
+    // MARK: - 二级玻璃（静态配方，不采样背景，B 批次新增）
+
+    /// 静态玻璃填充：比真玻璃更深一档的实色感（深 白 8% / 浅 白 78%），
+    /// 不采样背景也能立住（列表卡用，单屏几十张也不重）。
+    static let glassStaticFill = dyna(dark: ("#FFFFFF", 0.08), light: ("#FFFFFF", 0.78))
+    /// 顶缘 1pt 半透高光：深底白 12% / 浅底黑 8%（任务 B1 指定的反向配色）。
+    static let glassStaticHighlight = dyna(dark: ("#FFFFFF", 0.12), light: ("#0F1A26", 0.08))
+    /// 1pt 描边（与高光反向）：深底黑 8% / 浅底白 12%，保证深浅双主题都"有边"。
+    static let glassStaticStroke = dyna(dark: ("#0F1A26", 0.08), light: ("#FFFFFF", 0.12))
+
     // MARK: - 品牌青柠（面 / 字 / 面上字 三分，PRD §3.2）
 
     /// 【面】只允许出现在 `fill` / `strokeBorder` / `LinearGradient` / 徽标底 / 进度条填充。

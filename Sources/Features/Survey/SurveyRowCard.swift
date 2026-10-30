@@ -20,36 +20,38 @@ struct SurveyRowCard: View {
     private var isCollecting: Bool { summary.isCollecting(now: now) }
 
     var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Text(displayTitle)
-                        .font(Typography.titleS)
-                        .foregroundStyle(Theme.textPrimary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                    Spacer(minLength: 8)
-                    BadgePill(
-                        kind: isCollecting ? .newVersion : .neutral,
-                        text: summary.statusLabel(now: now)
-                    )
-                }
-
-                HStack(spacing: 12) {
-                    metaLabel(icon: "list.number", text: "\(summary.questionCount) 题")
-                    metaLabel(icon: "tray.full", text: "\(summary.responseCount) 份")
-
-                    Spacer(minLength: 8)
-
-                    Text(updatedText)
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
+        // B1：列表卡改二级静态玻璃（glassStatic）。问卷列表一屏多行，真玻璃每层都要 backdrop 采样，
+        // 静态配方不采样背景、GPU 成本≈0，视觉接近真玻璃；真玻璃留给 Tab 栏 / 置顶卡。
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Text(displayTitle)
+                    .font(Typography.titleS)
+                    .foregroundStyle(Theme.textPrimary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                BadgePill(
+                    kind: isCollecting ? .newVersion : .neutral,
+                    text: summary.statusLabel(now: now)
+                )
             }
-            .padding(Spacing.cardPadding)
+
+            HStack(spacing: 12) {
+                metaLabel(icon: "list.number", text: "\(summary.questionCount) 题")
+                metaLabel(icon: "tray.full", text: "\(summary.responseCount) 份")
+
+                Spacer(minLength: 8)
+
+                Text(updatedText)
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.textTertiary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
         }
+        .padding(Spacing.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassStatic(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(displayTitle)，\(summary.statusLabel(now: now))，\(summary.questionCount) 题，\(summary.responseCount) 份答卷")
     }
