@@ -19,12 +19,16 @@ struct TabSpec: Identifiable, Equatable {
 /// 选中态只是淡青柠胶囊，远看跟没选中一样。新版三处改动：
 ///
 /// 1. **整幅宽**：只留 8pt 屏幕边距，几乎顶满，手指落点大了近一倍；
-/// 2. **选中态 = 一枚 46pt 实心圆**（青柠面 + 外投影），图标落在圆上用 `onLime` 字色；
+/// 2. **选中态 = 一枚 46pt 实心圆**（青柠渐变面 + 外投影），图标落在圆上用 `onLime` 字色；
 ///    未选中项**不给底**，只有图标 + 标签，干净；
 /// 3. **徽标**挂在图标右上角，不挤占圆心。
 ///
-/// 切换动效：选中圆用 `matchedGeometryEffect` 在各项之间滑动；iOS 26 上走
-/// `GlassEffectContainer` + `glassEffectID` 的液态 morph（同容器内玻璃互相吸引合并）。
+/// 玻璃一律走 `glassSurface` 这个唯一入口（README §四 的硬规则）：
+/// iOS 26 由 `GlassCompat` 内部落到系统 `glassEffect`，iOS 18–25 走手工玻璃 —— 本文件不出现
+/// 任何 `glassEffect*` 符号，深浅两套外观因此只在一处收敛。
+///
+/// 选中圆的滑动用 `matchedGeometryEffect`：它在 iOS 18 起就可用，
+/// 换台设备动效也不会"消失"（morph API 只有 iOS 26 有）。
 struct FloatingTabBar: View {
     let tabs: [TabSpec]
     @Binding var selection: Int
@@ -48,23 +52,9 @@ struct FloatingTabBar: View {
     private let iconSize: CGFloat = 20
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 0) {
-                barContent
-            }
-        } else {
-            barContent
-        }
-    }
-
-    private var barContent: some View {
         HStack(alignment: .center, spacing: 0) {
             ForEach(tabs) { tab in
-                if #available(iOS 26.0, *) {
-                    tabItem26(tab)
-                } else {
-                    tabItemLegacy(tab)
-                }
+                tabItem(tab)
             }
         }
         .padding(.horizontal, 10)
@@ -72,21 +62,21 @@ struct FloatingTabBar: View {
         .padding(.bottom, 8)
         .frame(height: barHeight)
         .frame(maxWidth: .infinity)
-        // 整条栏保留真玻璃：它是「必须透出滚动内容才能证明自己浮着」的唯一上层元素
+        // 整条栏的真玻璃（唯一入口）：它是「必须透出滚动内容才能证明自己浮着」的上层元素
         .glassSurface(.floating, in: RoundedRectangle(cornerRadius: 30, style: .continuous), interactive: true)
     }
 
-    // MARK: - 单项（iOS 26 液态玻璃）
+    // MARK: - 单项
 
-    @available(iOS 26.0, *)
-    private func tabItem26(_ tab: TabSpec) -> some View {
+    private func tabItem(_ tab: TabSpec) -> some View {
         let isSelected = (selection == tab.id)
         return Button(action: {
             guard selection != tab.id else { return }
-            selection = tab.id // 动画与轻触觉统一在 RootView 的 Binding setter 里给
+            // 动画与轻触觉统一在 RootView 的 Binding setter 里给，这里只改值
+            selection = tab.id
         }) {
             VStack(spacing: 3) {
-                knob26(icon: tab.icon, badge: tab.badge, selected: isSelected)
+                knob(icon: tab.icon, badge: tab.badge, selected: isSelected)
                 Text(tab.title)
                     .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
                     .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
@@ -103,18 +93,23 @@ struct FloatingTabBar: View {
 
     /// 图标 / 选中圆 / 徽标三层。
     ///
-    /// iOS 26：选中圆是**一块玻璃**（`.glassEffect(in: Circle())`），靠 `glassEffectID`
-    /// 在同一容器里液态 morph 到新位置；未选中不给底。
-    @available(iOS 26.0, *)
-    @ViewBuilder
-    private func knob26(icon: String, badge: String?, selected: Bool) -> some View {
+    /// 选中时给一枚 46pt 青柠渐变圆（带投影），图标换成 `onLime` 字色；
+    /// 未选中时不给底，只有图标本身 —— 五项并排不会变成五块玻璃互相打架。
+    private func knob(icon: String, badge: String?, selected: Bool) -> some View {
         ZStack {
             if selected {
                 Circle()
-                    .fill(Theme.lime)
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.lime, Theme.limeDeep],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .frame(width: knobSize, height: knobSize)
-                    .glassEffect(in: Circle())
-                    .glassEffectID("tab.knob", in: knobNamespace)
+                    .shadow(color: Theme.limeGlow, radius: 12, y: 5)
+                    // 与全部 5 个 tab 项共享 namespace：切换时圆从旧位置滑到新位置
+                    .matchedGeometryEffect(id: "tab.knob", in: knobNamespace)
             }
             Image(systemName: icon)
                 .font(.system(size: selected ? iconSize + 1 : iconSize, weight: .semibold))
@@ -126,46 +121,6 @@ struct FloatingTabBar: View {
         }
     }
 
-    // MARK: - 单项（iOS 18–25）
-
-    private func tabItemLegacy(_ tab: TabSpec) -> some View {
-        let isSelected = (selection == tab.id)
-        return Button(action: {
-            guard selection != tab.id else { return }
-            selection = tab.id
-        }) {
-            VStack(spacing: 3) {
-                ZStack {
-                    if isSelected {
-                        Circle()
-                            .fill(Theme.lime)
-                            .frame(width: knobSize, height: knobSize)
-                            // 与全部 5 个 tab 项共享 namespace：切换时圆从旧位置滑到新位置
-                            .matchedGeometryEffect(id: "tab.knob", in: knobNamespace)
-                            .shadow(color: Theme.limeGlow, radius: 10, y: 4)
-                    }
-                    Image(systemName: tab.icon)
-                        .font(.system(size: isSelected ? iconSize + 1 : iconSize, weight: .semibold))
-                        .foregroundStyle(isSelected ? Theme.onLime : Theme.textTertiary)
-                }
-                .frame(width: knobSize + 8, height: knobSize + 8)
-                .overlay(alignment: .topTrailing) {
-                    badgeView(tab.badge)
-                }
-                Text(tab.title)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .accessibilityLabel(tab.title)
-        .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
-    }
-
     // MARK: - 徽标
 
     /// 右上角红色徽标：空串画圆点，否则画数字胶囊。
@@ -175,21 +130,21 @@ struct FloatingTabBar: View {
             if badge.isEmpty {
                 Circle()
                     .fill(Theme.badgeRed)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 9, height: 9)
                     .offset(x: 2, y: 0)
                     .accessibilityHidden(true)
             } else {
                 Text(badge)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.badgeRedInk)
-                    .monospacedDigit()
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background {
-                        Capsule().fill(Theme.badgeRed)
-                    }
-                    .offset(x: 4, y: -2)
-                    .accessibilityLabel("有 " + badge + " 条新消息")
+                .monospacedDigit()
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background {
+                    Capsule().fill(Theme.badgeRed)
+                }
+                .offset(x: 4, y: -2)
+                .accessibilityLabel("有 " + badge + " 条新消息")
             }
         }
     }

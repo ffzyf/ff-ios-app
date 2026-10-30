@@ -126,11 +126,11 @@ struct RedstoneCountdownCard: View {
     /// ↘ 行：进行中给剩余分钟，否则给"还有 mm:ss"（超过一天用"还有 N 天"）
     private func countdownLine(phase: RockPhase, now: Date) -> String? {
         switch phase {
-        case .ongoing(_, minutesLeft: let minutesLeft):
+        case .ongoing(_, let minutesLeft):
             return "进行中 · 剩 " + String(minutesLeft) + " 分"
-        case .upcoming(_, seconds: let seconds):
+        case .upcoming(_, let seconds):
             return "还有 " + Formatters.countdown(seconds: seconds)
-        case .endedToday(_, seconds: let seconds):
+        case .endedToday(_, let seconds):
             if seconds < 86_400 {
                 return "明日场次 · 还有 " + Formatters.countdown(seconds: seconds)
             }
