@@ -64,3 +64,5 @@ open SkyApp.xcodeproj
 - `Sources/DesignSystem/TrackCard.swift` 是卡片自己的深靛渐变底盘
   （`Theme.trackTop/trackBottom/trackArc/trackTextDim/trackDivider`），不再靠采样背景立住。
 - Tab 栏：56pt 窄胶囊 → 74pt 整幅玻璃，选中态为 46pt 青柠渐变圆 + 徽标位。
+
+# V3.1 轨迹卡重构：弧线几何下沉 Shared，App/Widget 同源
