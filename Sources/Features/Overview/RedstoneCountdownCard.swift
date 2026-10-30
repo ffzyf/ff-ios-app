@@ -28,7 +28,7 @@ struct RedstoneCountdownCard: View {
     }
 
     var body: some View {
-        TrackCard(progress: ArcGeometry.dayProgress(), bandTop: 0.52, bandBottom: 0.98, peak: 0.70) {
+        TrackCard(progress: ArcGeometry.dayProgress(), peak: 0.70) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 if rock.hasLoadedAnyMonth {
                     cardContent(now: context.date)
@@ -72,33 +72,45 @@ struct RedstoneCountdownCard: View {
     /// 左栏：地图 + 倍率 / 大字时刻 / ↘ 倒计时 / ↗ 去向
     private func leftColumn(phase: RockPhase, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text(phase.occurrence?.map ?? "暂无排期")
-                    .font(Typography.titleS)
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                if let rate = phase.occurrence?.rate {
-                    RateBadge(rate: rate)
+            // 没有焦点场次时整行不画：否则「暂无排期」会和下面的大字「排期还没生成」
+            // 连读成一句重复的话（截图里就是这个观感）。空出来让大字站中间。
+            if let occurrence = phase.occurrence {
+                HStack(spacing: 6) {
+                    Text(occurrence.map)
+                        .font(Typography.titleS)
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    if let rate = occurrence.rate {
+                        RateBadge(rate: rate)
+                    }
+                    if occurrence.needsCheck == true {
+                        NeedsCheckBadge()
+                    }
+                    Spacer(minLength: 0)
                 }
-                if phase.occurrence?.needsCheck == true {
-                    NeedsCheckBadge()
-                }
-                Spacer(minLength: 0)
-            }
 
-            Spacer(minLength: 12)
+                Spacer(minLength: 12)
+            }
 
             bigValue(phase: phase, now: now)
 
             Spacer(minLength: 8)
 
             VStack(alignment: .leading, spacing: 3) {
-                if let detail = countdownLine(phase: phase, now: now) {
-                    arrowLine(icon: "arrow.down.right", text: detail, emphasized: true)
-                }
-                if let occurrence = phase.occurrence {
-                    arrowLine(icon: "arrow.up.right", text: occurrence.map, emphasized: false)
+                switch phase {
+                case .notGenerated:
+                    // 大字已经说了"排期还没生成"，这里只补一句接下来会怎样
+                    Text("等官方更新这月的排期。")
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.trackTextDim)
+                default:
+                    if let detail = countdownLine(phase: phase, now: now) {
+                        arrowLine(icon: "arrow.down.right", text: detail, emphasized: true)
+                    }
+                    if let occurrence = phase.occurrence {
+                        arrowLine(icon: "arrow.up.right", text: occurrence.map, emphasized: false)
+                    }
                 }
             }
         }

@@ -181,9 +181,16 @@ struct TrackArcBackdrop: View {
     var lineWidth: CGFloat = 2
     /// 节点半径（小号卡给 3.5，中号卡 4.5）
     var nodeRadius: CGFloat = 4
-    /// 弧线带的上沿（占整卡高度比例）
+    /// 弧线带高度（**绝对值，贴卡片底边**）。
+    ///
+    /// 为什么需要它：比例模式（`bandTop…bandBottom`）的本质是"赌卡片够高"——
+    /// 卡片内容一少（比如红石降级成"暂无排期"两行字），带子就整体上浮，弧线钻进文字里。
+    /// 给了这个值就走绝对高度 + 贴底，配合调用方在内容底部留出同样高的空间，
+    /// 弧线与文字在**布局层面**分离，不再依赖高度运气。桌面小组件尺寸固定，继续用比例模式。
+    var bandHeight: CGFloat? = nil
+    /// 弧线带的上沿（占整卡高度比例，仅在 `bandHeight == nil` 时生效）
     var bandTop: CGFloat = 0.34
-    /// 弧线带的下沿
+    /// 弧线带的下沿（同上）
     var bandBottom: CGFloat = 0.94
     /// 弧顶横向位置
     var peak: CGFloat = 0.62
@@ -193,7 +200,16 @@ struct TrackArcBackdrop: View {
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            let bandH = max(8, h * (bandBottom - bandTop))
+            // 两种模式算同一组东西：带子高度 + 带子上沿的 y
+            let bandH: CGFloat
+            let bandOffsetY: CGFloat
+            if let fixed = bandHeight {
+                bandH = min(max(fixed, 12), h)
+                bandOffsetY = h - bandH
+            } else {
+                bandH = max(8, h * (bandBottom - bandTop))
+                bandOffsetY = h * bandTop
+            }
             let g = ArcGeometry(width: geo.size.width,
                                 height: bandH,
                                 ratio: 1,
@@ -213,7 +229,7 @@ struct TrackArcBackdrop: View {
                                     endPoint: .bottom
                                 )
                             )
-                            .frame(height: h * (1 - bandTop))
+                            .frame(height: h - bandOffsetY)
                     }
                 }
                 ZStack(alignment: .topLeading) {
@@ -224,7 +240,7 @@ struct TrackArcBackdrop: View {
                     g.glowNode(at: progress, radius: nodeRadius, tint: tint)
                 }
                 .frame(width: geo.size.width, height: bandH, alignment: .topLeading)
-                .offset(y: h * bandTop)
+                .offset(y: bandOffsetY)
             }
             .frame(width: geo.size.width, height: h, alignment: .topLeading)
         }

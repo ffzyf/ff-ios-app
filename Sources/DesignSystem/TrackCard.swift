@@ -7,10 +7,12 @@ import SwiftUI
 /// 压在玻璃层上时不需要采样，滚动时也不会跟着背景一起抖动（顺带省掉一层真玻璃的开销）。
 ///
 /// 三条硬规则：
-/// 1. **文字永远在弧线之上**：弧线只画在 `bandTop…bandBottom` 这一条窄带里（默认卡片下部），
-///    绝不从标题或数字中间穿过；
+/// 1. **文字永远在弧线之上**——靠布局保证，不靠高度运气：容器在内容底部固定让出 `arcBand` 高，
+///    弧线带贴底画在这块留白里。上一版用"占卡片高度的比例"给弧线带定位，
+///    结果红石卡降级成两行字时卡片变矮，带子上浮，弧线直接穿过「光遇简报」——
+///    **内容多少不该影响弧线压不压文字**，所以改成绝对高度；
 /// 2. 圆角与页面其它卡片一致（`Radius.card`），描边用上亮下暗的渐变，模仿玻璃接光；
-/// 3. 内容内边距由调用方给，容器只管底盘与裁剪（同心圆角规则）。
+/// 3. 内容内边距由调用方给，容器只管底盘、留白与裁剪（同心圆角规则）。
 struct TrackCard<Content: View>: View {
 
     /// 当天已过比例（0 = 00:00，1 = 24:00），决定光轨画到哪儿、节点落在哪儿
@@ -18,10 +20,9 @@ struct TrackCard<Content: View>: View {
     /// 光轨颜色，默认淡蓝紫
     var tint: Color = Theme.trackArc
     var cornerRadius: CGFloat = Radius.card
-    /// 弧线带的上沿（占卡片高度比例）
-    var bandTop: CGFloat = 0.40
-    /// 弧线带的下沿
-    var bandBottom: CGFloat = 0.95
+    /// 底部光轨带高度（**绝对值**）。内容区右下角会自动让出同样高度，
+    /// 弧线与文字在布局层面分离。首页卡给 44；桌面小组件不走这个容器。
+    var arcBand: CGFloat = 44
     /// 弧顶横向位置
     var peak: CGFloat = 0.66
     private let content: Content
@@ -29,15 +30,13 @@ struct TrackCard<Content: View>: View {
     init(progress: CGFloat,
          tint: Color = Theme.trackArc,
          cornerRadius: CGFloat = Radius.card,
-         bandTop: CGFloat = 0.40,
-         bandBottom: CGFloat = 0.95,
+         arcBand: CGFloat = 44,
          peak: CGFloat = 0.66,
          @ViewBuilder content: () -> Content) {
         self.progress = progress
         self.tint = tint
         self.cornerRadius = cornerRadius
-        self.bandTop = bandTop
-        self.bandBottom = bandBottom
+        self.arcBand = arcBand
         self.peak = peak
         self.content = content()
     }
@@ -49,6 +48,8 @@ struct TrackCard<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
+            // 先让出光轨带，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉
+            .padding(.bottom, arcBand)
             .background {
                 ZStack {
                     LinearGradient(
@@ -68,8 +69,7 @@ struct TrackCard<Content: View>: View {
                         tint: tint,
                         lineWidth: 2,
                         nodeRadius: 4.5,
-                        bandTop: bandTop,
-                        bandBottom: bandBottom,
+                        bandHeight: arcBand,
                         peak: peak,
                         scrimOpacity: 0
                     )

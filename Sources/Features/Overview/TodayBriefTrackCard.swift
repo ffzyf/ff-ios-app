@@ -30,7 +30,7 @@ struct TodayBriefTrackCard: View {
     }
 
     var body: some View {
-        TrackCard(progress: ArcGeometry.dayProgress(), bandTop: 0.46, bandBottom: 0.98, peak: 0.64) {
+        TrackCard(progress: ArcGeometry.dayProgress(), peak: 0.64) {
             VStack(alignment: .leading, spacing: 0) {
                 headerRow
                 Spacer(minLength: 14)
