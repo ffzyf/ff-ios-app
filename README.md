@@ -66,3 +66,5 @@ open SkyApp.xcodeproj
 - Tab 栏：56pt 窄胶囊 → 74pt 整幅玻璃，选中态为 46pt 青柠渐变圆 + 徽标位。
 
 # V3.1 轨迹卡重构：弧线几何下沉 Shared，App/Widget 同源
+
+- 弧线带参数：红石卡 `bandTop 0.52 / bandBottom 0.98 / peak 0.70`，简报卡 `0.46 / 0.98 / 0.64`。
