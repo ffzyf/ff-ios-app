@@ -127,8 +127,49 @@ enum Formatters {
         return "\(month)月\(day)日"
     }
 
+    // MARK: - 红石（批次 2，PRD §5.1）
+
+    /// 倒计时文本 `HH:mm`（分钟**向上取整**）。
+    ///
+    /// 为什么向上取整：还剩 30 秒时如果向下取整会得到 `00:00`，而 PRD 明令
+    /// 「任何情况下都不显示 00:00」—— 那会被读成"到了但没开始"。向上取整保证
+    /// 只要还有时间，最小也是 `00:01`。
+    /// `seconds <= 0` 返回 `--:--`（调用方不该走到这里，但绝不返回一个像 0 的数字）。
+    static func countdown(seconds: Int) -> String {
+        guard seconds > 0 else { return "--:--" }
+        let minutes = max(1, Int((Double(seconds) / 60).rounded(.up)))
+        return String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    /// `"2026-10"` → `"2026年10月"`
+    static func monthTitle(_ monthKey: String) -> String {
+        guard let parts = RedstoneClock.yearMonth(from: monthKey) else { return monthKey }
+        return "\(parts.year)年\(parts.month)月"
+    }
+
+    /// `"2026-10-30"` → `"10月30日"`
+    ///
+    /// 走 `versionDateText` 的重载语义：date-only 字符串**不转 Date 再格式化**，
+    /// 避免时区把 30 号漂成 29 号（§7.1）。
+    static func dayTitle(_ dayKey: String) -> String {
+        return versionDateText(dayKey)
+    }
+
+    /// `"2026-10-30"` → `"10月30日 周五"`；解析失败就原样返回，绝不显示「未知」
+    static func dayTitleWithWeekday(_ dayKey: String) -> String {
+        guard let date = RedstoneClock.startOfDay(dayKey: dayKey) else { return dayKey }
+        return dayTitle(dayKey) + " " + weekdayCN(date)
+    }
+
+    /// `"2026-10-30"` → `"周五"`；解析失败返回空串（调用方整段不渲染）
+    static func weekdayLabel(dayKey: String) -> String {
+        guard let date = RedstoneClock.startOfDay(dayKey: dayKey) else { return "" }
+        return weekdayCN(date)
+    }
+
     /// 问候语（PRD §3.1 第 1 条：概览首页问候行）
     static func greeting(_ date: Date = Date()) -> String {
+
         let calendar = makeCalendar()
         let hour = calendar.component(.hour, from: date)
         switch hour {

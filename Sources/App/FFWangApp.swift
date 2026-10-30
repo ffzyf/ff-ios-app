@@ -23,12 +23,19 @@ struct FFWangApp: App {
     @StateObject private var model: AppModel
     /// 外观三态的唯一状态源。用 `@StateObject` 包住单例，是为了让 App 的 body 订阅它的变化。
     @StateObject private var appearance: AppearanceStore
+    /// 红石日程与规律（批次 2）。放在 App 层而不是页面里：概览卡与红石日历都要用，
+    /// 页面级持有会导致"切一次 Tab 重建一次 Store、缓存白存"。
+    @StateObject private var rock: RockStore
+    /// 攻略流（批次 2）。单独一个 Store：它的生命周期与日历不同（二级入口、24h 缓存）
+    @StateObject private var rockGuide: RockGuideStore
 
     init() {
         // 协议缓存必须在第一个请求之前配好：靠服务端 ETag 白拿 304，App 侧不手写 If-None-Match。
         ImageCache.configure()
         _model = StateObject(wrappedValue: AppModel())
         _appearance = StateObject(wrappedValue: AppearanceStore.shared)
+        _rock = StateObject(wrappedValue: RockStore())
+        _rockGuide = StateObject(wrappedValue: RockGuideStore())
     }
 
     var body: some Scene {
@@ -38,6 +45,8 @@ struct FFWangApp: App {
                 RootView()
             }
             .environmentObject(model)
+            .environmentObject(rock)
+            .environmentObject(rockGuide)
             .preferredColorScheme(appearance.scheme)
         }
     }

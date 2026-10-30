@@ -31,7 +31,7 @@ enum Endpoint {
     static let redstonePath = "/api/app/redstone"
     /// 攻略图文流
     static let guidePath = "/api/app/guide"
-    /// 攻略图片代理（返回 `data:` 前缀的 base64）
+    /// 攻略图片代理（**返回图片二进制**，`Content-Type` 由上游透传；批次 2 起不再返回 data URL）
     static let guideImagePath = "/api/app/guide/image"
     /// 推送监控状态（只读）
     static let monitorPath = "/api/app/monitor"

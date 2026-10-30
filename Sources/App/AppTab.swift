@@ -12,7 +12,7 @@ import SwiftUI
 enum AppTab: Int, CaseIterable, Identifiable {
     /// 概览：今日红石倒计时、今日状态、简报摘要、最近文章、快捷工具
     case overview = 0
-    /// 红石：月历 / 当日场次 / 规律说明 / 攻略（批次 2 落地，本批占位）
+    /// 红石：月历 / 当日场次 / 规律说明 / 攻略（批次 2 已落地 `RockCalendarView`）
     case rock = 1
     /// 简报：今日简报全文 + 光遇版本
     case brief = 2

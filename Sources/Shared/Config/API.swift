@@ -47,4 +47,31 @@ enum API {
     static func brief() -> URL? {
         return Endpoint.url(base: briefHost, path: briefPath)
     }
+
+    // MARK: - 红石站（批次 2）
+
+    /// 红石日程。
+    ///
+    /// - Parameters:
+    ///   - month: `"2026-10"`。**与 from/to 互斥**（服务端会 400），所以这里不提供三者同传的入口。
+    ///     不给 month 时服务端返回「所有已生成月份」的并集 —— App 侧刻意不用这种大范围请求：
+    ///     一次拉全部月份在 `coveredMonths` 有 6 个月时是 180 条，月历只用得到一个月。
+    ///   - includeRules: `?action=rules`。线上实测就是这个名字（`rules=1` 服务端也兼容），
+    ///     这里用实测的那一个，少一层"契约 vs 线上"的心智负担。
+    static func redstone(month: String? = nil, includeRules: Bool = false) -> URL? {
+        var query: [URLQueryItem] = []
+        if let month = month, !month.isEmpty {
+            query.append(URLQueryItem(name: "month", value: month))
+        }
+        if includeRules {
+            query.append(URLQueryItem(name: "action", value: "rules"))
+        }
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.redstonePath, query: query)
+    }
+
+    /// 攻略图文流。`refresh = true` 会强制服务端重建缓存（有 300s 限频）
+    static func guide(refresh: Bool = false) -> URL? {
+        let query = refresh ? [URLQueryItem(name: "refresh", value: "1")] : []
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.guidePath, query: query)
+    }
 }

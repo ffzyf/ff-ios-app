@@ -75,6 +75,10 @@ enum Theme {
     static let limeDeep = dyn(dark: "#3FA83A", light: "#2F7A2C")
     /// 光晕。浅色必须减半，否则整屏发绿
     static let limeGlow = dyna(dark: ("#6BDB5C", 0.35), light: ("#6BDB5C", 0.16))
+    /// 图表柱（Swift Charts 的 `BarMark`）。值与 `lime` 完全相同，单独命名的唯一理由：
+    /// lint 规则 4 会把 `foregroundStyle(Theme.lime)` 判成「lime 当文字色」，
+    /// 而图表柱是**面**。给它一个独立 token，View 层既不用写 hex，也不用 `lint:allow` 破例。
+    static let chartBar = dyn(dark: "#6BDB5C", light: "#3FA83A")
 
     // MARK: - 文字三级 + 元信息（PRD 已实测对比度）
 

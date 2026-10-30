@@ -71,6 +71,15 @@ enum Haptics {
         #endif
     }
 
+    /// 选择（翻月、切换分段控件）。PRD §4 #7 单独一层：翻月是"在同一页里移动"，比 Tab 切换更轻
+    static func selection() {
+        #if canImport(UIKit)
+        let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
+        generator.selectionChanged()
+        #endif
+    }
+
     /// 失败（刷新失败、请求报错）。
     static func error() {
         #if canImport(UIKit)

@@ -11,6 +11,9 @@ import Foundation
 /// 数据只从 `AppModel` 读（页面绝不自己发请求），Tab 状态由 RootView 通过 `selectedTab` 注入。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    /// 红石数据（批次 2 新增）。概览只读它来画置顶倒计时卡，不发任何红石请求
+    /// （请求由 `RootView` 的 task 统一发起，页面绝不自己开请求，§7.3）
+    @EnvironmentObject private var rock: RockStore
     @Binding private var selectedTab: AppTab
     private let onOpenArticle: (ArticleSummary) -> Void
 
@@ -68,21 +71,28 @@ struct OverviewView: View {
     // MARK: - 状态分发
 
     /// 有内容就渲染内容；第一次就失败才整页错误态（PRD §7：错误态不清空已有内容）
+    ///
+    /// 批次 2：红石倒计时卡**恒定置顶**（P01），哪怕 feed 挂了也先让用户看到"下一场还有多久" ——
+    /// 这张卡的数据源与 feed 完全独立（红石站 vs 博客站），没有理由被 feed 的失败连坐。
     @ViewBuilder
     private var bodyContent: some View {
-        if model.hasAnyContent {
-            loadedBlocks
-        } else if let error = firstError {
-            ErrorStateView(
-                icon: error.icon,
-                title: error.title,
-                message: error.hint,
-                onRetry: {
-                    Task { await model.refresh() }
-                }
-            )
-        } else {
-            SkeletonHome()
+        VStack(alignment: .leading, spacing: Spacing.sectionGap) {
+            RedstoneCountdownCard(onOpenRock: openRock)
+
+            if model.hasAnyContent {
+                loadedBlocks
+            } else if let error = firstError {
+                ErrorStateView(
+                    icon: error.icon,
+                    title: error.title,
+                    message: error.hint,
+                    onRetry: {
+                        Task { await model.refresh() }
+                    }
+                )
+            } else {
+                SkeletonHome()
+            }
         }
     }
 
@@ -165,6 +175,16 @@ struct OverviewView: View {
     }
 
     // MARK: - 动作
+
+    /// 倒计时卡点击 → 切到红石 Tab。
+    ///
+    /// 走现有的 `selectedTab` binding，**不新建导航栈**：根视图是 5 个常驻页面 + 自绘 Tab 栏，
+    /// 再塞一个 `NavigationStack` 会让 Tab 栏与页面层级打架（也会把 5 个页面重新包一层容器）。
+    private func openRock() {
+        withAnimation(Motion.tab) {
+            selectedTab = .rock
+        }
+    }
 
     private func syncLatest() {
         // 只在第 1 页时认账；翻页造成的第 N 页结果一律忽略
