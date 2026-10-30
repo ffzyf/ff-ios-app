@@ -11,6 +11,15 @@ struct ArticleResponse: Decodable {
     let serverTime: Date?
     let article: ArticleDetail?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case apiVersion
+        case serverTime
+        case article
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = (try? container.decode(Bool.self, forKey: .ok)) ?? false
@@ -39,6 +48,25 @@ struct ArticleDetail: Decodable, Identifiable {
     let blockCount: Int
     let blocksTruncated: Bool
     let omittedBlocks: Int
+
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 只列存储属性；计算属性 `wordCountText` 不属于解码契约，不得放进来。
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case summary
+        case announce
+        case pinned
+        case createdAt
+        case updatedAt
+        case wordCount
+        case readingMinutes
+        case coverSeed
+        case blocks
+        case blockCount
+        case blocksTruncated
+        case omittedBlocks
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

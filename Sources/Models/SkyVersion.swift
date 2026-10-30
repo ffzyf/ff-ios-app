@@ -19,6 +19,15 @@ struct SkyStatus: Decodable {
     let checkedAt: Date?
     let apps: [SkyAppVersion]
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case hasUpdate
+        case checkedAt
+        case apps
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawStatus = (try? container.decode(String.self, forKey: .status)) ?? ""
@@ -52,6 +61,26 @@ struct SkyAppVersion: Decodable, Identifiable {
     let lastError: String?
     let source: String?
     let url: String?
+
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 只列存储属性；计算属性 `displayVersion` 不属于解码契约，不得放进来。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case region
+        case version
+        case current
+        case latest
+        case previous
+        case releaseDate
+        case checkedAt
+        case status
+        case hasUpdate
+        case lastError
+        case source
+        case url
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

@@ -17,6 +17,18 @@ struct BriefResponse: Decodable {
     let sky: SkyStatus?
     let brief: BriefSnapshot?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case apiVersion
+        case serverTime
+        case generatedAt
+        case date
+        case sky
+        case brief
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = (try? container.decode(Bool.self, forKey: .ok)) ?? false
@@ -56,6 +68,33 @@ struct BriefSnapshot: Decodable {
     let weatherError: String?
     let horoscopeError: String?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case date
+        case available
+        case lunar
+        case chong
+        case pengzu
+        case yi
+        case ji
+        case uv
+        case uvText
+        case sunrise
+        case sunset
+        case windText
+        case rain
+        case birthday
+        case body
+        case horoscope
+        case sections
+        case savedAt
+        case pushedToday
+        case pushedAt
+        case weatherError
+        case horoscopeError
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         date = (try? container.decode(String.self, forKey: .date)) ?? ""
@@ -92,6 +131,14 @@ struct BriefSection: Decodable, Identifiable {
 
     var id: String { key }
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 只列存储属性；计算属性 `id`（由 `key` 派生）不属于解码契约，不得放进来。
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case label
+        case text
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         key = (try? container.decode(String.self, forKey: .key)) ?? ""
@@ -109,6 +156,18 @@ struct Horoscope: Decodable {
     let luckyNumber: Int?
     let noble: String?
     let overview: String?
+
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case sign
+        case signEn
+        case score
+        case luckyColor
+        case luckyNumber
+        case noble
+        case overview
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

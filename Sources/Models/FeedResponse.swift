@@ -20,6 +20,20 @@ struct FeedResponse: Decodable {
     /// 同上
     let brief: BriefSnapshot?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case apiVersion
+        case serverTime
+        case generatedAt
+        case articles
+        case notice
+        case stats
+        case sky
+        case brief
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = (try? container.decode(Bool.self, forKey: .ok)) ?? false
@@ -67,6 +81,17 @@ struct FeedArticles: Decodable {
     let total: Int
     let hasMore: Bool
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case pinned
+        case items
+        case page
+        case size
+        case total
+        case hasMore
+    }
+
     static let empty = FeedArticles(
         pinned: [],
         items: [],
@@ -110,6 +135,21 @@ struct ArticleSummary: Decodable, Identifiable {
     let wordCount: Int?
     let readingMinutes: Int?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 只列存储属性；计算属性 `displayDate` 不属于解码契约，不得放进来。
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case summary
+        case announce
+        case pinned
+        case createdAt
+        case updatedAt
+        case coverSeed
+        case wordCount
+        case readingMinutes
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawID = (try? container.decode(String.self, forKey: .id)) ?? ""
@@ -143,6 +183,15 @@ struct FeedNotice: Decodable, Identifiable {
     let summary: String
     let updatedAt: Date?
 
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case summary
+        case updatedAt
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? container.decode(String.self, forKey: .id)) ?? ""
@@ -158,6 +207,15 @@ struct FeedStats: Decodable {
     let todayVisitors: Int?
     let checkins: Int?
     let daysOnline: Int?
+
+    /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
+    /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
+    private enum CodingKeys: String, CodingKey {
+        case totalViews
+        case todayVisitors
+        case checkins
+        case daysOnline
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
