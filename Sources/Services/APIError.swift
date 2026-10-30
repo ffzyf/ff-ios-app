@@ -116,4 +116,26 @@ struct APIErrorEnvelope: Decodable {
         guard let message = payload.message else { return "" }
         return message.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// 老式错误体 `{ error: "字符串" }`（批次 3 增补）。
+    ///
+    /// 为什么需要第二个解析入口：`/api/app/*` 用了对象信封 `{ok:false,error:{code,message}}`，
+    /// 但问卷站的既有端点（`/api/auth/login`、`/api/surveys/:id/submit`、以及中间件 401）
+    /// 一律是 `{error:"一句中文"}`。两种形状都解析，才能保证"服务端说了人话就照原样转给用户"。
+    static func plainMessage(from data: Data) -> String {
+        guard !data.isEmpty else { return "" }
+        guard let raw = try? JSONSerialization.jsonObject(with: data) else { return "" }
+        guard let object = raw as? [String: Any] else { return "" }
+        guard let text = object["error"] as? String else { return "" }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 两种错误体都试一遍，优先对象信封（信息更全）。
+    ///
+    /// 解析不出来时返回空串 —— 绝不想让 UI 出现 "null" / "undefined"。
+    static func anyMessage(from data: Data) -> String {
+        let envelope = message(from: data)
+        if !envelope.isEmpty { return envelope }
+        return plainMessage(from: data)
+    }
 }

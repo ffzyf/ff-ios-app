@@ -58,6 +58,21 @@ actor SnapshotCache {
         defaults.removeObject(forKey: keyPrefix + key)
     }
 
+    /// 按业务前缀批量删除快照（批次 3 增补）。
+    ///
+    /// 存在理由只有一个：**退出登录必须把上一个账号看过的问卷数据全部抹掉**（设计文档 R20）。
+    /// 问卷的快照键是 `survey.list.v1` / `survey.detail.<id>.v1` / `survey.result.<id>.v1`，
+    /// id 是随机的、数量不确定，所以只能按前缀扫，不能逐个 `remove(for:)`。
+    ///
+    /// 注意比较的是 `keyPrefix + prefix`（真实存储键是 `snapshot.survey…`），
+    /// 直接拿 `survey.` 去比会一条都删不掉，而且看起来"已经清了"，是最坏的一种 bug。
+    func removeAll(withPrefix prefix: String) {
+        let full = keyPrefix + prefix
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(full) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     /// 清空全部快照（供"清空缓存"按钮或调试用）。只清本前缀，别的 UserDefaults 键不动。
     func removeAll() {
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(keyPrefix) {

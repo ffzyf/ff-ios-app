@@ -23,6 +23,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: Spacing.sectionGap) {
                     header
                     group("外观") { AppearanceSection() }
+                    // 批次 3：问卷管理（登录 / 退出）。单例观察，不依赖环境对象注入
+                    group("问卷管理") { AccountSection() }
                     group("版本") { versionRow }
                     group("数据来源") { sourceRows }
                     group("缓存") { cacheRow }

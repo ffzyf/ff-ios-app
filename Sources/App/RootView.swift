@@ -12,7 +12,8 @@ import SwiftUI
 ///
 /// 批次 1：3 Tab → 5 Tab（PRD §2.2），红石与更多先占位。
 /// 批次 2：红石占位已换成 `RockCalendarView`（Tab 顺序 / 图标 / `AppTab` 一行没动）；
-/// 「更多」仍是 `PagePlaceholder`，等批次 3 的 `MoreView`。
+/// 批次 3：「更多」占位换成 `MoreView`（问卷工作台 / 推送监控 / 设置 / 关于）。
+/// 五个页面至此全部落地，`PagePlaceholder` 只剩批次 4 的推送监控在用。
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     /// 红石数据（批次 2）。根视图只负责"启动时先拉一次" —— 概览卡与红石日历都要用，
@@ -87,13 +88,9 @@ struct RootView: View {
             ArticlesView(isActive: tab == .articles, onOpenArticle: openArticle)
                 .modifier(TabVisibility(isActive: tab == .articles))
 
-            // 批次 3 替换成 `MoreView()`（问卷 / 监控 / 设置 / 关于）
-            PagePlaceholder(
-                title: AppTab.more.title,
-                icon: AppTab.more.icon,
-                summary: "问卷工作台、推送监控、设置和关于会收在这一页。"
-            )
-            .modifier(TabVisibility(isActive: tab == .more))
+            // 批次 3：更多页（问卷工作台 / 推送监控 / 设置 / 关于）
+            MoreView()
+                .modifier(TabVisibility(isActive: tab == .more))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }

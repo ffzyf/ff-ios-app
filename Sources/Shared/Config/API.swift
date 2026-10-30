@@ -74,4 +74,66 @@ enum API {
         let query = refresh ? [URLQueryItem(name: "refresh", value: "1")] : []
         return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.guidePath, query: query)
     }
+
+    // MARK: - 问卷站（批次 3）
+    //
+    // 五个接口分两类：
+    //   · 需要 Cookie：列表 / 详情 / 结果 / 发布截止（Cookie 由 `SurveyAuth` 提供，本层不碰凭证）
+    //   · 公开：public / submit（不需要 Cookie，填答页给任何人用）
+    // 域名一律取 `Endpoint.surveyBase`，本文件不出现任何协议前缀字面量。
+
+    /// 问卷站根（用于设置页 / 关于页展示，别处请直接调具体端点）
+    static let surveyHost = Endpoint.surveyBase
+
+    /// 问卷列表。`status` 传 nil 拿全量（筛选会让顶部计数与列表条数不一致，App 默认不筛）
+    static func surveyList(status: String? = nil) -> URL? {
+        let trimmed = (status ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = trimmed.isEmpty ? [] : [URLQueryItem(name: "status", value: trimmed)]
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.surveysPath, query: query)
+    }
+
+    /// 单问卷详情（id 拼在路径里，`Endpoint` 已做百分号转义）
+    static func surveyDetail(id: String) -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.surveyDetailPath(id: id))
+    }
+
+    /// 问卷结果。`responseLimit` 只影响 `responses[]`（默认 200、上限 500），不影响统计
+    static func surveyResult(id: String, responseLimit: Int = 200) -> URL? {
+        let safeLimit = Swift.min(Swift.max(responseLimit, 1), 500)
+        return Endpoint.url(
+            base: Endpoint.surveyBase,
+            path: Endpoint.surveyResultPath(id: id),
+            query: [URLQueryItem(name: "responseLimit", value: String(safeLimit))]
+        )
+    }
+
+    /// 公开填答题面（无需 Cookie）
+    static func surveyPublicForm(id: String) -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.surveyPublicPath(id: id))
+    }
+
+    /// 公开提交答卷（无需 Cookie）
+    static func surveySubmit(id: String) -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.surveySubmitPath(id: id))
+    }
+
+    /// 发布 / 截止（需要 Cookie）
+    static func surveyActions(id: String) -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.surveyActionsPath(id: id))
+    }
+
+    /// 管理登录（body 只放密码，凭证从 `Set-Cookie` 响应头取）
+    static func authLogin() -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.authLoginPath)
+    }
+
+    /// 会话校验
+    static func authStatus() -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.authStatusPath)
+    }
+
+    /// 登出
+    static func authLogout() -> URL? {
+        return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.authLogoutPath)
+    }
 }

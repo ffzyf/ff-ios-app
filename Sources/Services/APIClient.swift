@@ -131,4 +131,73 @@ final class APIClient {
         }
         throw APIError.server(code: http.statusCode, message: APIErrorEnvelope.message(from: data))
     }
+
+    // MARK: - 批次 3 增补：问卷站需要「原始状态码 + 响应头」
+
+    /// 发一次请求并**原样**返回结果（不判状态码、不解析 body）。
+    ///
+    /// 为什么不能复用 `get`：
+    /// 1. 问卷站的管理凭证在 `Set-Cookie` 响应头里 —— JSON 里只有一个 `{"ok":true}`，
+    ///    看不到响应头就拿不到 token；
+    /// 2. 它的 401 响应体是 `{error:"字符串"}`（不是对象信封），且"密码错(401)"与
+    ///    "后台未配置密码(503)"必须分开给文案 —— 折成 `.server` 就分不出来了。
+    ///
+    /// 传输入错（离线 / 超时 / 取消）仍然在这里归一成 `APIError`，
+    /// 保证调用方只需要处理一种错误类型。
+    func send(_ request: URLRequest) async throws -> APIRawResponse {
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw APIError.network }
+            return APIRawResponse(data: data, response: http)
+        } catch let error as APIError {
+            throw error
+        } catch let error as URLError {
+            if error.code == .cancelled {
+                throw APIError.cancelled
+            }
+            throw APIError.network
+        } catch is CancellationError {
+            throw APIError.cancelled
+        } catch {
+            throw APIError.network
+        }
+    }
+
+    /// `send` + 解码：2xx 才解码，其余抛 `.server`（message 取服务端原话）
+    func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
+        let raw = try await send(request)
+        guard raw.isSuccess else {
+            throw APIError.server(code: raw.statusCode, message: APIErrorEnvelope.anyMessage(from: raw.data))
+        }
+        do {
+            return try APIJSON.decoder.decode(T.self, from: raw.data)
+        } catch {
+            throw APIError.decoding
+        }
+    }
+}
+
+// MARK: - 原始响应
+
+/// 一次传输的结果：字节 + HTTP 响应（状态码 / 响应头）。
+///
+/// 只在"需要看响应头"或"需要分辨 401 / 503"的地方使用（问卷登录、提交、发布截止）；
+/// 普通只读 GET 一律走 `get(_:as:)`，那条路径带协议缓存与统一错误归一。
+struct APIRawResponse {
+    let data: Data
+    let response: HTTPURLResponse
+
+    var statusCode: Int { response.statusCode }
+
+    var isSuccess: Bool { (200..<300).contains(response.statusCode) }
+
+    /// 响应头读取（大小写不敏感，`HTTPURLResponse` 自己处理）
+    func header(_ name: String) -> String? {
+        return response.value(forHTTPHeaderField: name)
+    }
+
+    /// 响应体文本（调试与"服务端说了什么"兜底用）
+    var text: String {
+        return String(data: data, encoding: .utf8) ?? ""
+    }
 }

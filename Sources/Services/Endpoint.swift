@@ -64,9 +64,35 @@ enum Endpoint {
         return surveysPath + "/" + escapedPathComponent(id)
     }
 
-    /// 问卷结果的路径
+    /// 问卷结果
     static func surveyResultPath(id: String) -> String {
         return surveysPath + "/" + escapedPathComponent(id) + "/result"
+    }
+
+    // MARK: - 问卷站的其余接口（批次 3：登录 / 公开填答 / 发布截止）
+
+    /// 管理登录：`POST {password}` → 200 + `Set-Cookie: qw_auth=…`
+    ///
+    /// **凭证只能从响应头拿**：JSON 里只有 `{"ok":true}`，没有 token。
+    static let authLoginPath = "/api/auth/login"
+    /// 会话校验（30 天有效期内也可能失效，进工作台前查一次）
+    static let authStatusPath = "/api/auth/status"
+    /// 登出（失败也无所谓，本地清 Keychain 即可）
+    static let authLogoutPath = "/api/auth/logout"
+
+    /// 公开填答题面（**无需 Cookie**：survey 站中间件对 `/(public|submit)$` 白名单放行）
+    static func surveyPublicPath(id: String) -> String {
+        return "/api/surveys/" + escapedPathComponent(id) + "/public"
+    }
+
+    /// 公开提交答卷（无需 Cookie）
+    static func surveySubmitPath(id: String) -> String {
+        return "/api/surveys/" + escapedPathComponent(id) + "/submit"
+    }
+
+    /// 发布 / 截止（需要 Cookie，body 是 `{"action":"publish"|"close"}`）
+    static func surveyActionsPath(id: String) -> String {
+        return "/api/surveys/" + escapedPathComponent(id) + "/actions"
     }
 
     private static func escapedPathComponent(_ raw: String) -> String {

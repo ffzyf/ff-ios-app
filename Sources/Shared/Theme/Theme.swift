@@ -118,6 +118,13 @@ enum Theme {
     static let skeletonShimmerLow = dyna(dark: ("#FFFFFF", 0.08), light: ("#0F1A26", 0.06))
     /// 骨架微光带的高光段
     static let skeletonShimmerMid = dyna(dark: ("#FFFFFF", 0.18), light: ("#0F1A26", 0.12))
+    /// 二维码等**机器可读图形**的专用底色（批次 3 增补）。
+    ///
+    /// 唯一一个"两种外观同值"的 token，原因是物理限制而不是偷懒：
+    /// 二维码的 quiet zone 必须是浅色，否则相机在深色底上识别率骤降。
+    /// 它不属于界面配色，所以不参与明暗切换；给它一个 token 名只是为了守住
+    /// 「View 层不出现裸颜色字面量」这条闸门（PRD §3.4 第 1 条）。
+    static let qrCanvas = dyn(dark: "#FFFFFF", light: "#FFFFFF")
 
     // MARK: - 微底 4 档（把 V2 里随手写的 0.02 / 0.04 / 0.06 / 0.08 收敛成有名字的档位）
     //
