@@ -159,7 +159,7 @@ struct RedstoneWidgetView: View {
             .padding(.vertical, 1)
             .background {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(TrackGradient.arcTint(for: key))
+                    .fill(TrackGradient.arcTint(for: key, scheme: colorScheme))
             }
     }
 

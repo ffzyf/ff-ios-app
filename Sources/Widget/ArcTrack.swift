@@ -217,11 +217,11 @@ struct TrackCardBackdrop: View {
                         .frame(height: geo.size.height * geometry.bottomPad)
                 }
                 // 已走：亮实线
-                Path(paths.done)
+                paths.done
                     .stroke(tint, lineWidth: lineWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // 未走：同色压低不透明度（约 35%）
-                Path(paths.todo)
+                paths.todo
                     .stroke(tint.opacity(0.35), lineWidth: lineWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // 发光节点（严格落在弧线上）

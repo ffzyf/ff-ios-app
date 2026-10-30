@@ -71,6 +71,6 @@ enum WidgetTheme {
     static func containerBackground(gradient: [Color],
                                    start: UnitPoint = TrackGradient.startPoint,
                                    end: UnitPoint = TrackGradient.endPoint) -> some View {
-        LinearGradient(colors: gradient, startPoint: start, end: end)
+        LinearGradient(colors: gradient, startPoint: start, endPoint: end)
     }
 }
