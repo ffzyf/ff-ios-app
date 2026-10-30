@@ -117,6 +117,14 @@ final class EarningsAuth: ObservableObject {
     /// 全 App 唯一实例
     static let shared = EarningsAuth()
 
+    /// 收益快照在 `SnapshotCache` 里的键前缀（登出时整段清掉）。
+    ///
+    /// 收益模块 `EarningsStore` 落地后，这里应换成 `EarningsStore.snapshotPrefix`
+    /// （与问卷站的 `SurveyStore.snapshotPrefix` 保持同一套写法）。现在先内联一份，
+    /// 是为了让「登出即清空缓存」这条隐私规则在 Store 还没写的时候就已经生效 ——
+    /// 退出了还能看到上一个账号的收益是数据泄露级别的问题，不能等模块补齐才堵。
+    static let snapshotPrefix = "earnings."
+
     /// 是否持有凭证（≠ 有效：30 天内服务端可能改密码，进收益页前还会 `verify()`）
     @Published private(set) var isLoggedIn: Bool
 
@@ -251,7 +259,7 @@ final class EarningsAuth: ObservableObject {
             _ = try? await client.send(request)
         }
         invalidate()
-        await SnapshotCache.shared.removeAll(withPrefix: EarningsStore.snapshotPrefix)
+        await SnapshotCache.shared.removeAll(withPrefix: EarningsAuth.snapshotPrefix)
     }
 
     /// 只清本机状态（401 / 会话失效时用，不发网络请求 —— 已经 401 了再请求一次没有意义）

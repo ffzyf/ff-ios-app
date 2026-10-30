@@ -136,4 +136,25 @@ enum API {
     static func authLogout() -> URL? {
         return Endpoint.url(base: Endpoint.surveyBase, path: Endpoint.authLogoutPath)
     }
+
+    // MARK: - 收益站鉴权（与问卷站同一套路径，但域名不同）
+
+    /// 收益站登录。**路径与问卷站完全一致**（`/api/auth/login`），只有域名不同
+    /// （`rockBase` vs `surveyBase`）—— 所以这里复用同一组 `auth*Path` 常量，不另起一份，
+    /// 避免将来后端改路径时只改了一半。
+    ///
+    /// 凭证 Cookie 名不同（`ce_auth` vs `qw_auth`），那是 `EarningsKeychain` 的事，与本层无关。
+    static func earningsAuthLogin() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.authLoginPath)
+    }
+
+    /// 会话校验（`GET /api/auth/status`，后端标注为公开接口）
+    static func earningsAuthStatus() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.authStatusPath)
+    }
+
+    /// 登出
+    static func earningsAuthLogout() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.authLogoutPath)
+    }
 }
