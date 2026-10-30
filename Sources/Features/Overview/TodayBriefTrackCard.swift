@@ -87,6 +87,9 @@ struct TodayBriefTrackCard: View {
     /// 塞进天空区会被地平线亮边切开，所以走 SkyCard 的 `note` 位。
     private var ritualText: String? {
         var parts: [String] = []
+        if let lunar = snapshot?.lunar, !lunar.isEmpty {
+            parts.append(lunar)
+        }
         if let yi = snapshot?.yi, !yi.isEmpty {
             parts.append("宜 " + yi.prefix(2).joined(separator: "、"))
         }
@@ -98,25 +101,59 @@ struct TodayBriefTrackCard: View {
 
     /// 服务端 `body` 切成「首句 + 一行续文」。
     ///
+    /// **坑**：`body` 不是纯正文，而是带 emoji 小标题的分段文本 ——
+    /// 形如 `🗓 每日简报` / `🎁 距离生日还有 252 天` / 正文若干段。
+    /// 直接取第一句会拿到"栏目头"当标题（上一版卡片上就出现了这两行）。
+    /// 所以先按行过滤掉栏目头，剩下的才是真正要展示的内容。
+    ///
     /// 只给一行续文是硬约束：天空区到地平线只有这么多高度，多一行就会压线。
-    /// 想读全文点进简报 Tab。
     private var bodyParts: (headline: String, lines: [String]) {
         guard let raw = snapshot?.body?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            // 正文还没生成：不编内容，只说今天是什么日子
-            let fallback = snapshot?.lunar ?? snapshot?.birthday ?? "简报还没生成"
+            let fallback = snapshot?.lunar ?? "简报还没生成"
             return ("今日简报", [fallback])
         }
 
-        // 拆首句：中文句读 + 换行都算
-        let separators = CharacterSet(charactersIn: "。！？\n")
-        guard let range = raw.rangeOfCharacter(from: separators) else {
-            return (raw, [])
+        let rows = raw.components(separatedBy: CharacterSet.newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .filter { !Self.isHeading($0) }
+
+        guard let first = rows.first else {
+            return ("今日简报", [snapshot?.lunar ?? "简报还没生成"])
         }
-        let head = String(raw[raw.startIndex..<range.upperBound])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let tail = String(raw[range.upperBound...])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (head, tail.isEmpty ? [] : [tail])
+
+        // 首行本身可能还带着两句，按句读切开，第二句降级为续文
+        let separators = CharacterSet(charactersIn: "。！？")
+        var headline = first
+        var tail: String?
+        if let range = first.rangeOfCharacter(from: separators) {
+            headline = String(first[first.startIndex..<range.upperBound])
+            let rest = String(first[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if !rest.isEmpty { tail = rest }
+        }
+
+        var lines: [String] = []
+        if let tail { lines.append(tail) }
+        if lines.isEmpty {
+            for row in rows.dropFirst() where lines.count < 1 {
+                lines.append(row)
+            }
+            if lines.isEmpty, let next = rows.dropFirst().first {
+                lines.append(next)
+            }
+        }
+        return (headline, Array(lines.prefix(1)))
+    }
+
+    /// 判断某一行是不是"栏目头"：emoji 开头，或短到不可能是一句话
+    private static func isHeading(_ line: String) -> Bool {
+        if let scalar = line.unicodeScalars.first, scalar.properties.isEmojiPresentation {
+            return true
+        }
+        // 短、且没有任何句读 → 当标题处理（"每日简报" 会命中，"早安。" 不会）
+        let hasPunctuation = line.contains("，") || line.contains("。")
+            || line.contains("！") || line.contains("？") || line.contains("、")
+        return line.count <= 6 && !hasPunctuation
     }
 
     // MARK: - 文案
@@ -124,9 +161,6 @@ struct TodayBriefTrackCard: View {
     private var dateLine: String {
         let title = Formatters.dayTitle(dayKey)
         let weekday = Formatters.weekdayLabel(dayKey: dayKey)
-        if let lunar = snapshot?.lunar, !lunar.isEmpty {
-            return title + " " + weekday + " · " + lunar
-        }
         return title + " " + weekday
     }
 
