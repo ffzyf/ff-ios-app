@@ -21,7 +21,7 @@ final class WebViewController: UIViewController {
 
     // MARK: - Stored properties
 
-    private let tab: AppTab
+    private let tabConfig: AppTab
 
     /// 只在 viewDidLoad 中创建一次，故使用隐式解包可选值。
     private var webView: WKWebView!
@@ -36,7 +36,7 @@ final class WebViewController: UIViewController {
     // MARK: - Init
 
     init(tab: AppTab) {
-        self.tab = tab
+        self.tabConfig = tab
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -59,7 +59,7 @@ final class WebViewController: UIViewController {
         setupProgressView()
         setupProgressObservation()
 
-        title = tab.title
+        title = tabConfig.title
 
         if hasLoadedOnce == false {
             loadStartURL()
@@ -137,7 +137,7 @@ final class WebViewController: UIViewController {
     // MARK: - Loading
 
     private func loadStartURL() {
-        guard let url = URL(string: tab.urlString) else { return }
+        guard let url = URL(string: tabConfig.urlString) else { return }
 
         let request = URLRequest(url: url,
                                  cachePolicy: .useProtocolCachePolicy,
