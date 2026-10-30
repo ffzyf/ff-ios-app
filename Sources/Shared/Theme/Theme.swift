@@ -406,3 +406,65 @@ extension Theme.Palette {
         glassTint: (("#F79BB8", 0.10), ("#D9598A", 0.08))
     )
 }
+
+// MARK: - 天际线配色（V3.2 简报卡）
+
+extension Theme {
+
+    /// 天空卡的五段色。
+    ///
+    /// 这些是**物理天空色**，不随 App 的深浅外观切换 —— 你开了浅色模式，天空也不会变白。
+    /// 所以这里用固定 hex（不走 `dyn`），由卡片自己保证文字对比度：
+    /// 天空底上永远压浅色字，地面底上永远压半透浅字。
+    struct SkyColors {
+        /// 天空顶
+        let top: Color
+        /// 地平线附近的天色
+        let horizon: Color
+        /// 地面（弧线以下）
+        let ground: Color
+        /// 地平线亮边
+        let edge: Color
+        /// 卡上的主文字
+        let ink: Color
+        /// 卡上的次要文字
+        let inkDim: Color
+    }
+
+    /// 按时段取天空色（七档，逐档手调，不用公式插值 —— 插值出来的中间色总是发灰）
+    static func sky(_ phase: SkyPhase) -> SkyColors {
+        let ink = Color(hex: "#F5F8FF")
+        let inkDim = Color(hex: "#F5F8FF").opacity(0.72)
+
+        switch phase {
+        case .night:
+            return SkyColors(top: Color(hex: "#05070E"), horizon: Color(hex: "#101A2C"),
+                             ground: Color(hex: "#02040A"), edge: Color(hex: "#2E4068"),
+                             ink: ink, inkDim: inkDim)
+        case .blueDawn:
+            return SkyColors(top: Color(hex: "#16204A"), horizon: Color(hex: "#6E4E7A"),
+                             ground: Color(hex: "#0A0710"), edge: Color(hex: "#C08BD0"),
+                             ink: ink, inkDim: inkDim)
+        case .sunrise:
+            return SkyColors(top: Color(hex: "#E8894A"), horizon: Color(hex: "#FFD9A0"),
+                             ground: Color(hex: "#2A1608"), edge: Color(hex: "#FFEBC8"),
+                             ink: ink, inkDim: inkDim)
+        case .golden:
+            return SkyColors(top: Color(hex: "#5FB6EA"), horizon: Color(hex: "#FFC46B"),
+                             ground: Color(hex: "#1C1106"), edge: Color(hex: "#FFD89A"),
+                             ink: ink, inkDim: inkDim)
+        case .day:
+            return SkyColors(top: Color(hex: "#3E8FD6"), horizon: Color(hex: "#BFE4FF"),
+                             ground: Color(hex: "#0B1620"), edge: Color(hex: "#EAF7FF"),
+                             ink: ink, inkDim: inkDim)
+        case .sunset:
+            return SkyColors(top: Color(hex: "#DD5530"), horizon: Color(hex: "#FFB067"),
+                             ground: Color(hex: "#180A05"), edge: Color(hex: "#FFD0A0"),
+                             ink: ink, inkDim: inkDim)
+        case .blueDusk:
+            return SkyColors(top: Color(hex: "#C9486F"), horizon: Color(hex: "#7A4E86"),
+                             ground: Color(hex: "#0E0713"), edge: Color(hex: "#E89AC0"),
+                             ink: ink, inkDim: inkDim)
+        }
+    }
+}

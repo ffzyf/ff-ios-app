@@ -28,7 +28,7 @@ struct RedstoneCountdownCard: View {
     }
 
     var body: some View {
-        TrackCard(progress: ArcGeometry.dayProgress(), peak: 0.70) {
+        TrackCard(progress: ArcGeometry.dayProgress(), peak: 0.70, backdrop: .skyGame) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 if rock.hasLoadedAnyMonth {
                     cardContent(now: context.date)

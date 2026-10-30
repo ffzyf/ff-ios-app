@@ -33,6 +33,11 @@ struct TrackCard<Content: View>: View {
     var arcGap: CGFloat = 22
     /// 弧顶横向位置
     var peak: CGFloat = 0.66
+    /// 背景样式：轨迹弧（通用）/ 光遇云海（红石提醒卡用）。
+    ///
+    /// 为什么做成二选一而不是叠在一起：红线是"文字永远不被装饰压住"，
+    /// 弧线和云海都要占底部空间，同时画会互相打架，也让底部留白翻倍。
+    var backdrop: TrackBackdrop = .arc
     private let content: Content
 
     init(progress: CGFloat,
@@ -41,6 +46,7 @@ struct TrackCard<Content: View>: View {
          arcBand: CGFloat = 52,
          arcGap: CGFloat = 22,
          peak: CGFloat = 0.66,
+         backdrop: TrackBackdrop = .arc,
          @ViewBuilder content: () -> Content) {
         self.progress = progress
         self.tint = tint
@@ -48,6 +54,7 @@ struct TrackCard<Content: View>: View {
         self.arcBand = arcBand
         self.arcGap = arcGap
         self.peak = peak
+        self.backdrop = backdrop
         self.content = content()
     }
 
@@ -58,8 +65,9 @@ struct TrackCard<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            // 先让出「光轨带 + 呼吸」，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉
-            .padding(.bottom, arcBand + arcGap)
+            // 先让出「光轨带 + 呼吸」，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉。
+            // 云海背景是铺满整卡的，不需要额外留白（云本来就画在底部，不压字）。
+            .padding(.bottom, backdrop == .arc ? arcBand + arcGap : arcGap * 0.6)
             .background {
                 ZStack {
                     LinearGradient(
@@ -74,15 +82,19 @@ struct TrackCard<Content: View>: View {
                         startRadius: 0,
                         endRadius: 220
                     )
-                    TrackArcBackdrop(
-                        progress: progress,
-                        tint: tint,
-                        lineWidth: 2,
-                        nodeRadius: 4.5,
-                        bandHeight: arcBand,
-                        peak: peak,
-                        scrimOpacity: 0
-                    )
+                    if backdrop == .arc {
+                        TrackArcBackdrop(
+                            progress: progress,
+                            tint: tint,
+                            lineWidth: 2,
+                            nodeRadius: 4.5,
+                            bandHeight: arcBand,
+                            peak: peak,
+                            scrimOpacity: 0
+                        )
+                    } else {
+                        SkyGameBackdrop()
+                    }
                 }
             }
             .clipShape(shape)
@@ -98,4 +110,12 @@ struct TrackCard<Content: View>: View {
             }
             .shadow(color: Theme.glassShadowSoft, radius: 16, y: 8)
     }
+}
+
+/// 轨迹卡的两种背景
+enum TrackBackdrop {
+    /// 一条光轨 + 发光节点（简报到日 / 通用卡片）
+    case arc
+    /// 光遇风格的云海 + 星点（红石提醒卡）
+    case skyGame
 }
