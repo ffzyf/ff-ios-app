@@ -56,3 +56,11 @@ open SkyApp.xcodeproj
 
 `glassEffect` / `GlassEffectContainer` / `Glass` / `.glassProminent` 这四个符号**只允许**出现在
 `GlassCompat.swift` / `GlassGroup.swift` / `GlassButtonStyles.swift` 三个文件里。
+
+## 五、V3.1 轨迹卡与 Tab 栏（本轮改动）
+
+- `Sources/Shared/UI/TrackArc.swift` 是 App 与桌面小组件**共用**的弧线几何：
+  弧线只画在卡片下沿的窄带里（`bandTop…bandBottom`），文字区永远在弧线之上。
+- `Sources/DesignSystem/TrackCard.swift` 是卡片自己的深靛渐变底盘
+  （`Theme.trackTop/trackBottom/trackArc/trackTextDim/trackDivider`），不再靠采样背景立住。
+- Tab 栏：56pt 窄胶囊 → 74pt 整幅玻璃，选中态为 46pt 青柠渐变圆 + 徽标位。
