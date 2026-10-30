@@ -19,12 +19,12 @@ enum Spacing {
     /// 列表项最小点击高度
     static let listItemMinHeight: CGFloat = 48
 
-    /// 浮动 Tab 栏高度
-    static let tabBarHeight: CGFloat = 56
-    /// 浮动 Tab 栏左右内缩
-    static let tabBarInset: CGFloat = 24
-    /// 浮动 Tab 栏距底
-    static let tabBarBottomGap: CGFloat = 16
+    /// 浮动 Tab 栏高度（V3.1：56 → 74，塞得下 46pt 选中圆 + 标签）
+    static let tabBarHeight: CGFloat = 74
+    /// 浮动 Tab 栏左右内缩（V3.1：24 → 8，改成整幅宽，落点更大也更贴近系统栏观感）
+    static let tabBarInset: CGFloat = 8
+    /// 浮动 Tab 栏距底（V3.1：16 → 10，栏变高后整体不上顶）
+    static let tabBarBottomGap: CGFloat = 10
     /// 页面底部留白（PRD §3.1 第 9 条：至少 120pt，防浮层遮挡）
     static let pageBottomInset: CGFloat = 120
 

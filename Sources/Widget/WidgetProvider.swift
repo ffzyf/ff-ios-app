@@ -86,6 +86,34 @@ struct BriefCachePayload: Codable {
     let pushedToday: Bool
     let pushedAt: Date?
     let savedAt: Date
+    /// 生日文案（`07-17` / `1995-07-17` / `7月17日` 三种都见过）。
+    /// 可选：旧缓存里没有这个字段，解码时给 nil（渲染层退回农历 / 首句）。
+    let birthday: String?
+
+    init(date: String, paragraphs: [String], pushedToday: Bool, pushedAt: Date?, savedAt: Date, birthday: String?) {
+        self.date = date
+        self.paragraphs = paragraphs
+        self.pushedToday = pushedToday
+        self.pushedAt = pushedAt
+        self.savedAt = savedAt
+        self.birthday = birthday
+    }
+
+    /// 手写 `init(from:)`：`savedAt` 缺省时回退到当前时间，
+    /// `birthday` 缺省（老缓存）回退 nil，任何字段坏掉都不让整个 widget 崩。
+    private enum CodingKeys: String, CodingKey {
+        case date, paragraphs, pushedToday, pushedAt, savedAt, birthday
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        date = (try? container.decode(String.self, forKey: .date)) ?? ""
+        paragraphs = (try? container.decode([String].self, forKey: .paragraphs)) ?? []
+        pushedToday = (try? container.decode(Bool.self, forKey: .pushedToday)) ?? false
+        pushedAt = try? container.decode(Date.self, forKey: .pushedAt)
+        savedAt = (try? container.decode(Date.self, forKey: .savedAt)) ?? Date()
+        birthday = try? container.decode(String.self, forKey: .birthday)
+    }
 }
 
 // MARK: - 请求
@@ -166,7 +194,8 @@ enum WidgetFetch {
             // `pushedToday` 是服务端明确给出的，缺省按「未推送」处理（PRD 的两种文案都基于它）
             pushedToday: brief?.pushedToday ?? false,
             pushedAt: brief?.pushedAt,
-            savedAt: now
+            savedAt: now,
+            birthday: brief?.birthday
         )
         WidgetSnapshot.save(payload, key: WidgetSnapshot.briefKey)
         return payload
@@ -283,6 +312,8 @@ struct BriefEntry: TimelineEntry {
     let paragraphs: [String]
     let pushedToday: Bool
     let pushedAt: Date?
+    /// 生日文案（`07-17` / `1995-07-17` / `7月17日` 三种都见过），`nil` = 服务端没给
+    let birthday: String?
 
     /// 页脚文案：「今日已推送 07:02」/「今日未推送」。没有简报数据时整条页脚不画
     var footerText: String? {
@@ -303,7 +334,8 @@ struct BriefEntry: TimelineEntry {
                 weekdayText: Formatters.weekdayCN(date),
                 paragraphs: [],
                 pushedToday: false,
-                pushedAt: nil
+                pushedAt: nil,
+                birthday: nil
             )
         }
         return BriefEntry(
@@ -313,7 +345,8 @@ struct BriefEntry: TimelineEntry {
             weekdayText: Formatters.weekdayLabel(dayKey: payload.date),
             paragraphs: payload.paragraphs,
             pushedToday: payload.pushedToday,
-            pushedAt: payload.pushedAt
+            pushedAt: payload.pushedAt,
+            birthday: payload.birthday
         )
     }
 }

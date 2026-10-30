@@ -46,9 +46,9 @@ enum AppTab: Int, CaseIterable, Identifiable {
 
     /// DesignSystem 不认识 AppTab（分层要求），只认识这个纯数据描述。
     ///
-    /// `showsDot` 本批恒为 false：「更多」的红点要等批次 4（有新版本）与批次 3（未读答卷）
-    /// 才有数据来源。现在先留出入口，避免批次 3 再回来改 `FloatingTabBar`。
+    /// `badge` 本批恒为 nil：「更多」的红色徽标要等「有新版本 / 未读答卷」两类数据源
+    /// 都到位后才有意义（现在先留出入口，避免以后再回来改 `FloatingTabBar`）。
     var spec: TabSpec {
-        TabSpec(id: rawValue, title: title, icon: icon, showsDot: false)
+        TabSpec(id: rawValue, title: title, icon: icon)
     }
 }

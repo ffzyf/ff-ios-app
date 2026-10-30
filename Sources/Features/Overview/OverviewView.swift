@@ -73,8 +73,15 @@ struct OverviewView: View {
     /// 这张卡的数据源与 feed 完全独立（红石站 vs 博客站），没有理由被 feed 的失败连坐。
     @ViewBuilder
     private var bodyContent: some View {
-        VStack(alignment: .leading, spacing: Spacing.sectionGap) {
+        VStack(alignment: .leading, spacing: Spacing.cardGap) {
+            // 两张「轨迹卡」恒定占位：红石（自己的请求）+ 简报（自己的请求）。
+            // 刻意与 feed 的加载状态解耦 —— feed 慢/挂了，首页上半屏依然是完整的一屏内容，
+            // 不会出现"整页灰骨架"（V3.1 返工的核心：骨架只留给还在加载的那一块）。
             RedstoneCountdownCard(onOpenRock: openRock)
+
+            TodayBriefTrackCard(snapshot: model.todayBrief) {
+                openBrief()
+            }
 
             if model.hasAnyContent {
                 loadedBlocks
@@ -88,7 +95,12 @@ struct OverviewView: View {
                     }
                 )
             } else {
-                SkeletonHome()
+                // 轻量骨架：只为「版本卡 + 快捷入口」这一块占位（不再整页铺 6 块灰条）。
+                // 上半屏两张轨迹卡已经是真实内容，这里只需要把还没到的部分轻轻托住。
+                VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                    SkeletonBlock(height: 132, cornerRadius: Radius.card)
+                    SkeletonBlock(height: 76, cornerRadius: Radius.card)
+                }
             }
         }
     }
@@ -161,6 +173,13 @@ struct OverviewView: View {
     private func openRock() {
         withAnimation(Motion.tab) {
             selectedTab = .rock
+        }
+    }
+
+    /// 简报轨迹卡点击 → 切到简报 Tab
+    private func openBrief() {
+        withAnimation(Motion.tab) {
+            selectedTab = .brief
         }
     }
 }

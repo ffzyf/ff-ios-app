@@ -1,25 +1,22 @@
 import SwiftUI
 
-/// 概览页置顶的红石倒计时卡（P01，PRD §5.1 的五种情况）。
+/// 概览页置顶的红石轨迹卡（P01）—— 与桌面红石小组件同一套视觉（V3.1 返工）。
 ///
-/// **刷新粒度 1 分钟**：`TimelineView(.periodic(from: .now, by: 60))`。
-/// 不用 `Timer` 逐秒刷 —— 红石的精度是分钟，逐秒刷新只会每秒重排一次数字（耗电且闪），
-/// PRD §4 #1 明确把粒度定为分钟。
+/// 版式（照参考图重排，一句话说清"谁在哪"）：
+/// ```
+/// ┌───────────────────────────────┬──────────────┐
+/// │ 霞谷 · 圆梦村  [2.5×]          │ 今日 3 场     │
+/// │                               │ 11:08 … 2.5× │
+/// │ 23:08                         │ 17:08 … 2.5× │
+/// │ ↘ 还有 39:27                  │ 23:08 … 2.5× │
+/// │ ↗ 霞谷 · 圆梦村               │              │
+/// └───────────────────────────────┴──────────────┘
+/// ```
+/// 左栏 = 焦点场次（大字时刻 + 倒计时 + 去向），右栏 = 今日场次表，中间一条竖线。
+/// 光轨只在卡片下沿扫过，**不穿过任何文字**（上一版就是穿在标题中间才难看）。
 ///
-/// **性能点 B4**：`TimelineView` 只包「倒计时数字 + 文案」子树（`CountdownDigits`），
-/// 玻璃外壳（`GlassCard`）提到 `TimelineView` 之外常驻 —— 每分钟只重建数字子树，不重建玻璃。
-///
-/// 五态映射（一张卡读完全部情况）：
-/// | 情况 | 标题 | 大字 |
-/// |---|---|---|
-/// | 距下一场 > 0 | 下一场 · 今日 19:08 | 倒计时 `02:14` |
-/// | 进行中 | 进行中 · 19:08 场 | `23 分钟` |
-/// | 今日已结束 | 今日已结束 · 明日 07:08 | 倒计时 / `N 天后` |
-/// | 排期未生成 | 排期未生成 | **不显示任何数字** |
-/// | `needsCheck` | 照常 | 地图旁挂「待确认」 |
-///
-/// **任何情况都不显示 `00:00`、也不编造地图**：没有数据时走 `unavailableBlock`，
-/// 有数据但没未来场次时走 `.notGenerated`（无数字 + 一句人话）。
+/// 刷新粒度 1 秒：参考图要的是"实时变动"的观感（`39:27` 是 mm:ss，按分钟刷会僵住）。
+/// 只重建数字子树，卡片底盘（渐变 / 描边 / 阴影）在 `TimelineView` 之外常驻。
 struct RedstoneCountdownCard: View {
     @EnvironmentObject private var rock: RockStore
 
@@ -31,16 +28,14 @@ struct RedstoneCountdownCard: View {
     }
 
     var body: some View {
-        // 玻璃外壳常驻在 TimelineView 之外：每分钟只重建「倒计时数字 + 文案」子树，不重建玻璃（B4）
-        GlassCard(level: .card) {
-            VStack(alignment: .leading, spacing: 10) {
+        TrackCard(progress: ArcGeometry.dayProgress(), bandTop: 0.52, bandBottom: 0.98, peak: 0.70) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
                 if rock.hasLoadedAnyMonth {
-                    CountdownDigits()
+                    cardContent(now: context.date)
                 } else {
                     unavailableBlock
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Spacing.cardPadding)
         }
         .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
@@ -48,106 +43,144 @@ struct RedstoneCountdownCard: View {
             Haptics.light()
             onOpenRock()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("打开红石日历")
     }
 
-    /// 倒计时数字 + 文案子树：唯一需要按分钟刷新的部分，单独包进 `TimelineView`。
-    /// 玻璃外壳、点击手势都不在这里，避免每分钟随数字一起重建。
-    private struct CountdownDigits: View {
-        @EnvironmentObject private var rock: RockStore
+    // MARK: - 有数据
 
-        var body: some View {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                phaseBlock(now: context.date)
+    private func cardContent(now: Date) -> some View {
+        let days = rock.allLoadedDays
+        let phase = RedstoneTimeline.phase(in: days, now: now)
+        let today = RedstoneTimeline.occurrences(in: days).filter { $0.isOn(dayKey: RedstoneClock.dayKey(now)) }
+
+        return HStack(alignment: .top, spacing: 14) {
+            leftColumn(phase: phase, now: now)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if today.isEmpty == false {
+                Rectangle()
+                    .fill(Theme.trackDivider)
+                    .frame(width: 1)
+                    .padding(.vertical, 2)
+                rightColumn(today: today, now: now)
+                    .frame(width: 126, alignment: .leading)
             }
         }
+    }
 
-        // MARK: - 有数据
-
-        private func phaseBlock(now: Date) -> some View {
-            let phase = RedstoneTimeline.phase(in: rock.allLoadedDays, now: now)
-            return VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "moon.stars")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.limeInk)
-                    Text(RockPhaseText.headline(phase, now: now))
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if rock.isDataOld {
-                        Text("待更新")
-                            .font(Typography.captionXS)
-                            .foregroundStyle(Theme.statusWarn)
-                    }
+    /// 左栏：地图 + 倍率 / 大字时刻 / ↘ 倒计时 / ↗ 去向
+    private func leftColumn(phase: RockPhase, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(phase.occurrence?.map ?? "暂无排期")
+                    .font(Typography.titleS)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                if let rate = phase.occurrence?.rate {
+                    RateBadge(rate: rate)
                 }
-
-                // 大字：没有可展示的数字时整块消失（未生成 = 不显示倒计时）
-                if let big = RockPhaseText.big(phase, now: now) {
-                    bigValue(big)
-                } else {
-                    notGeneratedLine
+                if phase.occurrence?.needsCheck == true {
+                    NeedsCheckBadge()
                 }
+                Spacer(minLength: 0)
+            }
 
+            Spacer(minLength: 12)
+
+            bigValue(phase: phase, now: now)
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let detail = countdownLine(phase: phase, now: now) {
+                    arrowLine(icon: "arrow.down.right", text: detail, emphasized: true)
+                }
                 if let occurrence = phase.occurrence {
-                    HStack(spacing: 6) {
-                        Text(occurrence.map)
-                            .font(Typography.titleS)
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                        RateBadge(rate: occurrence.rate)
-                        if occurrence.needsCheck {
-                            NeedsCheckBadge()
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-
-                if let detail = RockPhaseText.detail(phase, now: now) {
-                    Text(detail)
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
+                    arrowLine(icon: "arrow.up.right", text: occurrence.map, emphasized: false)
                 }
             }
         }
+    }
 
-        /// 大号倒计时 / 剩余分钟 —— 唯一的 `.contentTransition(.numericText(countsDown: true))` 用法点
-        private func bigValue(_ big: (value: String, unit: String)) -> some View {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(big.value)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+    /// 大字：焦点场次的时刻（`23:08`）。未生成时不给任何数字。
+    @ViewBuilder
+    private func bigValue(phase: RockPhase, now: Date) -> some View {
+        switch phase {
+        case .notGenerated:
+            Text("排期还没生成")
+                .font(Typography.titleM)
+                .foregroundStyle(Theme.textPrimary)
+        default:
+            if let occurrence = phase.occurrence {
+                Text(occurrence.time)
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.textPrimary)
                     .monospacedDigit()
-                    .contentTransition(.numericText(countsDown: true))
-                if !big.unit.isEmpty {
-                    Text(big.unit)
-                        .font(Typography.callout)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
+                    .contentTransition(.numericText())
             }
-            .animation(Motion.tab, value: big.value)
         }
+    }
 
-        /// 「排期未生成」：没有数字，给一个能往下走的按钮（落到红石 Tab 的规律入口）
-        private var notGeneratedLine: some View {
-            HStack(alignment: .center, spacing: 8) {
-                Text("排期还没生成，先看规律说明。")
-                    .font(Typography.footnote)
-                    .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(2)
-                Spacer(minLength: 4)
-                Text("查看规律")
-                    .font(Typography.footnoteMedium)
-                    .foregroundStyle(Theme.onLime)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background { Capsule().fill(Theme.lime) }
+    /// ↘ 行：进行中给剩余分钟，否则给"还有 mm:ss"（超过一天用"还有 N 天"）
+    private func countdownLine(phase: RockPhase, now: Date) -> String? {
+        switch phase {
+        case .ongoing(_, minutesLeft: let minutesLeft):
+            return "进行中 · 剩 " + String(minutesLeft) + " 分"
+        case .upcoming(_, seconds: let seconds):
+            return "还有 " + Formatters.countdown(seconds: seconds)
+        case .endedToday(_, seconds: let seconds):
+            if seconds < 86_400 {
+                return "明日场次 · 还有 " + Formatters.countdown(seconds: seconds)
             }
+            return "下一次 · " + RockPhaseText.dayLabel(phase.occurrence, now: now)
+        case .notGenerated:
+            return nil
+        }
+    }
+
+    private func arrowLine(icon: String, text: String, emphasized: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(emphasized ? Theme.trackArc : Theme.trackTextDim)
+            Text(text)
+                .font(.system(size: 12, weight: emphasized ? .semibold : .medium, design: .rounded))
+                .foregroundStyle(emphasized ? Theme.textPrimary : Theme.trackTextDim)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 右栏：今日场次表（已过场次压到 30%，与红石日历一致）
+    private func rightColumn(today: [Occurrence], now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("今日 " + String(today.count) + " 场")
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.trackTextDim)
+            ForEach(today.prefix(3)) { occurrence in
+                HStack(spacing: 5) {
+                    Text(occurrence.time)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(occurrence.map)
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.trackTextDim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if let rate = occurrence.rate {
+                        Text(RedstoneRules.rateText(rate) ?? "")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.trackTextDim)
+                    }
+                }
+                .opacity(occurrence.endAt <= now ? 0.32 : 1)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -159,9 +192,10 @@ struct RedstoneCountdownCard: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
+                    .tint(Theme.trackArc)
                 Text("正在看排期…")
                     .font(Typography.footnote)
-                    .foregroundStyle(Theme.textSecondary)
+                    .foregroundStyle(Theme.trackTextDim)
                 Spacer(minLength: 0)
             }
         } else if let error = rock.lastError {
@@ -169,19 +203,14 @@ struct RedstoneCountdownCard: View {
                 Text(error.userMessage)
                     .font(Typography.footnote)
                     .foregroundStyle(Theme.textSecondary)
-                HStack(spacing: 8) {
-                    Button {
-                        Haptics.light()
-                        Task { await rock.loadSchedule(force: true) }
-                    } label: {
-                        Text("重试")
-                    }
-                    .buttonStyle(PrimaryCTAStyle())
-
-                    Text("暂时取不到排期")
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(2)
+                Button {
+                    Haptics.light()
+                    Task { await rock.loadSchedule(force: true) }
+                } label: {
+                    Text("重试")
                 }
+                .buttonStyle(PrimaryCTAStyle())
             }
         } else {
             HStack(spacing: 8) {
@@ -191,12 +220,12 @@ struct RedstoneCountdownCard: View {
                         .foregroundStyle(Theme.textPrimary)
                     Text("去红石页看看这个月的场次。")
                         .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
+                        .foregroundStyle(Theme.trackTextDim)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
+                    .foregroundStyle(Theme.trackTextDim)
             }
         }
     }

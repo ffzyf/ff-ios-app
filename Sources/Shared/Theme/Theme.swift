@@ -128,6 +128,27 @@ enum Theme {
     static let skeletonShimmerLow = dyna(dark: ("#FFFFFF", 0.08), light: ("#0F1A26", 0.06))
     /// 骨架微光带的高光段
     static let skeletonShimmerMid = dyna(dark: ("#FFFFFF", 0.18), light: ("#0F1A26", 0.12))
+    // MARK: - 轨迹卡（V3.1 返工：首页卡与桌面小组件共用同一套配色）
+    //
+    // 这 4 个 token 是"卡片自己的底色"，不能复用 `bgRaise`：页面底色是偏绿的深空，
+    // 而参考设计里的轨迹卡是偏蓝的深靛 —— 压在页面玻璃层上才有"一块独立的夜"的感觉。
+    // 浅色下反过来：卡片要比页面白，靠描边而不是靠阴影立起来。
+
+    /// 轨迹卡渐变起始（左上）
+    static let trackTop = dyn(dark: "#182131", light: "#FFFFFF")
+    /// 轨迹卡渐变结束（右下）
+    static let trackBottom = dyn(dark: "#0C111C", light: "#EDF1F6")
+    /// 轨迹卡的那条光轨 / 发光节点（参考图里的淡蓝紫）
+    static let trackArc = dyn(dark: "#AFC2EE", light: "#5C74A8")
+    /// 轨迹卡上的次要文字（比 textSecondary 更淡一点，压在渐变上才不抢戏）
+    static let trackTextDim = dyna(dark: ("#F2F5FA", 0.62), light: ("#0F1A26", 0.55))
+    /// 轨迹卡右侧列表的竖向分割线
+    static let trackDivider = dyna(dark: ("#FFFFFF", 0.12), light: ("#0F1A26", 0.10))
+    /// Tab 栏右上角的红色徽标（面）。深色下提亮一档，压在半透玻璃上才看得见
+    static let badgeRed = dyn(dark: "#FF6B5A", light: "#E03A22")
+    /// 徽标上的数字（面上的字）。与 `badgeRed` 成对出现，实测 ≥4.5:1
+    static let badgeRedInk = dyn(dark: "#2A0B06", light: "#FFFFFF")
+
     /// 二维码等**机器可读图形**的专用底色（批次 3 增补）。
     ///
     /// 唯一一个"两种外观同值"的 token，原因是物理限制而不是偷懒：

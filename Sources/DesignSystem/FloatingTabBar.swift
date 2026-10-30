@@ -2,34 +2,34 @@ import SwiftUI
 
 /// Tab 栏的数据描述（DesignSystem 不认识 AppTab，只认识这个纯数据）。
 ///
-/// `showsDot` 是「更多」那一个格子上的青柠小圆点（PRD §2.2）：出现条件由业务侧决定
-/// （①有新版本 ②已登录且存在未读答卷），本层只负责画。默认 false，所以 V2 的构造点不用改。
+/// `badge` 是右上角的红色徽标（参考图四）：数字串画胶囊数字，空串只画一个圆点，
+/// `nil` 什么都不画。出现条件由业务侧决定（①有新版本 ②已登录且有未读答卷），本层只负责画。
+/// 默认 nil，所以旧构造点不用改。
 struct TabSpec: Identifiable, Equatable {
     let id: Int
     let title: String
     let icon: String
-    /// 是否显示右上角提示点（仅「更多」允许有，且同一条规则不叠加多个点）
-    var showsDot: Bool = false
+    /// 右上角徽标文案。`nil` = 不画；`""` = 只画圆点；其他 = 数字（>99 走 `99+`）
+    var badge: String? = nil
 }
 
-/// 浮动玻璃胶囊 Tab 栏（层 2）。
+/// 底部液态玻璃 Tab 栏（层 2，V3.1 返工：照参考图四重做）。
 ///
-/// 为什么自绘（设计文档 §5.1 #4）：PRD 要的是「左右内缩 24pt、高 56pt、距底 16pt、不贴边」，
-/// 系统 TabView 的 bar 无法满足；`.toolbar(.hidden, for: .tabBar)` 再自绘会让安全区塌陷。
+/// 旧版是「左右内缩 24pt 的窄胶囊 + 图标 15pt + 标签 10pt」—— 五项挤成一团，
+/// 选中态只是淡青柠胶囊，远看跟没选中一样。新版三处改动：
 ///
-/// 三层结构 = 玻璃底（glassSurface 唯一入口）+ 高亮胶囊（滑动）+ 图标文字。
+/// 1. **整幅宽**：只留 8pt 屏幕边距，几乎顶满，手指落点大了近一倍；
+/// 2. **选中态 = 一枚 46pt 实心圆**（青柠面 + 外投影），图标落在圆上用 `onLime` 字色；
+///    未选中项**不给底**，只有图标 + 标签，干净；
+/// 3. **徽标**挂在图标右上角，不挤占圆心。
 ///
-/// **iOS 26 液态玻璃（已验证签名）**：用 `GlassEffectContainer` 包住整个 Tab 栏、
-/// 每个 tab 项是 `.glassEffect(in: Capsule())` 的玻璃体，选中项叠加
-/// `.glassEffectID("tab.highlight", in: tabNS)`。由于 5 项都位于同一容器、共享同一 Namespace，
-/// 切台时「tabHighlight」这块玻璃会在容器内**液态 morph** 到新位置（不是滑一个胶囊，而是
-/// 选中/未选中两块玻璃互相吸引合并）。
-///
-/// 降级（iOS 18–25）：选中胶囊用 `matchedGeometryEffect` 滑动 + 顶部高光渐变模拟玻璃折射。
+/// 切换动效：选中圆用 `matchedGeometryEffect` 在各项之间滑动；iOS 26 上走
+/// `GlassEffectContainer` + `glassEffectID` 的液态 morph（同容器内玻璃互相吸引合并）。
 struct FloatingTabBar: View {
     let tabs: [TabSpec]
     @Binding var selection: Int
-    @Namespace private var highlightNamespace
+
+    @Namespace private var knobNamespace
 
     /// 显式 init：`@Namespace` 是私有属性，自动生成的 memberwise init 会有可见性风险，
     /// 这里手写一份，确保跨文件构造一定可用。
@@ -38,156 +38,159 @@ struct FloatingTabBar: View {
         self._selection = selection
     }
 
-    /// 项数 ≥5 时把项间距收到 0：5 项在 390pt 屏上每项约 64pt，
-    /// 再留 2pt 间距会让「更多」两字贴近胶囊边缘。
-    private var itemSpacing: CGFloat {
-        return tabs.count >= 5 ? 0 : 2
-    }
+    // MARK: - 布局常量（照参考图四的比例）
+
+    /// 栏高：旧版 56pt 撑不下「大圆 + 标签」，提到 74pt 才有呼吸感
+    private let barHeight: CGFloat = 74
+    /// 选中圆直径
+    private let knobSize: CGFloat = 46
+    /// 未选中图标尺寸
+    private let iconSize: CGFloat = 20
 
     var body: some View {
         if #available(iOS 26.0, *) {
-            tabBarGlass26
+            GlassEffectContainer(spacing: 0) {
+                barContent
+            }
         } else {
-            tabBarLegacy
+            barContent
         }
     }
 
-    // MARK: - iOS 26 液态玻璃路径
-
-    @available(iOS 26.0, *)
-    private var tabBarGlass26: some View {
-        GlassEffectContainer(spacing: 0) {
-            HStack(spacing: itemSpacing) {
-                ForEach(tabs) { tab in
-                    tabItemGlass26(tab)
+    private var barContent: some View {
+        HStack(alignment: .center, spacing: 0) {
+            ForEach(tabs) { tab in
+                if #available(iOS 26.0, *) {
+                    tabItem26(tab)
+                } else {
+                    tabItemLegacy(tab)
                 }
             }
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity)
-            .frame(height: Spacing.tabBarHeight)
         }
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .frame(height: barHeight)
+        .frame(maxWidth: .infinity)
+        // 整条栏保留真玻璃：它是「必须透出滚动内容才能证明自己浮着」的唯一上层元素
+        .glassSurface(.floating, in: RoundedRectangle(cornerRadius: 30, style: .continuous), interactive: true)
     }
 
-    @available(iOS 26.0, *)
-    private func tabItemGlass26(_ tab: TabSpec) -> some View {
-        let isSelected = (selection == tab.id)
-        let label = VStack(spacing: 3) {
-            Image(systemName: tab.icon)
-                .font(.system(size: 15, weight: .semibold))
-            Text(tab.title)
-                .font(.system(size: 10, weight: .medium))
-                // 5 项时可用宽度约 64pt，中文两字刚好；三字标签靠缩字保住单行，不换行
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
-        .frame(maxWidth: .infinity)
-        .frame(height: Spacing.tabBarHeight - 14)
-        // 每个 tab 都是一块玻璃；选中项复用 "tab.highlight" 这个 id，
-        // SwiftUI 会把这块玻璃从旧位置 morph 到新位置（液态融合）。
-        .glassEffect(in: Capsule())
-        .glassEffectID(isSelected ? "tab.highlight" : "tab.\(tab.id)", in: highlightNamespace)
-        .overlay(alignment: .topTrailing) {
-            if tab.showsDot {
-                Circle()
-                    .fill(Theme.lime)
-                    .frame(width: 5, height: 5)
-                    .padding(.top, 2)
-                    .padding(.trailing, 8)
-                    .accessibilityHidden(true)
-            }
-        }
+    // MARK: - 单项（iOS 26 液态玻璃）
 
+    @available(iOS 26.0, *)
+    private func tabItem26(_ tab: TabSpec) -> some View {
+        let isSelected = (selection == tab.id)
         return Button(action: {
             guard selection != tab.id else { return }
-            // 动画与轻触觉统一在 RootView 的 Binding setter 里给，这里只改值
-            selection = tab.id
+            selection = tab.id // 动画与轻触觉统一在 RootView 的 Binding setter 里给
         }) {
-            label
+            VStack(spacing: 3) {
+                knob26(icon: tab.icon, badge: tab.badge, selected: isSelected)
+                Text(tab.title)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
-        .contentShape(Capsule())
+        .contentShape(Rectangle())
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }
 
-    // MARK: - iOS 18–25 降级路径
-
-    private var tabBarLegacy: some View {
-        HStack(spacing: itemSpacing) {
-            ForEach(tabs) { tab in
-                tabItemLegacy(tab)
+    /// 图标 / 选中圆 / 徽标三层。
+    ///
+    /// iOS 26：选中圆是**一块玻璃**（`.glassEffect(in: Circle())`），靠 `glassEffectID`
+    /// 在同一容器里液态 morph 到新位置；未选中不给底。
+    @available(iOS 26.0, *)
+    @ViewBuilder
+    private func knob26(icon: String, badge: String?, selected: Bool) -> some View {
+        ZStack {
+            if selected {
+                Circle()
+                    .fill(Theme.lime)
+                    .frame(width: knobSize, height: knobSize)
+                    .glassEffect(in: Circle())
+                    .glassEffectID("tab.knob", in: knobNamespace)
             }
+            Image(systemName: icon)
+                .font(.system(size: selected ? iconSize + 1 : iconSize, weight: .semibold))
+                .foregroundStyle(selected ? Theme.onLime : Theme.textTertiary)
         }
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity)
-        .frame(height: Spacing.tabBarHeight)
-        // Tab 栏保留真玻璃：它是「必须透出滚动内容才能证明自己浮着」的唯一上层元素（B1 设计 §5.3.2），
-        // 不改成静态配方。
-        .glassSurface(.floating, in: Capsule(), interactive: true)
+        .frame(width: knobSize + 8, height: knobSize + 8)
+        .overlay(alignment: .topTrailing) {
+            badgeView(badge)
+        }
     }
+
+    // MARK: - 单项（iOS 18–25）
 
     private func tabItemLegacy(_ tab: TabSpec) -> some View {
         let isSelected = (selection == tab.id)
         return Button(action: {
             guard selection != tab.id else { return }
-            // 动画与轻触觉统一在 RootView 的 Binding setter 里给，这里只改值
             selection = tab.id
         }) {
             VStack(spacing: 3) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 15, weight: .semibold))
+                ZStack {
+                    if isSelected {
+                        Circle()
+                            .fill(Theme.lime)
+                            .frame(width: knobSize, height: knobSize)
+                            // 与全部 5 个 tab 项共享 namespace：切换时圆从旧位置滑到新位置
+                            .matchedGeometryEffect(id: "tab.knob", in: knobNamespace)
+                            .shadow(color: Theme.limeGlow, radius: 10, y: 4)
+                    }
+                    Image(systemName: tab.icon)
+                        .font(.system(size: isSelected ? iconSize + 1 : iconSize, weight: .semibold))
+                        .foregroundStyle(isSelected ? Theme.onLime : Theme.textTertiary)
+                }
+                .frame(width: knobSize + 8, height: knobSize + 8)
+                .overlay(alignment: .topTrailing) {
+                    badgeView(tab.badge)
+                }
                 Text(tab.title)
-                    .font(.system(size: 10, weight: .medium))
-                    // 5 项时可用宽度约 64pt，中文两字刚好；三字标签靠缩字保住单行，不换行
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
             .frame(maxWidth: .infinity)
-            .frame(height: Spacing.tabBarHeight - 14)
-            .background {
-                if isSelected {
-                    selectedHighlight
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if tab.showsDot {
-                    Circle()
-                        .fill(Theme.lime)
-                        .frame(width: 5, height: 5)
-                        .padding(.top, 2)
-                        .padding(.trailing, 8)
-                        .accessibilityHidden(true)
-                }
-            }
-            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }
 
-    /// 选中态胶囊（iOS 18–25 降级分支，观感明显优于现版）：
-    /// 填充从 14% 提到约 22% + 1pt 描边（青柠 50%），并叠一层**顶部高光渐变**模拟玻璃折射，
-    /// 让胶囊有「浮起玻璃」的反射感，比现版「14% 填充 + 1pt 描边」更通透。
-    /// 滑动仍由 `matchedGeometryEffect` 承担 —— iOS 18 没有 morph API，靠它会「换台设备动效消失」。
-    private var selectedHighlight: some View {
-        Capsule()
-            .fill(Theme.lime.opacity(0.22))
-            .overlay {
-                // 顶部高光：玻璃边缘的折射感（走 token，不写白/黑 opacity）
-                Capsule()
-                    .fill(LinearGradient(
-                        colors: [Theme.glassSheen, Theme.glassHighlightFade],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ))
+    // MARK: - 徽标
+
+    /// 右上角红色徽标：空串画圆点，否则画数字胶囊。
+    @ViewBuilder
+    private func badgeView(_ badge: String?) -> some View {
+        if let badge {
+            if badge.isEmpty {
+                Circle()
+                    .fill(Theme.badgeRed)
+                    .frame(width: 8, height: 8)
+                    .offset(x: 2, y: 0)
+                    .accessibilityHidden(true)
+            } else {
+                Text(badge)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.badgeRedInk)
+                    .monospacedDigit()
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background {
+                        Capsule().fill(Theme.badgeRed)
+                    }
+                    .offset(x: 4, y: -2)
+                    .accessibilityLabel("有 " + badge + " 条新消息")
             }
-            .overlay {
-                Capsule().strokeBorder(Theme.lime.opacity(0.5), lineWidth: 1)
-            }
-            // 与全部 5 个 tab 项共享 namespace，选中项在容器内液态滑动到新位置
-            .matchedGeometryEffect(id: "tab.highlight", in: highlightNamespace)
+        }
     }
 }
