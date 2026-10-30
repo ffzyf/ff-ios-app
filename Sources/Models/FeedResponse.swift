@@ -155,7 +155,11 @@ struct ArticleSummary: Decodable, Identifiable {
         let rawID = (try? container.decode(String.self, forKey: .id)) ?? ""
         id = rawID
         title = (try? container.decode(String.self, forKey: .title)) ?? ""
-        summary = (try? container.decode(String.self, forKey: .summary)) ?? ""
+        // 服务端已做 `@videohttps://…` 这类脏摘要清洗，脏内容会下发空串；
+        // 这里再按「去首尾空白」归一次，保证 `summary.isEmpty` 能可靠地挡住纯空白摘要
+        // （否则卡片会渲染一个高度 0 但带 6pt 间距的空 Text，卡片下方多出空隙）
+        summary = ((try? container.decode(String.self, forKey: .summary)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         announce = (try? container.decode(Bool.self, forKey: .announce)) ?? false
         pinned = (try? container.decode(Bool.self, forKey: .pinned)) ?? false
         createdAt = try? container.decode(Date.self, forKey: .createdAt)
@@ -196,7 +200,9 @@ struct FeedNotice: Decodable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? container.decode(String.self, forKey: .id)) ?? ""
         title = (try? container.decode(String.self, forKey: .title)) ?? ""
-        summary = (try? container.decode(String.self, forKey: .summary)) ?? ""
+        // 同 ArticleSummary：纯空白摘要归一成空串，交给视图的 `!summary.isEmpty` 拦截
+        summary = ((try? container.decode(String.self, forKey: .summary)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         updatedAt = try? container.decode(Date.self, forKey: .updatedAt)
     }
 }

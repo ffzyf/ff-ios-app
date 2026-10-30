@@ -73,7 +73,9 @@ struct ArticleDetail: Decodable, Identifiable {
         let rawID = (try? container.decode(String.self, forKey: .id)) ?? ""
         id = rawID
         title = (try? container.decode(String.self, forKey: .title)) ?? ""
-        summary = (try? container.decode(String.self, forKey: .summary)) ?? ""
+        // 与 ArticleSummary 一致：脏摘要服务端洗成空串，这里再去一次首尾空白
+        summary = ((try? container.decode(String.self, forKey: .summary)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         announce = (try? container.decode(Bool.self, forKey: .announce)) ?? false
         pinned = (try? container.decode(Bool.self, forKey: .pinned)) ?? false
         createdAt = try? container.decode(Date.self, forKey: .createdAt)
