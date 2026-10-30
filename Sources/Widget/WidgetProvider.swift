@@ -6,7 +6,7 @@ import WidgetKit
 
 /// Widget 进程用的解码器。
 ///
-/// 为什么不复用 `APIJSON.decoder`：那个在 `Sources/Services/APIClient.swift` 里，
+/// 为什么不复用 `APIJSON.decoder`：那个在 Services 层的网络客户端里，
 /// **不属于 Shared，也不该属于**（Widget 不需要整个网络客户端）。
 /// 这里只复制「ISO8601 带毫秒」这一条策略 —— 它与服务端 `new Date().toISOString()` 对齐，
 /// 少这条会导致简报的 `savedAt` / `pushedAt` 全部解不出来。

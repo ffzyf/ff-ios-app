@@ -1,7 +1,7 @@
 import SwiftUI
 import WidgetKit
 
-/// Widget Extension 的入口（**全工程两个 main 属性之一**，另一个是 `Sources/App/FFWangApp.swift`）。
+/// Widget Extension 的入口（**全工程两个 main 属性之一**，另一个是主 App 的入口文件）。
 ///
 /// 为什么两个 main 能共存：它们分属两个 target（`SkyApp` 与 `SkyAppWidget`）。
 /// `project.yml` 里给 `SkyApp` 的 `sources` 写了 `excludes: ["Widget"]` ——
