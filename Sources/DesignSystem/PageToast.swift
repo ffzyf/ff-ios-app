@@ -12,8 +12,8 @@ import SwiftUI
 /// 3. 不吃点击（`allowsHitTesting(false)`）—— toast 盖在内容上，用户点它不该没反应。
 struct PageToast: View {
     /// 外部直接给文案时使用（Monitor / Survey 等独立 store 的 toast）。
-    /// 传 nil 时回退到全局 `ToastStore.shared`（AppModel 的 toast，B 批次后唯一来源）。
-    let message: String?
+    /// 传 nil（或不传）时回退到全局 `ToastStore.shared`（AppModel 的 toast，B 批次后唯一来源）。
+    var message: String? = nil
     /// 观察全局 toast：这样 `PageToast()` 不传文案时也能随着 `ToastStore` 变化重绘，
     /// 而不必在调用方手动传 `ToastStore.shared.message`（那样读取值不会触发订阅）。
     @ObservedObject private var globalToast = ToastStore.shared
