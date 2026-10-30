@@ -12,6 +12,10 @@ import SwiftUI
 /// · 错误态只在「一条数据都没有」时出现；有旧数据就只弹 toast，不清空。
 struct BriefView: View {
     @EnvironmentObject private var model: AppModel
+    /// 推送状态那一行要读监控接口（PRD P07 明确「与 P12 同源」）。
+    /// 用单例观察而不是再注入一个环境对象：简报页只需要它的两个字段（最近推送 / 时段），
+    /// 多一层注入就多一处「模态没继承环境对象」的运行期风险。
+    @ObservedObject private var monitor = MonitorStore.shared
 
     var body: some View {
         ScrollView {
@@ -27,6 +31,12 @@ struct BriefView: View {
         .scrollIndicators(.hidden)
         .refreshable {
             await model.loadBrief()
+            // 推送状态与简报同源但不同接口：下拉刷新时一起刷，避免「简报是新的一行是旧的」
+            await monitor.load(force: true)
+        }
+        // 首屏只补一次监控状态：它在简报页是"附加信息"，失败也不影响简报本体
+        .task {
+            await monitor.load()
         }
         // 全站共享的轻提示：刷新失败只弹这一条，不遮内容
         .overlay(alignment: .bottom) {
@@ -75,6 +85,8 @@ struct BriefView: View {
             SkyVersionPanel(status: model.skyStatus)
             TodayBriefCard(snapshot: model.todayBrief)
             VersionRecordCard(status: model.skyStatus)
+            // 批次 4：推送状态只读行。取不到时组件自己渲染 EmptyView（整行隐藏，不写"未知"）
+            PushStatusRow(snapshot: model.todayBrief, monitor: monitor.response)
         }
     }
 

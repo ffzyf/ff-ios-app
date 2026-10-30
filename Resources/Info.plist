@@ -39,5 +39,11 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!--
+	  批次 4：实时活动。Apple 要求写在**宿主 App** 的 Info.plist 上（Widget 扩展不需要）。
+	  没有这一条，Activity.request 会直接抛错，锁屏与灵动岛永远不会出现红石活动。
+	-->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 </dict>
 </plist>

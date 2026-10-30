@@ -34,7 +34,7 @@ struct SettingsFooterLine: View {
             Capsule()
                 .fill(Theme.lime)
                 .frame(width: 40, height: 3)
-            Text("FF大王 V2 · 原生重写版")
+            Text("FF大王 V3 · 原生重写版")
                 .font(Typography.captionXS)
                 .foregroundStyle(Theme.textTertiary)
             Spacer(minLength: 0)

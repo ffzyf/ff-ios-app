@@ -23,6 +23,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: Spacing.sectionGap) {
                     header
                     group("外观") { AppearanceSection() }
+                    // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
+                    group("红石") { LiveActivitySection() }
                     // 批次 3：问卷管理（登录 / 退出）。单例观察，不依赖环境对象注入
                     group("问卷管理") { AccountSection() }
                     group("版本") { versionRow }
@@ -141,8 +143,8 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "2.0.0"
-        let build = info["CFBundleVersion"] as? String ?? "2"
+        let short = info["CFBundleShortVersionString"] as? String ?? "3.0.0"
+        let build = info["CFBundleVersion"] as? String ?? "3"
         return "\(short) (\(build))"
     }
 

@@ -13,6 +13,9 @@ import SwiftUI
 struct MoreView: View {
     @ObservedObject private var auth = SurveyAuth.shared
     @ObservedObject private var store = SurveyStore.shared
+    /// 批次 4：监控行的右侧状态字来自这里（有新版本 / 已是最新 / 检查失败）。
+    /// 单例观察，与问卷那一行同款写法 —— 少一层环境注入，少一处运行期崩溃面。
+    @ObservedObject private var monitor = MonitorStore.shared
 
     @State private var showsWorkspace: Bool = false
     @State private var showsMonitor: Bool = false
@@ -41,10 +44,10 @@ struct MoreView: View {
                     MoreRow(
                         icon: "antenna.radiowaves.left.and.right",
                         title: "推送监控",
-                        // 批次 4 接上真实数据；现在明确写"未连接"，
-                        // 不假装有一个"检查中"的假状态（假数据比没有更糟）
-                        detail: "未连接",
-                        isMuted: true
+                        // 取不到就显示 nil（右侧留白）；绝不写「未知」——
+                        // 这行要么说事实（有新版本 / 已是最新 + 时间），要么什么都不说
+                        detail: monitor.summaryText,
+                        isMuted: monitor.summaryText == nil
                     ) {
                         showsMonitor = true
                     }
@@ -68,7 +71,7 @@ struct MoreView: View {
                     }
                 }
 
-                Text("问卷与推送监控都要管理密码；其余功能不需要登录。")
+                Text("问卷工作台要管理密码；推送监控是匿名只读，不需要登录。")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
                     .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
@@ -90,13 +93,17 @@ struct MoreView: View {
                 store.clearToast()
             }
         }
+        // 监控行的状态字是"顺带"信息：进页面时补一次，失败也只是右侧留白
+        .task {
+            await monitor.load()
+        }
         // 工作台是全屏接管：里面要看答卷明细、要填答，底部 Tab 栏不该参与
         .fullScreenCover(isPresented: $showsWorkspace) {
             SurveyWorkspaceView()
         }
-        // 推送监控：批次 4 才落地，现在明确指向占位页（带返回钮，不是死路）
+        // 推送监控：批次 4 已落地为原生页（两张版本卡 + 立即检查 + 时段说明）
         .fullScreenCover(isPresented: $showsMonitor) {
-            monitorPlaceholder
+            MonitorView()
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
@@ -114,7 +121,7 @@ struct MoreView: View {
                 .font(Typography.display)
                 .tracking(Typography.trackingLarge)
                 .foregroundStyle(Theme.textPrimary)
-            Text(auth.isLoggedIn ? "问卷已连接 · 其余都在这一页" : "两个管理功能要密码，其余不需要登录")
+            Text(auth.isLoggedIn ? "问卷已连接 · 其余都在这一页" : "只有问卷要密码，监控与设置都不用登录")
                 .font(Typography.footnote)
                 .foregroundStyle(Theme.textTertiary)
         }
@@ -130,28 +137,13 @@ struct MoreView: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "2.0.0"
+        let short = info["CFBundleShortVersionString"] as? String ?? "3.0.0"
         return short
     }
 
-    // MARK: - 推送监控占位
-
-    private var monitorPlaceholder: some View {
-        ZStack(alignment: .topLeading) {
-            PageBackground(glow: false)
-            PagePlaceholder(
-                title: "推送监控",
-                icon: "antenna.radiowaves.left.and.right",
-                summary: "国服 / 国际服的当前版本、最近检查时间、手动检查会放在这里。"
-            )
-            IconGlassButton(icon: "chevron.left", size: 36) {
-                showsMonitor = false
-            }
-            .padding(.horizontal, Spacing.page)
-            .padding(.top, 6)
-            .accessibilityLabel("返回")
-        }
-    }
+    // 批次 4 说明：原先这里有一个 `monitorPlaceholder`（`PagePlaceholder` + 返回钮）。
+    // 推送监控已换成原生页 `MonitorView`（自带返回钮与骨架/错误态），
+    // 占位页在本文件内不再使用 —— 特意删掉而不是留着，避免以后有人误接线。
 }
 
 // MARK: - 一行
@@ -252,7 +244,7 @@ struct MoreAboutSheet: View {
                         .padding(Spacing.cardPadding)
                     }
 
-                    Text("问卷与推送监控是只读入口：创建问卷、编辑题目、导出数据都留在网页端。App 不上传任何使用数据，也没有第三方统计 SDK。")
+                    Text("问卷与推送监控都是只读入口：创建问卷、编辑题目、导出数据都留在网页端。App 不上传任何使用数据，也没有第三方统计 SDK。")
                         .font(Typography.captionXS)
                         .foregroundStyle(Theme.textTertiary)
                         .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.6))
@@ -302,12 +294,12 @@ struct MoreAboutSheet: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        return info["CFBundleShortVersionString"] as? String ?? "2.0.0"
+        return info["CFBundleShortVersionString"] as? String ?? "3.0.0"
     }
 
     private var buildNumber: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        return info["CFBundleVersion"] as? String ?? "2"
+        return info["CFBundleVersion"] as? String ?? "3"
     }
 
     /// 只显示域名：协议前缀对用户没有信息量

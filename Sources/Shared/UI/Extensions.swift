@@ -1,10 +1,12 @@
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#endif
 
 // MARK: - Color(hex:)
 
+/// 这里只剩两个纯 SwiftUI 的东西：`Color(hex:)`（给 `Theme` 用）与 `View.conditional`。
+///
+/// 批次 4 把 `Haptics` 搬到了 `DesignSystem/Haptics.swift`：
+/// `Shared/` 是 Widget 扩展复用的目录，而触觉生成器属于"宿主 App 才确定安全"的 API，
+/// 留在 Shared 里等于让小组件跟着编译一段它根本用不到的 UIKit 代码。
 extension Color {
     /// 十六进制颜色。
     ///
@@ -46,45 +48,5 @@ extension View {
         } else {
             self
         }
-    }
-}
-
-// MARK: - 触觉
-
-/// 触觉反馈封装。PRD §4.6：卡片按压 .light、刷新完成 / 复制 .success、错误 .error。
-/// 全部走系统生成器，不申请任何权限。
-enum Haptics {
-    /// 轻触（卡片按压、Tab 切换）。
-    static func light() {
-        #if canImport(UIKit)
-        let generator = UIImpactFeedbackGenerator(style: .light)
-        generator.prepare()
-        generator.impactOccurred()
-        #endif
-    }
-
-    /// 成功（刷新完成、复制完成）。
-    static func success() {
-        #if canImport(UIKit)
-        let generator = UINotificationFeedbackGenerator()
-        generator.notificationOccurred(.success)
-        #endif
-    }
-
-    /// 选择（翻月、切换分段控件）。PRD §4 #7 单独一层：翻月是"在同一页里移动"，比 Tab 切换更轻
-    static func selection() {
-        #if canImport(UIKit)
-        let generator = UISelectionFeedbackGenerator()
-        generator.prepare()
-        generator.selectionChanged()
-        #endif
-    }
-
-    /// 失败（刷新失败、请求报错）。
-    static func error() {
-        #if canImport(UIKit)
-        let generator = UINotificationFeedbackGenerator()
-        generator.notificationOccurred(.error)
-        #endif
     }
 }

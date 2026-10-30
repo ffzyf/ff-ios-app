@@ -1,11 +1,12 @@
-# xcodegen 工程描述文件 —— FF大王 V2（原生 SwiftUI 重写）
+# xcodegen 工程描述文件 —— FF大王 V3（原生 SwiftUI 重写）
 # 生成命令（在工程根目录）：xcodegen generate
 #
-# 关键约束（设计文档 §1.3）：
+# 关键约束（设计文档 §1.3 / 附录 B）：
 #   · 部署目标 iOS 18.0，用 Xcode 26 / iOS 26 SDK 编译；玻璃能力按 #available 分流
 #   · 只 iPhone（TARGETED_DEVICE_FAMILY = 1），只竖屏（见 Resources/Info.plist）
-#   · 不生成 Info.plist（GENERATE_INFOPLIST_FILE = NO），改用 Resources/Info.plist
+#   · 不生成 Info.plist（GENERATE_INFOPLIST_FILE = NO），改用 Resources/*.plist
 #   · 不写 ENABLE_BITCODE（Xcode 14 起已废弃）
+#   · 批次 4 新增 SkyAppWidget target：主 App 的 sources 必须 excludes Widget（R1）
 name: SkyApp
 
 options:
@@ -18,8 +19,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "2.0.0"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "3.0.0"
+    CURRENT_PROJECT_VERSION: "3"
     SWIFT_VERSION: "5.0"
     # 不启用 Swift 6 严格并发：CI 是无签名编译，Sendable 报错只会拖慢落地（设计文档 §1.2）
     SWIFT_STRICT_CONCURRENCY: minimal
@@ -29,14 +30,18 @@ settings:
     CODE_SIGN_IDENTITY: ""
 
 targets:
+  # ---------------- 主 App ----------------
   SkyApp:
     type: application
     platform: iOS
     sources:
       - path: Sources
+        excludes:
+          - "Widget"                      # ★★★ R1：绝不能漏，否则两个 @main → duplicate symbol '_main'
       - path: Resources
         excludes:
           - "Info.plist"
+          - "Widget-Info.plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: top.skyzyf.skyapp
@@ -50,6 +55,37 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
         SWIFT_EMIT_LOC_STRINGS: "NO"
         ENABLE_PREVIEWS: "NO"
+        # 刻意不写 CODE_SIGN_ENTITLEMENTS / APP_GROUPS（无签名 CI 的红线，见设计文档 §1.2.4）
+    dependencies:
+      - target: SkyAppWidget
+        embed: true
+
+  # ---------------- Widget 扩展（批次 4） ----------------
+  # 只编译 Sources/Widget + Sources/Shared：
+  #   · 不能吃 Sources/Features / Sources/App / Sources/Services（里面有 UIKit 页面、AppModel、Keychain）
+  #   · 不申请 App Group：/api/app/* 匿名可读，Widget 自己请求、自己算 Timeline
+  SkyAppWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Widget
+      - path: Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: top.skyzyf.skyapp.widget
+        PRODUCT_NAME: SkyAppWidget
+        INFOPLIST_FILE: Resources/Widget-Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        SKIP_INSTALL: "YES"
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SWIFT_EMIT_LOC_STRINGS: "NO"
+        ENABLE_PREVIEWS: "NO"
+        # 无签名 CI：与主 App 一致地关掉签名（R5 的第一层防护）
+        CODE_SIGNING_ALLOWED: "NO"
+        # 版本号必须与主 App 一致，否则 archive 报 bundle version mismatch
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "3"
 
 schemes:
   SkyApp:

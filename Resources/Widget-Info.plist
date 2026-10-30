@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Widget Extension 的 Info.plist（批次 4）
+
+  三条必须记住的事：
+  1. NSExtensionPointIdentifier 必须是 com.apple.widgetkit-extension，写错等于扩展不被识别；
+  2. CFBundlePackageType 必须是 XPC!（app-extension 的包类型，写成 APPL 会被安装拒绝）；
+  3. 版本号用 $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION)，与主 App 共用同一对构建设置，
+     否则 archive 时报 bundle version mismatch（project.yml 里两个 target 各写了一遍 3.0.0 / 3）。
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh-Hans</string>
+	<key>CFBundleDisplayName</key>
+	<string>光遇红石</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSExtension</key>
+	<dict>
+		<!--
+		  NSExtensionPrincipalClass 刻意「留空」= 不写这个键。
+		  WidgetKit 扩展的入口是 @main WidgetBundle（本工程是 SkyWidgetBundle），
+		  在这份 Info.plist 里写一个空字符串反而会让系统尝试实例化一个空类名。
+		  若将来改成非 @main 的入口，在这里补 <key>NSExtensionPrincipalClass</key>。
+		-->
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.widgetkit-extension</string>
+	</dict>
+</dict>
+</plist>

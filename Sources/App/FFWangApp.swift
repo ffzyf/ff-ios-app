@@ -28,6 +28,10 @@ struct FFWangApp: App {
     @StateObject private var rock: RockStore
     /// 攻略流（批次 2）。单独一个 Store：它的生命周期与日历不同（二级入口、24h 缓存）
     @StateObject private var rockGuide: RockGuideStore
+    /// 推送监控（批次 4）。放在 App 层：监控页、简报页底部那一行、「更多」行的状态字都要读它
+    @StateObject private var monitor: MonitorStore
+    /// 场景阶段：实时活动**只在 `.active` 期间**评估（PRD §5.4 硬规则 + 决策 3）
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // 协议缓存必须在第一个请求之前配好：靠服务端 ETag 白拿 304，App 侧不手写 If-None-Match。
@@ -36,6 +40,7 @@ struct FFWangApp: App {
         _appearance = StateObject(wrappedValue: AppearanceStore.shared)
         _rock = StateObject(wrappedValue: RockStore())
         _rockGuide = StateObject(wrappedValue: RockGuideStore())
+        _monitor = StateObject(wrappedValue: MonitorStore.shared)
     }
 
     var body: some Scene {
@@ -47,7 +52,22 @@ struct FFWangApp: App {
             .environmentObject(model)
             .environmentObject(rock)
             .environmentObject(rockGuide)
+            .environmentObject(monitor)
             .preferredColorScheme(appearance.scheme)
+            // 实时活动的前台循环（PRD §5.4 硬规则「仅前台」）：
+            // · scenePhase == .active → 这个 task 开始跑，协调器每 60 秒评估一次
+            //   （进窗口就启动 / 落地换文案 / 到点结束）；
+            // · scenePhase 变化 → `.task(id:)` 取消旧任务 → 协调器的 defer 收尾，
+            //   把仍在跑的活动按 `endAt` 交给系统移除（R19 保险，不依赖进程存活）。
+            //
+            // 排期数组每次 tick 现取（`rock.allLoadedDays`），不把它钉在闭包里 ——
+            // 否则用户翻月 / 下拉刷新之后，活动判定用的还是启动那一刻的数据。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await LiveActivityCoordinator.shared.monitorForeground {
+                    rock.allLoadedDays
+                }
+            }
         }
     }
 }
