@@ -6,9 +6,15 @@
 # 后者是「改一次 +1」的构建流水号。手动改必然漏一处，漏了 archive 就报
 # bundle version mismatch，白烧一轮 macOS 额度。
 #
+# 版本号规则（用户定，2026-10-31 起生效）：
+#   每出一个新版本   → 版本号末位 +1     3.0.0 → 3.0.1   （bash scripts/bump.sh patch）
+#   大改（新功能/重做）→ 版本号次位 +1    3.0.1 → 3.1.0   （bash scripts/bump.sh minor）
+#   CURRENT_PROJECT_VERSION 每一档都自动 +1，不需要单独给参数。
+#
 # 用法：
-#   bash scripts/bump.sh          # 构建号 +1
-#   bash scripts/bump.sh minor    # 同时把版本号的小数位 +1（3.0.0 → 3.1.0）
+#   bash scripts/bump.sh          # 只把构建号 +1（不动对外的版本号）
+#   bash scripts/bump.sh patch    # 小改：3.0.0 → 3.0.1，构建号 +1
+#   bash scripts/bump.sh minor    # 大改：3.0.0 → 3.1.0，构建号 +1
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
