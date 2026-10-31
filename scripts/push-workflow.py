@@ -20,10 +20,23 @@ import urllib.error
 REPO = 'ffzyf/ff-ios-app'
 ROOT = '/workspace/ios-app'
 UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-TOKEN = re.search(
-    r'://[^:]+:([^@]+)@',
-    subprocess.check_output(['git', '-C', '/workspace/blog', 'config', '--get', 'remote.origin.url']).decode()
-).group(1)
+def _token() -> str:
+    """取 Token。
+
+    优先读环境变量 `GH_TOKEN`（专门给 workflow 写权限的那种），没有才回落到
+    blog 仓库 remote_url 里那个通用 PAT —— 后者只有 `repo` scope，
+    **改不了 .github/workflows/**，所以落到它上面时 push-workflow 注定 404。
+    """
+    env = os.environ.get('GH_TOKEN')
+    if env:
+        return env.strip()
+    return re.search(
+        r'://[^:]+:([^@]+)@',
+        subprocess.check_output(['git', '-C', '/workspace/blog', 'config', '--get', 'remote.origin.url']).decode()
+    ).group(1)
+
+
+TOKEN = _token()
 
 
 def api(path, method='GET', body=None):
