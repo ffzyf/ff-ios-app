@@ -1,40 +1,58 @@
 # 本文件由主理人维护，任何改动都需要重新粘贴到仓库的 .github/workflows/build-ipa.yml
 #
-# 目标：macos-26（GA，Xcode 26 / iOS 26 SDK）上产出未签名 SkyApp.ipa，
-#       并用模拟器截一张首页图作为「液态玻璃有没有糊成一片」的视觉证据。
+# 目标：macos-26（Xcode 26 / iOS 26 SDK）上产出未签名 SkyApp.ipa。
+#       需要视觉验证时，在同一台机器上再跑一次模拟器截图。
 #
-# 两个 job：
-#   build        生成工程 → 无签名构建 → 打 SkyApp.ipa → 上传 artifact（失败即红）
-#   screenshots  模拟器构建 → 动态选机器 → 装包 → 启动 → 截图（continue-on-error，不阻塞交付）
+# ── 为什么要长这样（2026-10-31 重写，起因是 GitHub 额度被烧穿）──────────────
+# macOS runner 按 **10 倍** 计费：Free 计划每月 2000 分钟，实际只够跑约 200 分钟 macOS。
+# 一次 Swift 全量编译（App + Widget 两个 target）10 分钟起步。旧版还有三个放大器：
 #
-# 约定（与 V1 一致，已验证有效）：
-#   · 工程可能位于仓库根目录，也可能位于 ios/ 等子目录，统一用 `Locate project directory` 定位
+#   1. `on: push` —— 每推一次就自动起两台 macos 机器，改一行 README 也要烧一轮；
+#   2. 两个 job —— build 打 Release-iphoneos，screenshots 又把源码**重新编一遍**
+#      Debug-iphonesimulator。模拟器跑不了 arm64 真机产物，等于双倍编译；
+#   3. 无 DerivedData 缓存 —— 每次都从第 0 个 .o 开始。
+#
+# 「推一次 ≈ 250 计费分钟」，7 次就把一个月的额度用光了。改法：
+#
+#   ✅ gate job 跑在 **ubuntu-latest**（1x 计费，Free 计划里几乎免费），用毫秒级的静态检查
+#      拦住语法 / 符号 / 主题规范错误。gate 红了 **macOS 机器根本不起**，
+#      低级错误从此烧不到 macOS 一分钟。
+#   ✅ 只保留 `workflow_dispatch` —— 什么时候构建由人决定，不再"推代码即烧钱"。
+#   ✅ 合并成单个 macOS job，截图走 continue-on-error 的步骤，共享同一台机器。
+#   ✅ DerivedData 缓存：命中时走增量编译。
+#   ✅ 截图默认**关闭**，需要看图时才手动勾 —— 日常出包只编译一次。
+#
+# 交付链路上的其它约定（与 V1 一致，已验证有效）：
+#   · 工程可能在仓库根目录，也可能在 ios/ 等子目录，统一用 `Locate project directory` 定位
 #   · 构建必须用 -scheme + -destination，否则 -derivedDataPath 不生效、产物路径不对
 #   · 打包 step 用 set -uo pipefail（不带 -e）+ `|| true`，避免 find 找不到目录时提前退出、
 #     以及 `find | head` 的 SIGPIPE(141) 直接杀掉 step
+
 name: Build Unsigned IPA
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      screenshots:
+        description: '跑模拟器截图（会多编译一次 Debug-iphonesimulator，多花一轮的时间）'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: macos-26
-    timeout-minutes: 40
+  # ── 闸门：在廉价的 Linux 上一次性拦住"编译器也能抓到"的错误 ────────────────
+  # 这一层存在的唯一理由是钱：下面每个检查在 macOS 上的成本是这里的 10 倍，
+  # 而它们各自都曾经真实地浪费过一整轮构建。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Show toolchain
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-          sw_vers
 
       - name: Locate project directory
         id: locate
@@ -52,21 +70,56 @@ jobs:
             fi
             project_dir="$(dirname "$found")"
           fi
-          echo "Project directory: $project_dir"
           echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+      # 主题闸门：硬编码 hex、就地给白色加透明度、View 层判深浅、lime 当字色 ——
+      # 这四类错误编译器都抓不到，只有切到浅色模式才露馅。
+      - name: Lint theme rules
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bash scripts/lint-theme.sh
+
+      # 静态预检：括号配对 + 跨文件符号引用（Theme.X / Typography.X / API.X …）。
+      # 少一个 `}` 会让 Swift 的报错指到几百行外；引用不存在的 token 则必挂。
+      - name: Preflight (syntax + symbol refs)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: python3 scripts/preflight.py
+
+  # ── 真机构建：只有 gate 绿了才启动，一次 macOS 分钟都不浪费 ────────────────
+  build:
+    needs: gate
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          sw_vers
 
       - name: Install xcodegen
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
+      # 编译产物缓存：key 带源码 hash，源码没变就整棵命中。
+      # restore-keys 留宽松前缀 —— 源码变了也能复用上一次的中间产物，
+      # Swift 的增量编译靠的就是那些没变的 .o 与模块索引。
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: dd-${{ runner.os }}-${{ hashFiles('Sources/**/*.swift', 'project.yml') }}
+          restore-keys: |
+            dd-${{ runner.os }}-
+
       - name: Generate Xcode project
-        working-directory: ${{ steps.locate.outputs.dir }}
         run: xcodegen generate
 
       # 必须用 -scheme + -destination：-derivedDataPath 只对 scheme 构建生效。
-      # 走 legacy 的 target 构建时，产物会落在 <projdir>/build/Release-iphoneos/，
+      # 走 legacy 的 target 构建时，产物落在 <projdir>/build/Release-iphoneos/，
       # 而不是 build/Build/Products/Release-iphoneos/，导致找不到 .app。
       - name: Build (unsigned)
-        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           set -o pipefail
           xcodebuild \
@@ -81,16 +134,14 @@ jobs:
             build
 
       - name: Package IPA
-        env:
-          PROJECT_DIR: ${{ steps.locate.outputs.dir }}
         run: |
           set -uo pipefail
-          echo "== .app candidates under $PROJECT_DIR =="
-          find "$PROJECT_DIR" -maxdepth 6 -name '*.app' -type d -print 2>/dev/null || true
-          APP="$(find "$PROJECT_DIR" -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1 || true)"
+          echo "== .app candidates =="
+          find . -maxdepth 6 -name '*.app' -type d -print 2>/dev/null || true
+          APP="$(find . -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1 || true)"
           if [ -z "${APP:-}" ]; then
             echo "::error::no .app produced; dumping build tree"
-            ls -R "$PROJECT_DIR/build" 2>/dev/null | head -n 120 || true
+            ls -R build 2>/dev/null | head -n 120 || true
             exit 1
           fi
           echo "APP=$APP"
@@ -108,46 +159,13 @@ jobs:
           path: SkyApp.ipa
           retention-days: 30
 
-  # 视觉证据：模拟器上跑起来截一张首页。设备型号动态解析（runner 上的 iPhone 型号会变），
-  # 不写死 iPhone 16 Pro；不切 Tab（切 Tab 需要额外 URL scheme，本版不为此发明机制）。
-  screenshots:
-    needs: build
-    continue-on-error: true
-    runs-on: macos-26
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Locate project directory
-        id: locate
-        run: |
-          set -euo pipefail
-          if [ -f project.yml ]; then
-            project_dir="."
-          elif [ -f ios/project.yml ]; then
-            project_dir="ios"
-          else
-            found="$(find . -maxdepth 4 -name project.yml -not -path './.git/*' -print 2>/dev/null | head -n 1 || true)"
-            if [ -z "$found" ]; then
-              echo "project.yml not found" >&2
-              exit 1
-            fi
-            project_dir="$(dirname "$found")"
-          fi
-          echo "Project directory: $project_dir"
-          echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
-
-      - name: Install xcodegen
-        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
-
-      - name: Generate Xcode project
-        working-directory: ${{ steps.locate.outputs.dir }}
-        run: xcodegen generate
-
-      # 模拟器构建不需要任何签名参数。
+      # ── 视觉证据（默认关）─────────────────────────────────────────────────
+      # 模拟器必须编译 Debug-iphonesimulator：Release-iphoneos 的 arm64 产物在模拟器上跑不起来，
+      # 所以这一步躲不掉一次全量编译 —— 这正是它默认关闭的原因。需要看图时手动勾上。
+      # continue-on-error：截图失败不该让 IPA 交付变红。
       - name: Build for simulator
-        working-directory: ${{ steps.locate.outputs.dir }}
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
         run: |
           set -o pipefail
           xcodebuild \
@@ -159,85 +177,71 @@ jobs:
             build
 
       - name: Boot simulator
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
         id: sim
-        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           set -uo pipefail
           xcrun simctl list devices available -j > /tmp/simctl-devices.json
           python3 - <<'PY' > /tmp/sim-udid.txt
           import json
-          import sys
-
-          try:
-              with open("/tmp/simctl-devices.json", "r", encoding="utf-8") as handle:
-                  data = json.load(handle)
-          except Exception as error:
-              print("", end="")
-              sys.stderr.write("simctl json parse failed: %s\n" % error)
-              raise SystemExit(0)
-
-          devices = data.get("devices") or {}
-          runtimes = sorted(devices.keys(), reverse=True)
-          picked = ""
-          for runtime in runtimes:
-              if "iOS" not in runtime:
+          with open('/tmp/simctl-devices.json') as fh:
+              raw = json.load(fh)
+          best = None
+          for runtime, items in raw.get('devices', {}).items():
+              if 'iOS' not in runtime:
                   continue
-              for device in devices.get(runtime) or []:
-                  name = str(device.get("name") or "")
-                  if not name.startswith("iPhone"):
-                      continue
-                  if not device.get("isAvailable", True):
-                      continue
-                  picked = str(device.get("udid") or "")
-                  sys.stderr.write("picked: %s (%s)\n" % (name, runtime))
-                  break
-              if picked:
-                  break
-          print(picked, end="")
+              for item in items:
+                  name = item.get('name', '')
+                  score = 0
+                  if 'Pro Max' in name:
+                      score = 3
+                  elif 'Pro' in name:
+                      score = 2
+                  elif name.startswith('iPhone'):
+                      score = 1
+                  if score and item.get('isAvailable', True):
+                      if best is None or score > best[0]:
+                          best = (score, item['udid'], name)
+          if best is None:
+              raise SystemExit('no usable iPhone simulator found')
+          print(best[1])
           PY
           UDID="$(cat /tmp/sim-udid.txt)"
-          if [ -z "$UDID" ]; then
-            echo "::error::no available iPhone simulator found"
-            xcrun simctl list devices available | head -n 60 || true
-            exit 1
-          fi
-          echo "Simulator UDID: $UDID"
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
-          xcrun simctl status_bar "$UDID" override --time '9:41' --batteryState charged --batteryLevel 100 || true
 
       - name: Install and launch
-        working-directory: ${{ steps.locate.outputs.dir }}
-        env:
-          UDID: ${{ steps.sim.outputs.udid }}
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
         run: |
           set -uo pipefail
-          echo "== .app candidates under simbuild =="
-          find simbuild -maxdepth 6 -name '*.app' -type d -print 2>/dev/null || true
-          APP="$(find simbuild -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1 || true)"
+          APP="$(find . -path '*/Debug-iphonesimulator/*.app' -type d -print 2>/dev/null | head -n 1 || true)"
           if [ -z "${APP:-}" ]; then
-            echo "::error::no simulator .app produced"
-            ls -R simbuild 2>/dev/null | head -n 120 || true
+            echo "::warning::simulator .app not found"
             exit 1
           fi
           echo "APP=$APP"
-          xcrun simctl install "$UDID" "$APP"
-          xcrun simctl launch "$UDID" top.skyzyf.skyapp
-          sleep 12
+          xcrun simctl install "${{ steps.sim.outputs.udid }}" "$APP"
+          # 直接拉起 App，不做任何交互（切 Tab 需要额外 URL scheme，不为截图发明机制）
+          xcrun simctl launch "${{ steps.sim.outputs.udid }}" "top.skyzyf.skyapp"
+          sleep 8
 
-      - name: Screenshot
-        env:
-          UDID: ${{ steps.sim.outputs.udid }}
+      - name: Capture screenshots
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
         run: |
           set -uo pipefail
-          xcrun simctl io "$UDID" screenshot shot-overview.png || true
-          ls -lh shot-overview.png || true
+          mkdir -p shots
+          xcrun simctl io "${{ steps.sim.outputs.udid }}" screenshot shots/shot-overview.png
+          ls -lh shots
 
-      - name: Upload screenshot
+      - name: Upload screenshots
+        if: inputs.screenshots == 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: SkyApp-screenshot
-          path: shot-overview.png
-          if-no-files-found: warn
+          path: shots
           retention-days: 30
