@@ -26,9 +26,12 @@ struct AppRelease: Codable, Hashable, Identifiable {
     /// ipa 在 KV 里的键（形如 `"3.8.0-14.ipa"`）
     let ipaKey: String
 
-    /// `.sheet(item:)` 要求 `Identifiable`。用 `build` 当 id：服务端拒收回退
-    /// （build 小于当前 latest 直接 400），所以它在一个站点上单调不减，不会撞。
-    var id: Int { return build }
+    /// `.sheet(item:)` 要求 `Identifiable`。3.9.0 起用 `"build|version"`：
+    /// 服务端拒收回退（build 小于当前 latest 直接 400），所以 build 单调不减；
+    /// 但**同 build 重发是合法操作**（改版本名 / 说明后重新发布），重发后 sheet 内容变了、
+    /// id 却不变的话，SwiftUI 会把它当同一个 item 复用 —— 弹层里还是旧内容。
+    /// build 保证不回退、version 在同 build 内可变，两者拼起来在一个站点上不会撞。
+    var id: String { return "\(build)|\(version)" }
 
     /// 手写 `init(from:)` 之后编译器不再自动合成 `CodingKeys`，必须显式声明。
     /// 服务端键名与属性名逐字一致（camelCase），故无需写 rawValue。
@@ -153,9 +156,21 @@ final class UpdateStore: ObservableObject {
     /// 冷启动这一次延后多少秒再发。理由见 `checkIfNeeded()` 的注释
     static let launchDelay: TimeInterval = 3
 
+    /// 「立即检测」的客户端限频（秒，3.9.0）。理由见 `checkNow()` 的注释。
+    private static let forceGate: TimeInterval = 60
+
     /// 落盘键（改这里的后缀 = 让所有人的闸门重新计一次，只会多一次请求，不会出错）
     private static let keyLastCheck = "appUpdate.lastCheckAt"
-    private static let keyDismissedBuild = "appUpdate.dismissedBuild"
+    /// 「稍后」记忆键（3.9.0 从 `appUpdate.dismissedBuild`（Int）换成发布标识（String，"build|version"））。
+    ///
+    /// 为什么换：同 build 重发一个新版本名是服务端的合法操作，旧记忆（只记 build）
+    /// 会把重发后的新弹层也压住 —— 用户永远看不到重发的内容。改成"build|version"
+    /// 之后，重发（version 变了）= 新的发布 = 自动弹层恢复。
+    ///
+    /// **旧 Int 键刻意不迁移**：直接换 key 等价于"重置一次稍后记忆"，最坏情况只是
+    /// 对老用户多自动弹一次他点过稍后的版本，不会出错；写迁移逻辑反而多一条会坏的路
+    /// （读写两个 key、版本判断、脏值清理），收益撑不起复杂度。
+    private static let keyDismissedRelease = "appUpdate.dismissedRelease"
 
     // MARK: 对外只读状态
 
@@ -175,6 +190,11 @@ final class UpdateStore: ObservableObject {
     /// 用状态位而不是直接跳转：跳出去之后用户还会回来，那时得有东西可点。
     @Published private(set) var needsInstallGuide: Bool = false
 
+    /// 当前可用更新是否为**强制**（3.9.0，远程配置的 `minBuild` 高于本机 build）。
+    /// true 时 `UpdateSheet` 隐藏「稍后」、右上角关闭与下滑手势都不可用。
+    /// 随每次成功检查重新评估：远端把 minBuild 撤掉后，下一次检查自然回到可关闭。
+    @Published private(set) var isForced: Bool = false
+
     // MARK: 依赖
 
     private let client: APIClient
@@ -182,6 +202,9 @@ final class UpdateStore: ObservableObject {
     /// 冷启动那一次已经排过队了（`.task(id: scenePhase)` 在冷启动时也会跑一次，
     /// 别让"启动检查"和"前台检查"变成两个独立入口）
     private var didLaunchCheck: Bool = false
+    /// 上一次「立即检测」的时刻。**只放内存、不落盘**：这是防连点的软闸，
+    /// 冷启动清零毫无影响（用户重启 App 后多点一次请求，天塌不下来）。
+    private var lastForcedAt: Date?
 
     nonisolated init(client: APIClient = .shared, defaults: UserDefaults = .standard) {
         self.client = client
@@ -206,6 +229,9 @@ final class UpdateStore: ObservableObject {
 
     /// 手动按钮现在点下去**会不会真发请求**。不会就把按钮置灰
     /// —— 点了个寂寞不如明确告诉用户"刚查过"。
+    ///
+    /// 3.9.0 起「检查更新」改走 `checkNow()`（跳过 6 小时闸门的真·立即检测），
+    /// 所以这里的闸从 6 小时换成 60 秒客户端限频（`forceGate`）。
     var canCheckNow: Bool {
         switch state {
         case .checking:
@@ -214,7 +240,8 @@ final class UpdateStore: ObservableObject {
             // 失败不写检查时间，所以重试永远是真重试（闸门对它不生效）
             return true
         case .idle, .upToDate, .available:
-            return isDue
+            guard let last = lastForcedAt else { return true }
+            return Date().timeIntervalSince(last) >= Self.forceGate
         }
     }
 
@@ -278,6 +305,26 @@ final class UpdateStore: ObservableObject {
         }
     }
 
+    /// 真·立即检测（3.9.0，监控页「检查更新」按钮）。
+    ///
+    /// 与 `check(force: true)` 的区别：自带 **60 秒客户端限频**（`forceGate`）。
+    /// 为什么是 60 秒：版本接口自带 `Cache-Control: max-age=60` —— 60 秒内重复点，
+    /// 拿到的都是同一份边缘缓存，请求发出去了也白发；限在客户端还能省一次 TLS 握手。
+    /// `check(force:)` 的既有语义（**重试用**，失败不受闸门）保持不变，本方法不碰它。
+    ///
+    /// - Returns: 是否真的发起了检查。`false` = 60 秒内重复点击被拦（调用方给瞬时反馈）。
+    @discardableResult
+    func checkNow() async -> Bool {
+        // 上一发还在飞：算被拦（UI 那一格本来就转着圈，不需要反馈）
+        if case .checking = state { return false }
+        if let last = lastForcedAt, Date().timeIntervalSince(last) < Self.forceGate {
+            return false
+        }
+        lastForcedAt = Date()
+        await check(force: true)
+        return true
+    }
+
     // MARK: 弹层
 
     /// 手动打开更新层（监控页那一行 /「查看更新」）
@@ -287,13 +334,14 @@ final class UpdateStore: ObservableObject {
         presentedRelease = release
     }
 
-    /// 「稍后」：关掉弹层 + 记住这个 build 不再自动弹。
+    /// 「稍后」：关掉弹层 + 记住这个发布（"build|version"）不再自动弹。
     ///
     /// 与右上角关闭是**同一个 dismiss**（都是把 `presentedRelease` 写 nil），
     /// 只是多记一笔「用户已经看过这一版并且选择不装」。
+    /// 同 build 重发新版本名后 key 对不上 → 自动弹层恢复（见 `keyDismissedRelease` 的注释）。
     func snooze() {
-        if let build = release?.build {
-            defaults.set(build, forKey: Self.keyDismissedBuild)
+        if let release = release {
+            defaults.set(dismissalKey(for: release), forKey: Self.keyDismissedRelease)
         }
         presentedRelease = nil
     }
@@ -337,6 +385,17 @@ final class UpdateStore: ObservableObject {
         return Int(raw)
     }
 
+    /// 本机版本名（`CFBundleShortVersionString`，如 "3.9.0"）。3.9.0 新增。
+    ///
+    /// **只在 build 相等时**参与比较（见 `apply` 的第二段推导）—— build 是主键，
+    /// 版本名只是同 build 重发场景下的"再来一次"判据，不是另一条比较通道。
+    /// 读不到（缺 key / 空串）返回 nil → 按"只比 build"处理，宁可不弹拿不准的。
+    private var localVersion: String? {
+        guard let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// 最近一次**成功**检查的时刻。落盘而不是放内存：
     /// 6 小时闸门要跨启动生效（否则每次冷启动都必查一次，那"冷启动一次"就成了"每次启动都查"）。
     var lastCheckedAt: Date? {
@@ -345,9 +404,14 @@ final class UpdateStore: ObservableObject {
         return Date(timeIntervalSince1970: raw)
     }
 
-    /// 被「稍后」过的 build。0 = 没有（build 号从 1 起，0 是安全哨兵）
-    private var dismissedBuild: Int {
-        return defaults.integer(forKey: Self.keyDismissedBuild)
+    /// 被「稍后」过的发布标识（"build|version"）。空串 = 没有。
+    private var dismissedReleaseKey: String {
+        return defaults.string(forKey: Self.keyDismissedRelease) ?? ""
+    }
+
+    /// 「稍后」记忆键的值：发布标识（与 `AppRelease.id` 同一格式，语义也同一件事）
+    private func dismissalKey(for release: AppRelease) -> String {
+        return "\(release.build)|\(release.version)"
     }
 
     private func markChecked() {
@@ -377,8 +441,32 @@ final class UpdateStore: ObservableObject {
             return
         }
 
-        guard latest.build > local else {
+        // ## 为什么 build 是主键（原文保留）
+        // 1. **字符串比较会被字典序骗**：`"3.10.0" < "3.9.0"` 为真，于是 3.9 之后
+        //    的每一个版本都"不比本机新"，更新提示从此永久失效 —— 而且不报错、很难发现。
+        // 2. **本地拿到的未必是干净的版本号**：可能是 `"3.7.0 (13)"` 这种拼串，根本没有可比性。
+        // 3. **服务端保证了单调**：发布接口对 `build < 当前 latest.build` 返回 `400 build_regression`，
+        //    所以远端 build 单调不减，App 侧只需要一个 `>`。
+        //
+        // ## 为什么同 build 还要比一次版号（3.9.0 放宽）
+        // 服务端只拒 `build < latest`（400 build_regression），**同 build 重发是合法操作**
+        // —— 管理页对同一个 build 改了版本名 / 说明后重新发布，就是用户遇到的场景：
+        // 手机上装的就是这个 build，只比 build 会永远判定"已是最新"，重发的内容到不了用户手里。
+        // 所以：build 严格大于 → 有更新；build 相等且本机读得到版本名、与远端不同 → 也算有更新。
+        // 版本名读不到（`localVersion` 为 nil）时退回"只比 build"：
+        // 宁可不弹，也不弹一个自己都拿不准的更新（与 localBuild 的兜底同一条纪律）。
+        let isUpdateAvailable: Bool
+        if latest.build > local {
+            isUpdateAvailable = true
+        } else if latest.build == local, let localVersion = localVersion {
+            isUpdateAvailable = latest.version != localVersion
+        } else {
+            isUpdateAvailable = false
+        }
+
+        guard isUpdateAvailable else {
             release = nil
+            isForced = false
             state = .upToDate
             markChecked()
             return
@@ -386,10 +474,20 @@ final class UpdateStore: ObservableObject {
 
         release = latest
         state = .available(latest)
+        // 强更门槛（3.9.0）：远程配置给了 minBuild 且本机 build 低于它 → 弹窗不可关闭。
+        // 耦合方向只有一条：UpdateStore 读 RemoteConfigStore（配置是更新判定的输入之一），
+        // 反向禁止 —— RemoteConfigStore 不引用 UpdateStore，避免成环。
+        // 配置还没拉到（冷启动竞速）时按"非强制"处理，下一次检查会重新评估。
+        if let minBuild = RemoteConfigStore.shared.latest?.values?.minBuild {
+            isForced = local < minBuild
+        } else {
+            isForced = false
+        }
         markChecked()
-        // 已经被「稍后」过的同一个 build 不再自动弹：用户已经做过这个决定，
-        // 再弹就是拿"我们觉得你该装"覆盖"你说过先不装"
-        if latest.build != dismissedBuild {
+        // 已经被「稍后」过的同一个发布（build + 版本名）不再自动弹：用户已经做过这个决定，
+        // 再弹就是拿"我们觉得你该装"覆盖"你说过先不装"。同 build 重发新版本名 = 新的 key
+        // = 用户还没见过 = 自动弹恢复。
+        if dismissalKey(for: latest) != dismissedReleaseKey {
             presentedRelease = latest
         }
     }

@@ -17,6 +17,10 @@ struct AppUpdateSection: View {
 
     @ObservedObject private var store = UpdateStore.shared
 
+    /// 60 秒限频拦截时的瞬时反馈（3.9.0）。nil = 不显示；
+    /// 正常发起的「正在检查…」由状态机（`subtitle`）接管，不经过这里。
+    @State private var flashFeedback: String?
+
     /// 显式空 init：`@ObservedObject` 是 private 存储属性，
     /// 否则自动生成的 memberwise init 会被降级成 private，跨文件构造编译不过。
     init() {}
@@ -71,9 +75,9 @@ struct AppUpdateSection: View {
             }
         case .idle, .upToDate:
             CapsuleGlassButton(title: "检查更新", icon: "arrow.clockwise") {
-                // 手动点击**同样**走 6 小时闸门：连点只有第一次真发请求。
-                // 拿不准时就把按钮置灰（下面），而不是让它点了没反应。
-                Task { await store.check(force: false) }
+                // 真·立即检测（3.9.0）：跳过 6 小时闸门，只受 60 秒客户端限频。
+                // 限频拦截时给 2 秒瞬时反馈；正常发起的「正在检查…」由状态机接管。
+                Task { await runCheckNow() }
             }
             .disabled(!store.canCheckNow)
             .opacity(store.canCheckNow ? 1 : 0.55)
@@ -102,6 +106,10 @@ struct AppUpdateSection: View {
 
     /// 第二行：当前版本 + 最近检查时间。四种状态各有各的说法，绝不用一条「—」糊过去
     private var subtitle: String {
+        // 限频拦截的瞬时反馈最优先：它比"N 分钟前检查过"更像是对这次点击的直接回答
+        if let flash = flashFeedback {
+            return flash
+        }
         let current = "当前 " + store.currentVersionText
         switch store.state {
         case .available(let release):
@@ -115,6 +123,25 @@ struct AppUpdateSection: View {
                 return current + " · 还没有检查过"
             }
             return current + " · " + Formatters.relative(checked) + "检查过"
+        }
+    }
+
+    // MARK: - 立即检测
+
+    /// 发起真·立即检测；被 60 秒限频拦下时闪一条「刚检查过，稍等一分钟」（2 秒后清空）。
+    private func runCheckNow() async {
+        let started = await store.checkNow()
+        guard started == false else { return }
+        flashFeedback = "刚检查过，稍等一分钟"
+        do {
+            try await Task.sleep(for: .seconds(2))
+        } catch {
+            // 视图销毁会取消 sleep，此时不该再碰状态
+            return
+        }
+        // 只清自己写的这条：期间用户可能又点了检查、状态机文案已经接管
+        if flashFeedback == "刚检查过，稍等一分钟" {
+            flashFeedback = nil
         }
     }
 }

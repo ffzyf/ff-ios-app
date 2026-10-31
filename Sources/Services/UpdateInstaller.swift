@@ -34,7 +34,17 @@ enum UpdateInstaller {
     ///
     /// 唯一的用处就是兜底：设备上没装全能签时，总得给一条能走通的路
     /// （那页讲三件事：没有全能签怎么装、复制 ipa 直链、在「网页打开」里粘贴直链）。
+    ///
+    /// 3.9.0：远程配置的 `installGuideURL` **优先**（换域名只改云端配置，不用发版 ——
+    /// 热更通道的核心用途之一）；拿不到（配置没拉到 / 字段缺失 / URL 非法）回退硬编码。
+    /// 引导页是兜底路径，绝不能因为配置缺失就变成 nil。
+    @MainActor
     static func installGuideURL() -> URL? {
+        if let raw = RemoteConfigStore.shared.latest?.values?.installGuideURL,
+           raw.isEmpty == false,
+           let url = URL(string: raw) {
+            return url
+        }
         return Endpoint.url(base: Endpoint.briefBase, path: Endpoint.installGuidePath)
     }
 

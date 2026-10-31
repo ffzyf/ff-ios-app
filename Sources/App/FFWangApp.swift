@@ -98,6 +98,13 @@ struct FFWangApp: App {
                 guard scenePhase == .active else { return }
                 await DaylightActivityCoordinator.shared.monitorForeground()
             }
+            // 远程配置（3.9.0）：挂在云控更新**之前**的第四个同 id task ——
+            // 配置（minBuild / installGuideURL）是更新判定的输入，先到先备好。
+            // 1 小时闸门在 `refreshIfNeeded()` 内部；失败静默、不清空旧值。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await RemoteConfigStore.shared.refreshIfNeeded()
+            }
             // 云控更新（3.8.0）：同样挂在 scenePhase 上，第三个同 id 的 task
             // （与上面两个各自独立启动、独立取消，这是 SwiftUI 给"一个信号多个消费者"的写法）。
             //

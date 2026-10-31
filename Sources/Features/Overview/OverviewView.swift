@@ -7,6 +7,8 @@ import Foundation
 /// ```
 /// 日期头
 /// ─ 32 ─
+/// 公告横幅（远程配置下发才有，3.9.0 热更通道）
+/// ─ 32 ─
 /// 红石 hero 240                    ┐ 组内 12
 /// 简报 medium 168                  ┘
 /// ─ 32 ─
@@ -35,6 +37,10 @@ struct OverviewView: View {
 
     @State private var showsSettings: Bool = false
 
+    /// 公告横幅的数据源（3.9.0）。单例直读 + ObservedObject：配置到达时横幅原地出现，
+    /// 不需要整页刷新。页面不发请求 —— 拉取由 `FFWangApp` 的 task 统一驱动（§7.3 同一条纪律）。
+    @ObservedObject private var config = RemoteConfigStore.shared
+
     init(selectedTab: Binding<AppTab>, scrollPosition: Binding<ScrollPosition>) {
         self._selectedTab = selectedTab
         self.scrollPosition = scrollPosition
@@ -47,6 +53,7 @@ struct OverviewView: View {
                 OverviewHeader(lunar: lunarText) {
                     showsSettings = true
                 }
+                announcementSlot
                 topPair
                 loadedBlocks
             }
@@ -95,6 +102,21 @@ struct OverviewView: View {
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
+        }
+    }
+
+    // MARK: - 公告横幅
+
+    /// 远程配置下发的公告（3.9.0）。announcement 缺失 / 已被本 revision 关闭时整条不渲染
+    /// —— 首页版式回到与 3.8.x 逐行一致，横幅是"叠加项"而不是"占位项"。
+    @ViewBuilder
+    private var announcementSlot: some View {
+        if let announcement = config.latest?.values?.announcement,
+           announcement.title.isEmpty == false || announcement.body.isEmpty == false {
+            AnnouncementBanner(
+                announcement: announcement,
+                revision: config.latest?.revision ?? 0
+            )
         }
     }
 

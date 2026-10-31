@@ -11,6 +11,12 @@ import SwiftUI
 /// 两条不能破的底线：
 /// · **必须能关掉**：右上角关闭 + 底部「稍后」，两个都走同一个 dismiss；
 /// · **不做强制更新**：自己的 App，用户说"稍后"就该能继续用，不拦启动。
+///   （但 3.9.0 起远程配置 `minBuild` 可触发强制更新，见下文 `isForced` 例外。）
+///
+/// 3.9.0 的例外：远程配置给了 `minBuild` 且本机 build 低于它时（`UpdateStore.isForced`），
+/// 本层退让成"不可关闭"—— 隐藏「稍后」、关闭按钮置灰、下滑手势一并禁掉，
+/// 并加一行「此版本必须更新」。这是唯一合法的强制形态：**只拦弹层，不拦启动**，
+/// 用户仍能正常用 App 的其它功能。
 struct UpdateSheet: View {
 
     /// 要展示的版本。由 `.sheet(item:)` 传入，所以**非可选** —— 层内不需要再判空
@@ -44,6 +50,9 @@ struct UpdateSheet: View {
             }
             .scrollIndicators(.hidden)
         }
+        // 强更（3.9.0）：下滑手势与右上角关闭同进退 —— 只拦其中一个，用户会从另一条路溜出去，
+        // "必须更新"就成了空话。三条出口（右上角 ×、「稍后」、下滑）同时封死才算数。
+        .interactiveDismissDisabled(store.isForced)
     }
 
     // MARK: - 头部
@@ -58,12 +67,23 @@ struct UpdateSheet: View {
                 Text("FF大王 · 云控更新")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
+                // 强更标记（3.9.0）：单独一行红字，而不是塞进副标题 ——
+                // "必须"与"云控更新"是两件事，混在一行会被读成修饰语
+                if store.isForced {
+                    Text("此版本必须更新")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.statusError)
+                }
             }
             Spacer(minLength: 8)
-            // 右上角关闭。与「稍后」是同一个 dismiss —— 区别只是不记 dismissedBuild
+            // 右上角关闭。与「稍后」是同一个 dismiss —— 区别只是不记「稍后」记忆键。
+            // 强更时不可用（置灰而不是隐藏：位置还在，用户知道这里本可以关，
+            // 是"这版不让关"而不是"界面缺了个按钮"）
             IconGlassButton(icon: "xmark", size: 36) {
                 dismiss()
             }
+            .disabled(store.isForced)
+            .opacity(store.isForced ? 0.4 : 1)
             .accessibilityLabel("关闭")
         }
     }
@@ -153,16 +173,20 @@ struct UpdateSheet: View {
             .accessibilityLabel("安装新版本")
             .accessibilityHint("唤起全能签下载并安装这个版本")
 
-            Button(action: {
-                Haptics.light()
-                // 关掉 + 记住这个 build：与右上角关闭同一个 dismiss，只是多记一笔
-                store.snooze()
-            }) {
-                Text("稍后")
-                    .frame(maxWidth: .infinity)
+            // 强更（3.9.0）：隐藏「稍后」而不是置灰 —— 强制场景里它永远不可点，
+            // 留一个灰按钮只会让人反复去点
+            if store.isForced == false {
+                Button(action: {
+                    Haptics.light()
+                    // 关掉 + 记住这个发布：与右上角关闭同一个 dismiss，只是多记一笔
+                    store.snooze()
+                }) {
+                    Text("稍后")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryCTAStyle())
+                .accessibilityLabel("稍后")
             }
-            .buttonStyle(SecondaryCTAStyle())
-            .accessibilityLabel("稍后")
         }
     }
 

@@ -65,6 +65,13 @@ enum Endpoint {
     /// —— 那是"没有更新"，**不是**错误（App 侧据此不弹任何东西）。
     /// 失败时是统一信封 `{ok:false, error:{code,message}}`，传输层看不出来，由 `UpdateStore` 判。
     static let appVersionPath = "/api/app/version"
+    /// 云控远程配置（热更通道，3.9.0）：`GET` **匿名可读**（`Cache-Control: public, max-age=60`），
+    /// `POST` 与发布接口同一套鉴权（`x-release-token` / `ce_auth` 会话）。
+    ///
+    /// `appVersionPath` 管"要不要弹更新"，这里管"运行时可调的展示配置"：
+    /// 公告横幅 / 强更门槛（minBuild）/ 安装引导页地址。换这些不用重新发版 ——
+    /// 这正是热更通道存在的意义。App 侧唯一消费者是 `RemoteConfigStore`。
+    static let appConfigPath = "/api/app/config"
     /// 安装引导页（**静态页**，`app.skyzyf335.top/install/`）。
     ///
     /// 只有一个用处：唤起全能签失败（设备上没装那个 App）时的回退落点 ——
