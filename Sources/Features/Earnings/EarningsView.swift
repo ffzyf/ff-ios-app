@@ -3,8 +3,11 @@ import SwiftUI
 /// 收益工作站（V3.2 新增，替换原来的「文章」Tab 位）。
 ///
 /// 网页端（`creator-earnings-tracker.pages.dev`）的收益统计搬到这里：总额 / 三态拆分 /
-/// 本月新增 / 平台占比 / 活动流水。**只读** —— 加记账、改活动仍在网页端，
-/// 因为那些都要键盘长输入，塞进手机反而更难用（与问卷工作台的分工一致）。
+/// 本月新增 / 平台占比 / 活动流水。
+///
+/// **能记一笔，但账不在本地**：App 通过 `POST /api/app/earnings/entry` 往服务端追加条目
+/// （见 `EarningsRecordSheet`），与网页端读同一份 KV。建活动 / 改活动 / 勾「已发」仍在网页端 ——
+/// 那些都要长表单，塞进手机反而更难用（与问卷工作台的分工一致）。
 ///
 /// 未登录时给登录引导页（不是弹窗）：`EarningsAuth` 要管理密码，弹窗一关就得重来。
 struct EarningsView: View {
@@ -15,6 +18,8 @@ struct EarningsView: View {
     @State private var password: String = ""
     @State private var loginError: String?
     @State private var isSubmitting: Bool = false
+    /// 「记一笔」表单
+    @State private var showsRecord: Bool = false
     @FocusState private var isPasswordFocused: Bool
 
     let scrollPosition: Binding<ScrollPosition>
@@ -31,8 +36,6 @@ struct EarningsView: View {
                 if auth.isLoggedIn {
                     if let summary = store.summary {
                         heroCard(summary: summary)
-                        // 本地账本（自己记的账）。与上面的服务端统计是两套数，只做相邻展示，不相加。
-                        LedgerSection()
                         if summary.platformBreakdown.isEmpty == false {
                             breakdownCard(summary: summary)
                         }
@@ -65,6 +68,9 @@ struct EarningsView: View {
         .task {
             // 已登录才拉：没凭证时 load() 自己会清成空态，不发请求
             await store.load()
+        }
+        .sheet(isPresented: $showsRecord) {
+            EarningsRecordSheet()
         }
     }
 
@@ -120,16 +126,22 @@ struct EarningsView: View {
     private func heroCard(summary: EarningsSummary) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("总计")
-                        .font(Typography.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                    Text(EarningsMoney.formatCents(summary.total))
-                        .font(.system(size: 40, weight: .bold, design: .rounded))
-                        .foregroundStyle(Theme.textPrimary)
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.6)
-                        .lineLimit(1)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("总计")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                        Text(EarningsMoney.formatCents(summary.total))
+                            .font(.system(size: 40, weight: .bold, design: .rounded))
+                            .foregroundStyle(Theme.textPrimary)
+                            .monospacedDigit()
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if canRecord {
+                        recordButton
+                    }
                 }
 
                 HStack(spacing: 0) {
@@ -156,6 +168,38 @@ struct EarningsView: View {
             }
             .padding(Spacing.cardPadding)
         }
+    }
+
+    /// 能不能记账：**登录 + 至少一个活动**。
+    ///
+    /// 没有活动就不给入口，而不是点进去才发现"无活动可选" —— 服务端的 entry 必须挂在
+    /// activity 下面（`activityId` 必填），没有活动等于没有记账的地方。
+    private var canRecord: Bool {
+        return auth.isLoggedIn && store.activities.isEmpty == false
+    }
+
+    /// 「记一笔」入口（`heroCard` 右上角）。
+    private var recordButton: some View {
+        Button {
+            Haptics.light()
+            showsRecord = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.onLime)
+                Text("记一笔")
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.onLime)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background { Capsule().fill(Theme.lime) }
+            .overlay { Capsule().strokeBorder(Theme.glassStrokeTop, lineWidth: 1) }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("记一笔收入")
     }
 
     private func statCell(title: String, cents: Int, tint: Color) -> some View {
@@ -416,10 +460,18 @@ struct EarningsView: View {
     // MARK: - 页脚
 
     private var footerNote: some View {
-        Text("App 里只读：新增记账、编辑活动仍在网页端。")
-            .font(Typography.captionXS)
-            .foregroundStyle(Theme.textTertiary)
-            .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("App 里能记一笔、看统计；建活动 / 改活动 / 勾「已发」仍在网页端。")
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textTertiary)
+            if store.activities.isEmpty {
+                Text("先在网页端建一个活动，回来就能记账（每笔都得挂在活动下面）。")
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.statusWarn)
+            }
+        }
+        .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+        .padding(.horizontal, 4)
     }
 
     private func sectionTitle(_ text: String, icon: String) -> some View {

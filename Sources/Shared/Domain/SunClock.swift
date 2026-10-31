@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// 天空时段 —— 简报卡「天际线」用它决定配色，也决定卡片上那句话说什么。
@@ -98,6 +99,96 @@ enum SunClock {
         case .blueDusk:
             return (today.sunset, today.sunset.addingTimeInterval(30 * 60))
         }
+    }
+}
+
+// MARK: - 太阳在天上的位置（V3.4：桌面小组件的「实时太阳」）
+//
+// 用户要的不是一个装饰性的太阳图标，而是**「太阳现在在哪儿」**：日出贴左、正午最高、
+// 日落贴右，走一条拱形轨迹。所以这里只做纯数学 —— 不给颜色、不碰 SwiftUI 视图，
+// 位置一律用**归一化坐标**（0…1，左上角为原点）返回，由调用方乘上画布尺寸。
+// 纯函数意味着它可以被单测、被预览、被 App 内那张卡复用，零副作用。
+
+extension SunClock {
+
+    /// 太阳轨迹的几何常量（归一化，0 = 画布顶 / 左）。
+    ///
+    /// `crestY` 必须与 `WidgetTheme.skyCrestY`（0.62）一致：太阳落在"弧顶高度"上，
+    /// 正好压在那条地平线亮边上。两侧各留 0.10 的边，是给卡片圆角让位 ——
+    /// 太阳贴在 0 / 1 的角上会被裁掉半个，看起来像画错了。
+    enum SunTrack {
+        /// 日出时太阳的水平位置
+        static let leftX: CGFloat = 0.10
+        /// 日落时太阳的水平位置
+        static let rightX: CGFloat = 0.90
+        /// 拱顶高度（天空区上方）
+        static let peakY: CGFloat = 0.10
+        /// 地平线弧顶高度（= `WidgetTheme.skyCrestY`）
+        static let crestY: CGFloat = 0.62
+        /// 太阳落下后余晖衰减的时长（分钟）：超过它天空里不再有任何太阳的痕迹
+        static let glowFadeMinutes: Double = 45
+    }
+
+    /// 太阳此刻在天空里的「印记」：位置、是否露出地平线、光晕强度。
+    ///
+    /// 为什么不只返回一个 `CGPoint`：夜里夕阳已经落到弧线以下，视图需要知道
+    /// **「这次不画本体，只留一点余晖」**，而余晖还要按"落下多久"衰减。
+    /// 三件事一起返回，调用方就不必再算一遍日出日落。
+    struct SunMark {
+        /// 归一化位置：x 从左到右 0…1，y 从上到下 0…1
+        let point: CGPoint
+        /// 太阳本体是否在地平线以上（false = 夜里，只画余晖不画圆盘）
+        let isUp: Bool
+        /// 光晕强度 0…1（在地平线上恒为 1，落下后按 `glowFadeMinutes` 线性衰减到 0）
+        let intensity: CGFloat
+    }
+
+    /// 太阳此刻的印记。算不出日出日落（极昼极夜）时返回 nil。
+    ///
+    /// 轨迹是一条**正弦拱**，不是直线也不是抛物线：
+    /// - 归一化进度 `p = (now − sunrise) / (sunset − sunrise)`，夹到 0…1；
+    /// - `x = leftX + (rightX − leftX) · p` —— 水平匀速，用户读得出"过了一半的时间"；
+    /// - `y = crestY − (crestY − peakY) · sin(π · p)` —— `sin(π·p)` 在 0 / 1 处为 0、
+    ///   在 0.5 处为 1，所以**日出日落两端自动落在弧顶高度（0.62）、正午升到 0.10**，
+    ///   不用写任何分段判断。正弦比抛物线好在两端"起飞/落地"更缓，接近真实日轨。
+    static func sunMark(at now: Date,
+                        on date: Date,
+                        crestY: CGFloat = SunTrack.crestY,
+                        peakY: CGFloat = SunTrack.peakY) -> SunMark? {
+        guard let today = times(on: date) else { return nil }
+        let span = today.sunset.timeIntervalSince(today.sunrise)
+        // 极昼 / 极夜被 times(on:) 拦掉后 span 仍然可能是 0，这里再兜一层
+        guard span > 0 else { return nil }
+
+        let raw = now.timeIntervalSince(today.sunrise) / span
+        let isUp = raw >= 0 && raw <= 1
+        let progress = CGFloat(min(max(raw, 0), 1))
+
+        let x = SunTrack.leftX + (SunTrack.rightX - SunTrack.leftX) * progress
+        let arch = CGFloat(sin(Double.pi * Double(progress)))
+        let y = crestY - (crestY - peakY) * arch
+
+        var intensity: CGFloat = 1
+        if !isUp {
+            // 落下多久了 / 还有多久升起 —— 取离地平线最近的那一头
+            let gap: TimeInterval = raw < 0
+                ? today.sunrise.timeIntervalSince(now)
+                : now.timeIntervalSince(today.sunset)
+            let minutes = max(0, gap) / 60
+            intensity = max(0, 1 - CGFloat(minutes / SunTrack.glowFadeMinutes))
+        }
+
+        return SunMark(point: CGPoint(x: x, y: y), isUp: isUp, intensity: intensity)
+    }
+
+    /// 太阳在天空中的归一化位置。nil = 太阳在地平线以下（夜里）。
+    ///
+    /// 这是对外的主入口（视图只关心"画在哪儿"）：夜里的余晖由 `sunMark` 负责，
+    /// 这里刻意返回 nil，避免调用方写出"夜里天上还挂个球"。
+    /// `progress = 0.5` 时返回接近拱顶的值（y ≈ 0.10）。
+    static func sunPosition(at now: Date, on date: Date) -> CGPoint? {
+        guard let mark = sunMark(at: now, on: date), mark.isUp else { return nil }
+        return mark.point
     }
 }
 

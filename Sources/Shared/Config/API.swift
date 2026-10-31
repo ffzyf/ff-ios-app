@@ -142,6 +142,15 @@ enum API {
         return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsPath)
     }
 
+    /// 追加一笔收益条目（`POST /api/app/earnings/entry`）。
+    ///
+    /// 与 `earnings()` 同一个 `rockBase`：读写打的是同一台机器、同一份 KV，
+    /// 所以 App 记的账网页端立刻可见（存本地就会变成第二个真相源，跟网站对不上账）。
+    /// 请求方法、请求体、Cookie 都由 `EarningsStore.addEntry` 填 —— 本层只拼地址。
+    static func earningsEntry() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsEntryPath)
+    }
+
     // MARK: - 收益站鉴权（与问卷站同一套路径，但域名不同）
 
     /// 收益站登录。**路径与问卷站完全一致**（`/api/auth/login`），只有域名不同

@@ -17,8 +17,12 @@ import WidgetKit
 /// **为什么这张卡不用天际线**（与简报卡唯一的"故意不对称"）：红石的信息密度是简报卡的三倍
 /// （大字时刻 / 倒计时 / 场次表 / 倍率）。一整块随当地时间变色的天空，白天那一档是亮蓝
 /// （`#BFE4FF`），白字压上去直接不合格 —— 大字时刻会被天色压得看不清。
-/// 所以红石的底是**静态的夜**：星点 + 云海 + 一团暖光（`WidgetGameBackdrop`），
-/// 天色不参与信息表达，颜色的职责只有一个：让画面活着。
+/// 所以红石的底色**不跟时刻走**，而是**跟地图走**：`WidgetGameBackdrop(mapName:)` 按当前场次的
+/// 地名（`暮土·失落方舟` → `暮土`）画一张该地图的意象底（天色 + 独有剪影），
+/// 亮度由各档自己的「纱」压住，字始终读得清。用户看一眼背景就知道自己在哪个地图。
+///
+/// 除了「跟地图走」这一点，颜色的职责没变：它只负责让画面活着，不参与任何信息编码
+/// （倍率 / 场次 / 倒计时全是文字与 token，不靠背景色区分）。
 ///
 /// 两条不能破的约束（沿用旧版）：
 /// 1. 倒计时交给系统画：`Text(timerInterval:countsDown:)` 秒级走时但零刷新成本；
@@ -65,8 +69,24 @@ struct RedstoneWidgetView: View {
             // 整卡可点：点一下跳进 App 的红石页（冷启动 / 热启动都生效，见 RootView.onOpenURL）
             .widgetURL(WidgetDeepLink.rock)
             .containerBackground(for: .widget) {
-                WidgetGameBackdrop()
+                // 背景跟着**当前场次的地图**走（不是"今天第一场"，也不是"日历里的地图"）：
+                // 卡片上大字写的是哪一场，背景就该是哪一场 —— 否则用户会看到"暮土"配着云野的云。
+                // 没数据 / 待确认时 mapName 是空串或"待确认"，背景自动退化成默认夜（见背景文件）。
+                WidgetGameBackdrop(mapName: backdropMapName)
             }
+    }
+
+    /// 背景用的地名：只取 `·` 之前那一段（`暮土·失落方舟` → `暮土`）。
+    ///
+    /// 切分逻辑刻意留在这里而不是在背景里做两遍：`WidgetGameBackdrop` 自己也做一次
+    /// （它是通用组件，可能被传进完整地图名），这里是**调用点的语义**——
+    /// "这张卡展示的是哪一场，就用哪一场的地名"，两处都容错，谁都不会因为多切一刀出错。
+    private var backdropMapName: String {
+        let map = entry.focus?.map ?? ""
+        guard let dot = map.firstIndex(where: { $0 == "·" || $0 == "・" || $0 == "•" }) else {
+            return map
+        }
+        return String(map[map.startIndex..<dot]).trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - 内容分派

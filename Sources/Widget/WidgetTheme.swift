@@ -70,4 +70,60 @@ enum WidgetTheme {
     static let skyCrestY: CGFloat = 0.62
     /// 地平线两端（占卡片高度）
     static let skyEdgeY: CGFloat = 0.74
+
+    // MARK: - 实时太阳（V3.4：天空里那颗「现在在哪儿」的太阳）
+    //
+    // 尺寸取自参考图：太阳本体是一个"发光的小圆盘"—— 比一颗星大（≈4pt），
+    // 比按钮小（≥16pt），所以定在 9pt。外面一圈 1.5pt 的高光环，再外面才是光晕。
+    //
+    // **颜色一个都没有新造**：太阳核 ⇒ `sky.edge`（每一档天色里最亮的那一支），
+    // 光晕 ⇒ 按时段从 `sky.top` / `sky.horizon` / `sky.edge` 里挑。
+    // 符合 PRD「View 层不出现裸颜色字面量」，也自动随天色（物理色）走。
+
+    /// 太阳本体直径（pt）
+    static let sunCoreDiameter: CGFloat = 9
+    /// 本体外面那圈高光环的线宽
+    static let sunRingWidth: CGFloat = 1.5
+    /// 高光环比本体大多少（直径差）—— 1.5pt 的环要离开本体一点才看得见
+    static let sunRingGap: CGFloat = 3.5
+    /// 光晕半径占画布宽度的比例（参考图里那团扩散光：约 45% 屏宽）
+    static let sunGlowFactor: CGFloat = 0.45
+    /// 光晕最中心的不透明度（向外迅速衰减到 0）
+    static let sunGlowAlpha: Double = 0.45
+    /// 夜间余晖的半径占比（比白天的光晕小得多，只是一点"背光处"的痕迹）
+    static let sunEmberFactor: CGFloat = 0.18
+    /// 太阳正下方那段地平线额外加粗的线宽
+    static let sunEdgeBoostWidth: CGFloat = 2.6
+
+    /// 太阳本体：取当前时段天空里最亮的那支 `edge`（正午近白、晨昏暖白）
+    static func sunCore(_ sky: Theme.SkyColors) -> Color {
+        return sky.edge
+    }
+
+    /// 本体外面那圈高光环（同一支色，压一档不透明度 —— 环要"亮而薄"，不能抢本体）
+    static func sunRing(_ sky: Theme.SkyColors) -> Color {
+        return sky.edge.opacity(0.82)
+    }
+
+    /// 光晕主色：**随时刻变**。
+    ///
+    /// 日出、日落都取 `sky.top` —— 那两档是唯一"橙红 / 深橙"的天色；
+    /// 黄金时刻取 `sky.horizon`（暖黄），白天取 `sky.edge`（近白）。
+    /// 全部是 `Theme.sky(phase)` 里的既有 token，本文件一个颜色字面量都没有。
+    static func sunGlow(_ sky: Theme.SkyColors, phase: SkyPhase) -> Color {
+        switch phase {
+        case .sunrise, .blueDawn:
+            return sky.top
+        case .golden:
+            return sky.horizon
+        case .sunset, .blueDusk:
+            return sky.top
+        case .day:
+            return sky.edge
+        case .night:
+            // 夜里的 `horizon` 已经压到近黑，余晖会被自己的底色吃掉；
+            // 改用 `edge`（那一档是冷蓝灰），才在深色地面上留得下一点痕迹
+            return sky.edge
+        }
+    }
 }

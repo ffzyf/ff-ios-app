@@ -83,9 +83,12 @@ struct BriefWidgetView: View {
         // 整卡可点：点一下跳进 App 的简报页（冷启动 / 热启动都生效，见 RootView.onOpenURL）
         .widgetURL(WidgetDeepLink.brief)
         .containerBackground(for: .widget) {
+            // `date:` 是 V3.4 的「实时太阳」—— 天空里那颗太阳按 `entry.date` 算位置，
+            // 所以预渲染的那一帧和卡片上的时间永远是同一个时刻（见 `SunClock.sunMark`）。
             WidgetSkyBackdrop(phase: phase,
                               crestY: WidgetTheme.skyCrestY,
-                              edgeY: WidgetTheme.skyEdgeY)
+                              edgeY: WidgetTheme.skyEdgeY,
+                              date: entry.date)
         }
     }
 

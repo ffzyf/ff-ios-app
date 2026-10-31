@@ -33,9 +33,27 @@ struct RootView: View {
     var body: some View {
         ZStack {
             // 文章列表是阅读页，保持中性（PRD §4.1：光斑只留在概览与简报）
+            //
+            // `glow` 也随 `tab` 变（只有文章页关灯），所以这块全屏径向渐变同样会被
+            // `withAnimation(Motion.tab)` 拖进动画事务里逐帧重算 —— 一起摘掉（原因见 `tabSelection`）。
             PageBackground(glow: tab != .articles)
+                .transaction { $0.animation = nil }
             // 条件渲染：同一时刻只有 1 个页面在视图树里（B3）
+            //
+            // **卡顿修复的唯一一处关键改动**：页面子树不参与动画。
+            // `tab` 一变，这里发生的不是"某个东西在移动"，而是「整页销毁 → 新建 → 布局 →
+            // 页面内的 `.task` 重启 → 玻璃层重新采样」。把它塞进 `Motion.tab` 那条 spring
+            // （response 0.35s ≈ 20 帧）里，等于让主线程在 20 帧内反复为一棵**新建的全屏子树**
+            // 求值 —— 16.7ms 一帧的预算装不下，于是掉帧，手感就是用户说的"点着卡卡的"。
+            //
+            // 页面替换本来就该是瞬时的：用户期待的是"换了一页"，不是"这一页在滑过去"。
+            // 所以这里把动画从这条子树上摘掉，而**选中圆的滑动仍然有动画**（见 `tabSelection`）——
+            // 后者的代价是同一棵 TabBar 子树里的一个圆，和整页重建不是一个量级。
+            //
+            // 注意：这里只摘动画，**不动** B3 的"只渲染当前页"设计。5 个页面同时进视图树
+            // 会更卡（真玻璃采样层 × 5），那是另一个方向的性能优化，不要为了这个 bug 去改它。
             page(for: tab)
+                .transaction { $0.animation = nil }
         }
         // 换配色 → 整块重建。挂在 ZStack 上而不是 RootView 上，`tab` 等 @State 不会被重置。
         .id(appearance.themeId)
@@ -72,6 +90,23 @@ struct RootView: View {
     }
 
     /// 自绘 Tab 栏只认 Int 索引，这里做一次桥接；切换动画统一在 setter 里给。
+    ///
+    /// **`withAnimation(Motion.tab)` 只该管「选中圆」，不该管「页面」。** 这个 setter 里的
+    /// `tab` 同时驱动两件完全不同量级的事：
+    ///
+    /// 1. `FloatingTabBar` 里选中圆的 `matchedGeometryEffect` —— 圆从旧位置滑到新位置。
+    ///    它和 TabBar 是同一棵极小的子树（六个小图标 + 一个圆），每帧求值可以忽略，**必须保留动画**：
+    ///    去掉之后圆会硬跳，那正是上一版修掉的观感问题。
+    /// 2. `page(for: tab)` 的整页替换 —— B3 条件渲染下这是「销毁一棵全屏子树 + 新建一棵」，
+    ///    跟着 spring 走就是每帧为整页求值，必然掉帧。
+    ///
+    /// 所以分工是：**动画留在圆上（这里），页面侧用 `.transaction { $0.animation = nil }`
+    /// 把动画摘掉（`body` 里）**。既不是"去掉 withAnimation"（圆会硬跳），
+    /// 也不是"把页面也包进动画"（就是现在的卡顿）。
+    ///
+    /// `Haptics.light()` 保持同步调用，不做去抖也不挪到异步：它就是一次
+    /// `UIImpactFeedbackGenerator.impactOccurred()`，几毫秒内返回，不是卡顿主因。
+    /// （旁证：用户说的是"画面卡"，如果触觉是瓶颈，手感和声音会一起延迟 —— 那会描述成"点了没反应"。）
     private var tabSelection: Binding<Int> {
         Binding(
             get: { tab.rawValue },

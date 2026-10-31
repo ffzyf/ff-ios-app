@@ -47,6 +47,13 @@ enum Endpoint {
     static let briefPath = "/api/app/brief"
     /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
     static let earningsPath = "/api/app/earnings"
+    /// 追加一笔收益条目（`POST`，同样**需要 `ce_auth`**）。
+    ///
+    /// 三个只有这个接口才有的行为（`EarningsStore.addEntry` 全部要接住）：
+    /// · 请求体是 `EarningsEntryInput`（`title`/`type`、`amount`/`amountCents`、`date`/`time` 双写）；
+    /// · `paid` 由服务端 `buildNewEntry` 决定（新记的恒为待发），请求体里**没有**这个字段；
+    /// · 并发写冲突返回 **409 + `retry: true`**（服务端乐观锁），不是普通的参数错误。
+    static let earningsEntryPath = "/api/app/earnings/entry"
 
     // MARK: - 构造
 
