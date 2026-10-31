@@ -1,0 +1,94 @@
+# Codemagic 出包配置 —— GitHub Actions 额度烧完时的免费替补
+#
+# 为什么存在这个文件：GitHub Actions 的 macOS runner 按 10 倍扣配额，
+# Free 账号 2000 分钟等价额度实际只够约 200 分钟 macOS，一次全量 Swift 编译就吃掉一半。
+# Codemagic 的免费层是 **500 分钟 macOS M2 / 月**（个人账号，每月 1 日重置），
+# 而且不计倍率 —— 20 分钟的构建就是 20 分钟。按一次 8 分钟算，一个月能出 60 次包。
+#
+# 用法（一次性）：
+#   1. codemagic.io 用 GitHub 登录（必须是**个人**账号，免费分钟不给 team 账号）
+#   2. Add application → 选 ffzyf/ff-ios-app → 它会自动识别本文件
+#   3. 点 Start new build → 选 workflow `ios-unsigned` → 出包
+#   产物在构建页右侧 Artifacts 里，SkyApp.ipa 可直接下载。
+#
+# 与 GitHub Actions 的关系：两边跑的是同一套 scripts/，闸门逻辑完全一致，
+# 所以哪个通道有额度就走哪个，产物等价。
+
+workflows:
+  ios-unsigned:
+    name: SkyApp 未签名 IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+    environment:
+      # Xcode 26 是硬要求：iOS 26 SDK 只有它带（本工程的 glassEffect / GlassEffectContainer 依赖）
+      xcode: latest
+      vars:
+        SCHEME: SkyApp
+
+    # 不挂任何 triggering 事件 —— 与 GitHub 侧 workflow_dispatch 对齐：只手动触发，
+    # 推代码不烧分钟。想挂 push 时再自己加 `triggering: events: [push]`。
+
+    scripts:
+      - name: 工具链（先看清 Xcode 版本）
+        script: |
+          set -e
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          sw_vers
+
+      - name: 安装 xcodegen
+        script: |
+          set -e
+          # Codemagic 的 M2 镜像默认不带 xcodegen，但它自带 Homebrew
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+          fi
+          xcodegen --version
+
+      # 与 GitHub 侧 gate job 完全相同的两道静态闸门。
+      # 放在编译**之前**：编译一次的代价是几十分钟，这两条只要几百毫秒。
+      - name: 闸门 · 主题规范
+        script: bash scripts/lint-theme.sh
+
+      - name: 闸门 · 括号与跨文件符号
+        script: python3 scripts/preflight.py
+
+      - name: 生成 Xcode 工程
+        script: xcodegen generate
+
+      # 免签名出包：不碰钥匙串、不需要证书。产物给 AltStore / Sideloadly 自签装机。
+      - name: 编译（Release / 免签名）
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project SkyApp.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: 打包 IPA
+        script: |
+          set -uo pipefail
+          APP="$(find build -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1 || true)"
+          if [ -z "${APP:-}" ]; then
+            echo "没找到 .app，编译大概率失败了"; ls -R build | head -n 120; exit 1
+          fi
+          echo "APP=$APP"
+          rm -rf Payload SkyApp.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry SkyApp.ipa Payload
+          ls -lh SkyApp.ipa
+
+    artifacts:
+      - SkyApp.ipa
+
+    publishing:
+      # 不发邮件、不传商店：只要一个能下载的文件
+      email:
+        disable: true

@@ -72,12 +72,14 @@ print('更新 %d，删除 %d' % (changed_count, len(deleted)))
 for p in deleted:
     print('  -', p)
 
-msg = ('chore: CI 改成按需触发 + 本地预检，版本号 build 4\n\n'
+DEFAULT_MSG = ('chore: CI 改成按需触发 + 本地预检，版本号 build 4\n\n'
 '此前每次 push 都自动起两台 macos runner，推一次约烧 250 计费分钟，额度因此被用光。\n'
 '· scripts/preflight.py：本地毫秒级拦住括号不配对、Theme.X/API.X 等失效引用\n'
 '· scripts/bump.sh：构建号 +1，project.yml 主 App 与 Widget 两处一起改\n'
 '· scripts/build-local.sh：用本机 Xcode 出 IPA，完全不占 GitHub 额度\n'
 '· build 3 -> build 4')
+# 用法：`python3 scripts/push.py "你的提交说明"`。不传就用上面的默认说明。
+msg = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MSG
 st, tree = api('/repos/%s/git/trees' % REPO, 'POST', {'base_tree': base_tree, 'tree': entries})
 if st not in (200, 201):
     sys.exit('tree 失败 %s %s' % (st, tree))
