@@ -24,14 +24,16 @@ enum Spacing {
     /// 列表项最小点击高度
     static let listItemMinHeight: CGFloat = 48
 
-    /// 浮动 Tab 栏高度（V3.1：56 → 74，塞得下 46pt 选中圆 + 标签）
-    static let tabBarHeight: CGFloat = 74
+    /// 浮动 Tab 栏高度（3.8.1：74 → 66，压缩栏内上下死空间 —— 推导见 `FloatingTabBar.barHeight`）
+    static let tabBarHeight: CGFloat = 66
     /// 浮动 Tab 栏左右内缩（V3.1：24 → 8，改成整幅宽，落点更大也更贴近系统栏观感）
     static let tabBarInset: CGFloat = 8
-    /// 浮动 Tab 栏距底（V3.1：16 → 10，栏变高后整体不上顶）
-    static let tabBarBottomGap: CGFloat = 10
-    /// 页面底部留白（PRD §3.1 第 9 条：至少 120pt，防浮层遮挡）
-    static let pageBottomInset: CGFloat = 120
+    /// 浮动 Tab 栏距底（3.8.1：10 → 4，栏更贴近底部安全区，少一截悬空 —— 用户原话
+    /// "底部选择栏太往下了……点击图标不顺手"）
+    static let tabBarBottomGap: CGFloat = 4
+    /// 页面底部留白（3.8.1：120 → 96。Tab 栏压矮 8pt + 底距收 6pt 后，内容底部留白跟着收；
+    /// 96 仍高于栏的实际占位 66 + 4，滚动到底不会露出"内容被栏压住"的缝隙）
+    static let pageBottomInset: CGFloat = 96
 
     /// 网格单位
     static let gridUnit: CGFloat = 8

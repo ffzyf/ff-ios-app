@@ -232,5 +232,26 @@ extension WidgetTheme {
         static let nightEdgeWidth: CGFloat = 1.0
         /// 夜里实线层的峰值不透明度（比白天低得多，才像"远处一点冷光"）
         static let nightEdgePeak: Double = 0.55
+
+        // MARK: 着色 / 透明模式（iOS 26 桌面的「着色」「透明」外观）
+        //
+        // 用户原话："最重要的你这些小组件没有适配 ios 的桌面透明效果，开了透明之后就
+        // 只能看见字，里面的效果看不见！" —— iOS 26 起用户选透明 / 着色外观时，系统用
+        // **accented 渲染模式**重画小组件：拿掉 `containerBackground` 换成玻璃，
+        // 不透明内容全部染白；**半透明内容保留不透明度**再整体染色。
+        //
+        // 所以适配的全部原理就一句话：着色模式下，把"实心"换成"低不透明度"。
+        // 系统染白之后，这些层仍读得出深浅差（层次还在），而不是一坨死白。
+        // 环境值 `\.widgetRenderingMode` 是 iOS 16+ API（deployment target 18，直接读）。
+
+        /// 着色模式下天空渐变保留的不透明度。0.35：染白后仍读得出"上深下浅"的方向，
+        /// 又不会把玻璃填成一整块白板
+        static let tintedSkyAlpha: Double = 0.35
+        /// 着色模式下地面弧保留的不透明度（比天空浅一档：地面必须仍在地平线以下压得住）
+        static let tintedGroundAlpha: Double = 0.22
+        /// 着色模式下云朵 α 的缩放系数（云本来就是 0.42–0.55 的半透明色块，再压一档防糊）
+        static let tintedCloudAlphaScale: Double = 0.45
+        /// 着色模式下太阳核保留的不透明度（实心圆染白后是一块死白，压到半透明才有"辉光点"层次）
+        static let tintedSunAlpha: Double = 0.55
     }
 }

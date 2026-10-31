@@ -113,8 +113,8 @@ struct RootView: View {
     private var tabChrome: some View {
         if metrics.usesTopTabStrip {
             // 宽档：顶部 44pt 居中胶囊条。**不加底部 inset** —— 底部腾出来的 90pt
-            // 正是"viewport 700 → 760"的来源；`pageBottomInset 120` 保持不变
-            // （多留 80 只是滚动尾部留白，改它要动 12 个文件）。
+            // 正是"viewport 700 → 760"的来源；`pageBottomInset` 3.8.1 起收为 96
+            // （底部 Tab 栏压矮、底距收窄，内容底部留白跟着收，见 Spacing.pageBottomInset）
             pageContent
                 .safeAreaInset(edge: .top, spacing: 0) {
                     WideTabStrip(tabs: tabBarTabs, selection: tabSelection)

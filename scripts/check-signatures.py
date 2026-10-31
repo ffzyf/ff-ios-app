@@ -150,6 +150,23 @@ class FuncDef:
         ) or "(无参数)"
 
     @property
+    def type_signature(self) -> str:
+        """形参类型指纹（去空白后的类型段拼接）。
+
+        只看标签（`ident_label`）不足以判断重复定义：`resolve(_ status: SkyStatus?)`
+        与 `resolve(_ app: SkyAppVersion?)` 是合法重载，Swift 不会报
+        invalid redeclaration；反过来，仅内部名不同、类型相同的两个定义才会真的重名。
+        所以重复定义判定必须把类型段纳入 key。
+        """
+        parts: List[str] = []
+        for p in self.params:
+            if ":" in p.raw:
+                parts.append(re.sub(r"\s+", "", p.raw.split(":", 1)[1]))
+            else:
+                parts.append(re.sub(r"\s+", "", p.raw))
+        return "|".join(parts)
+
+    @property
     def where(self) -> str:
         return f"{self.file}:{self.line}"
 
@@ -1373,10 +1390,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 def _duplicate_defs(defs: Sequence[FuncDef]) -> List[str]:
     """找出完全同签名的重复定义（Swift 会直接报 invalid redeclaration）。"""
-    seen: Dict[Tuple[str, str, str, bool], FuncDef] = {}
+    seen: Dict[Tuple[str, str, str, str, bool], FuncDef] = {}
     out: List[str] = []
     for d in defs:
-        key = (d.type_name, d.name, d.ident_label, d.is_static)
+        key = (d.type_name, d.name, d.ident_label, d.type_signature, d.is_static)
         first = seen.get(key)
         if first is None:
             seen[key] = d

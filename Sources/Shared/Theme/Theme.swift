@@ -84,9 +84,11 @@ enum Theme {
 
     // MARK: - 二级玻璃（静态配方，不采样背景，B 批次新增）
 
-    /// 静态玻璃填充：比真玻璃更深一档的实色感（深 白 8% / 浅 白 78%），
+    /// 静态玻璃填充：比真玻璃更深一档的实色感，
     /// 不采样背景也能立住（列表卡用，单屏几十张也不重）。
-    static let glassStaticFill = dyna(dark: ("#FFFFFF", 0.08), light: ("#FFFFFF", 0.78))
+    /// 3.8.1（用户"太玻璃、要毛玻璃"）浅色 / 深色各 **+8%**：深 白 16% / 浅 白 86%，
+    /// 更雾一层。只动这一个 token 定义，全部 `glassStatic` 调用点自动跟随。
+    static let glassStaticFill = dyna(dark: ("#FFFFFF", 0.16), light: ("#FFFFFF", 0.86))
     /// 顶缘 1pt 半透高光：深底白 12% / 浅底黑 8%（任务 B1 指定的反向配色）。
     static let glassStaticHighlight = dyna(dark: ("#FFFFFF", 0.12), light: ("#0F1A26", 0.08))
     /// 1pt 描边（与高光反向）：深底黑 8% / 浅底白 12%，保证深浅双主题都"有边"。

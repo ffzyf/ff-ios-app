@@ -17,9 +17,10 @@ import WidgetKit
 ///
 /// 视觉上三条不能破的约束（沿用旧版，且都是"用户能看见"的）：
 /// - 倒计时交给系统画：`Text(timerInterval:countsDown:)` 秒级走时但零刷新成本；
-/// - 没有数据就说没有：空态只写「暂无排期」，绝不出现 00:00 或假地图名；
-/// - **本月过完了就说收官**：排期有、只是这个月的都过完了，写「本月红石已收官」+
-///   月份文案（判定在 `Shared/Domain/RedstoneWindow.swift`，与 App 首页同一份）。
+/// - 没有数据就说没有：空窗期整卡切换为天光卡面（见 `RedstoneWidgetView`），
+///   RedstoneFace 内部的空态 / 收官文案只作为兜底，绝不出现 00:00 或假地图名；
+/// - **本月过完了就说收官**：排期有、只是这个月的都过完了，同样交给天光面 ——
+///   用户不需要一张"挂着红石但什么都没有"的卡（3.8.1 用户反馈）。
 struct RedstoneWidget: Widget {
 
     /// WidgetKit 用 kind 匹配已上桌的实例，改名等于让所有用户的小组件失效
@@ -46,6 +47,14 @@ struct RedstoneWidget: Widget {
 /// 背景要铺满**整个画布**（不受卡面内边距影响），两者职责不同；
 /// 而且 `.widgetURL` / `.containerBackground` 属于"组件"这一层，卡面应该是
 /// 可以在预览里单独摆出来的纯视图。
+///
+/// ## 空窗期整卡换天光面（3.8.1）
+///
+/// 用户原话："如果说这几天是红石的空窗期它应该显示其他的内容啊不应该一直挂个红石"。
+/// 所以 `focus == nil`（暂无排期 / 本月已收官）的日子，整卡切换为天光卡面
+/// （`SkyLightFace`，吃 Provider 顺带算好的 `entry.daylight`，见 `RedstoneEntry`），
+/// 深链也跟着换成 `WidgetDeepLink.brief` —— 卡上说的已经是天光，点进去就该是天光页。
+/// **同日有场次则一切不变**：红石卡面 + `skyapp://rock`。
 struct RedstoneWidgetView: View {
 
     private let entry: RedstoneEntry
@@ -55,15 +64,23 @@ struct RedstoneWidgetView: View {
     }
 
     var body: some View {
-        RedstoneFace(entry: entry)
-            // 整卡可点：点一下跳进 App 的红石页（冷启动 / 热启动都生效，见 RootView.onOpenURL）
-            .widgetURL(WidgetDeepLink.rock)
-            .containerBackground(for: .widget) {
-                // 背景跟着**当前场次的地图**走（不是"今天第一场"，也不是"日历里的地图"）：
-                // 卡片上大字写的是哪一场，背景就该是哪一场 —— 否则用户会看到"暮土"配着云野的天。
-                // 空态 / 待确认时 mapName 是空串，背景自动退化成默认夜（见 RedstoneBackdrop）；
-                // 收官态 focus 为 nil，同样走默认夜（不拿"本月上一场"的地图去配一个没有场的日子）。
-                RedstoneBackdrop(mapName: entry.focus?.map ?? "")
+        Group {
+            if entry.focus == nil, let daylight = entry.daylight {
+                SkyLightFace(entry: daylight)
+                    // 卡面是天光，点击目标跟着换成简报页
+                    .widgetURL(WidgetDeepLink.brief)
+            } else {
+                RedstoneFace(entry: entry)
+                    // 整卡可点：点一下跳进 App 的红石页（冷启动 / 热启动都生效，见 RootView.onOpenURL）
+                    .widgetURL(WidgetDeepLink.rock)
+                    .containerBackground(for: .widget) {
+                        // 背景跟着**当前场次的地图**走（不是"今天第一场"，也不是"日历里的地图"）：
+                        // 卡片上大字写的是哪一场，背景就该是哪一场 —— 否则用户会看到"暮土"配着云野的天。
+                        // 空态 / 待确认时 mapName 是空串，背景自动退化成默认夜（见 RedstoneBackdrop）；
+                        // 收官态 focus 为 nil，同样走默认夜（不拿"本月上一场"的地图去配一个没有场的日子）。
+                        RedstoneBackdrop(mapName: entry.focus?.map ?? "")
+                    }
             }
+        }
     }
 }

@@ -20,13 +20,21 @@ enum GlassLevel: String, CaseIterable {
     /// 层 4：导航条（滚动后渐显）
     case chrome
 
-    /// iOS 18–25 的降级材质（等效 blur 值见 PRD §4.4 参数表）
+    /// iOS 18–25 的降级材质（等效 blur 值见 PRD §4.4 参数表）。
+    ///
+    /// 3.8.1（用户原话"整个 app 都太玻璃了，弄一些毛玻璃 / 玻璃加模糊"）：
+    /// 手工路径整体**加厚一档** —— `.card` ultraThin → regular、`.chrome` regular → thick，
+    /// 更"毛"、更雾，看久了不再透得发虚。
+    /// **唯一的例外是 `.floating`**（Tab 栏）：它必须透出滚动内容才能证明自己在浮，
+    /// 加厚会让它变成一块磨砂砖，所以保持 `.ultraThinMaterial`（这条例外不能跟着涨）。
+    /// `.sheet` 本来就是最厚的一档，不动。iOS 26 系统玻璃路径的材质由系统自己管，
+    /// 不在本表内。
     var material: Material {
         switch self {
-        case .sheet: return .thickMaterial      // ≈ 30pt
-        case .floating: return .ultraThinMaterial // ≈ 20pt
-        case .card: return .ultraThinMaterial   // ≈ 16pt
-        case .chrome: return .regularMaterial   // ≈ 24pt
+        case .sheet: return .thickMaterial      // ≈ 30pt（本来就是最厚一档，不动）
+        case .floating: return .ultraThinMaterial // ≈ 20pt（例外：必须透出滚动内容，见上）
+        case .card: return .regularMaterial     // ≈ 24pt（3.8.1：ultraThin 加厚一档）
+        case .chrome: return .thickMaterial     // ≈ 30pt（3.8.1：regular 加厚一档）
         }
     }
 

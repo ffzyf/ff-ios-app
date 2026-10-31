@@ -31,6 +31,10 @@ import WidgetKit
 struct SkyLightFace: View {
 
     @Environment(\.widgetFamily) private var family
+    /// 渲染模式（iOS 16+ 环境值）：桌面透明 / 着色外观下系统用 accented 模式重画，
+    /// 此刻必须把"实心层"换成"低不透明度层"、并把关键文字标进 accent 组 ——
+    /// 否则用户的观感就是"开了透明之后只能看见字"（3.8.1 用户反馈）。
+    @Environment(\.widgetRenderingMode) private var renderMode
 
     private let entry: SkyLightEntry
 
@@ -63,11 +67,21 @@ struct SkyLightFace: View {
             .background {
                 canvasProbe
             }
+            // 着色 / 透明模式（accented / vibrant）专用的一层：系统会拿掉 `containerBackground`
+            // 换成玻璃 —— "开了透明就只能看见字"正是这么来的。但**内容层里的半透明内容**
+            // 不会被拿掉：保留不透明度、整体染白。所以这里给 content 背后再垫一层
+            // 低不透明度的天空（`SkyLightSky` 在着色模式下自会把实心层换成半透明版），
+            // 玻璃上仍读得出"天幕渐变 + 地平线弧"的层次。fullColor 下不垫（有真背景）。
+            .background {
+                if renderMode != .fullColor {
+                    SkyLightSky(entry: entry, renderMode: renderMode)
+                }
+            }
             // 整卡可点：落到简报页（复用 `WidgetProvider` 里已有的深链常量，不新造 URL）
             .widgetURL(WidgetDeepLink.brief)
             // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
             .containerBackground(for: .widget) {
-                SkyLightSky(entry: entry)
+                SkyLightSky(entry: entry, renderMode: renderMode)
             }
     }
 
@@ -109,12 +123,16 @@ struct SkyLightFace: View {
                 .fill(sky.edge)
                 .frame(width: WidgetTheme.SkyLight.dotDiameter,
                        height: WidgetTheme.SkyLight.dotDiameter)
+                // 关键元素进 accent 组：着色模式下 accent 组保持用户的强调色，
+                // 与压成 primary 的其余内容拉开层次（iOS 16+ API，直接用）
+                .widgetAccentable()
 
             Text(entry.phase.label)
                 .font(WidgetTheme.SkyLight.phaseLabelScaled(family, scale: s))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .widgetAccentable()
 
             Spacer(minLength: WidgetTheme.SkyLight.dotGap)
 
@@ -143,12 +161,15 @@ struct SkyLightFace: View {
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    // 倒计时是这张卡的关键数字：着色模式下进 accent 组，保住第一可读性
+                    .widgetAccentable()
             } else {
                 Text(entry.countdownText ?? "")
                     .font(WidgetTheme.SkyLight.countdownScaled(family, scale: s))
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .widgetAccentable()
             }
         }
     }
@@ -197,13 +218,36 @@ struct SkyLightSky: View {
     /// 弧顶 / 两端高度（占画布）。默认与 App 内简报卡同一组数
     private let crestY: CGFloat
     private let edgeY: CGFloat
+    /// 渲染模式。`.fullColor` 以外的两种（accented / vibrant）把实心层换成低不透明度版，
+    /// 见 `WidgetTheme.SkyLight` 的"着色 / 透明模式"一节。实时活动（锁屏 / 灵动岛）复用
+    /// 本视图时取默认值 `.fullColor` —— ActivityKit 没有 widget 渲染模式这回事。
+    private let renderMode: WidgetRenderingMode
 
     init(entry: SkyLightEntry,
          crestY: CGFloat = WidgetTheme.skyCrestY,
-         edgeY: CGFloat = WidgetTheme.skyEdgeY) {
+         edgeY: CGFloat = WidgetTheme.skyEdgeY,
+         renderMode: WidgetRenderingMode = .fullColor) {
         self.entry = entry
         self.crestY = crestY
         self.edgeY = edgeY
+        self.renderMode = renderMode
+    }
+
+    /// 是否处于着色 / 透明外观（accented / vibrant）。
+    /// 此刻系统拿掉了 `containerBackground`，本视图若作为**内容层**垫底
+    /// （见 `SkyLightFace.body`），只有半透明部分能保住层次。
+    private var tinted: Bool {
+        return renderMode != .fullColor
+    }
+
+    /// 天空渐变两端的不透明度（fullColor = 1，着色 = `tintedSkyAlpha`）
+    private var skyAlpha: Double {
+        return tinted ? WidgetTheme.SkyLight.tintedSkyAlpha : 1
+    }
+
+    /// 地面渐变两端的不透明度
+    private var groundAlpha: Double {
+        return tinted ? WidgetTheme.SkyLight.tintedGroundAlpha : 1
     }
 
     /// 夜里不画太阳（连余晖也不画）：只在地平线上留一道极细的冷光
@@ -244,13 +288,15 @@ struct SkyLightSky: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack {
-                // ① 天空：顶 → 地平线的一整段渐变（七档各自的 top / horizon）
-                LinearGradient(colors: [sky.top, sky.horizon],
+                // ① 天空：顶 → 地平线的一整段渐变（七档各自的 top / horizon）。
+                //    着色模式下压到 `tintedSkyAlpha`：半透明渐变被系统染白后仍保留层次
+                LinearGradient(colors: [sky.top.opacity(skyAlpha), sky.horizon.opacity(skyAlpha)],
                                startPoint: .top,
                                endPoint: .bottom)
 
                 // ② 光晕：一层 RadialGradient，不用 blur。
                 //    日落后半小时内还有余温（intensity 衰减到 0），之后什么都不留。
+                //    它本来就是半透明渐变，着色模式下直接交给系统染，不另压档。
                 if let mark, !isNight, mark.intensity > 0.01 {
                     glowLayer(sky: sky, mark: mark, size: size)
                 }
@@ -258,6 +304,7 @@ struct SkyLightSky: View {
                 // ③ 云（新增）：**在光晕之上、地面之下**。
                 //    为什么在光晕之上：光是穿过云才落到地上的，云压住光晕才有"云在前面飘"的层次；
                 //    为什么在地面之下：地面和地平线亮边是这张卡最硬的一根线，云绝不许盖住它。
+                //    着色模式下云的 α 再乘一档缩放系数（半透明色块染白后太实就是糊斑）。
                 if let kind = weatherKind {
                     SkyLightCloudField(kind: kind,
                                        sky: sky,
@@ -265,18 +312,25 @@ struct SkyLightSky: View {
                                        dayFraction: dayFraction,
                                        crestY: crestY,
                                        edgeY: edgeY,
+                                       alphaScale: tinted
+                                           ? WidgetTheme.SkyLight.tintedCloudAlphaScale
+                                           : 1,
                                        size: size)
                 }
 
-                // ④ 地面：弧线以下压深，让日出日落两个时刻自然退到次要层级
+                // ④ 地面：弧线以下压深，让日出日落两个时刻自然退到次要层级。
+                //    **着色模式下这里是重点**：实心 `fill` 会被系统整块染白，玻璃上就是
+                //    一块死白 —— 压到 `tintedGroundAlpha` 后它退成"地平线以下略深一层"的暗示。
                 HorizonGround(crestY: crestY, edgeY: edgeY)
                     .fill(
-                        LinearGradient(colors: [sky.ground, sky.ground.opacity(0.92)],
+                        LinearGradient(colors: [sky.ground.opacity(groundAlpha),
+                                                sky.ground.opacity(groundAlpha * 0.92)],
                                        startPoint: .top,
                                        endPoint: .bottom)
                     )
 
-                // ⑤ 地平线亮边：夜里变成一道极细的冷光（线宽更细、更淡）
+                // ⑤ 地平线亮边：夜里变成一道极细的冷光（线宽更细、更淡）。
+                //    描边本来就是横向渐变的半透明线，着色模式下原样交给系统染。
                 horizonLayers(sky: sky, mark: mark)
 
                 // ⑥ 降水 / 雾 / 闪电（新增）：**落在天空区里，不落到地面区**。
@@ -417,10 +471,15 @@ struct SkyLightSky: View {
                          size: CGSize) -> some View {
         let core = WidgetTheme.sunCoreDiameter
         let ring = core + WidgetTheme.sunRingGap
+        // 实心核在着色模式下会被整块染白（一块死白），压到半透明才有"辉光点"的层次；
+        // 外环是描边（半透明），原样交给系统
+        let coreColor = tinted
+            ? WidgetTheme.sunCore(sky).opacity(WidgetTheme.SkyLight.tintedSunAlpha)
+            : WidgetTheme.sunCore(sky)
 
         return ZStack {
             Circle()
-                .fill(WidgetTheme.sunCore(sky))
+                .fill(coreColor)
                 .frame(width: core, height: core)
 
             Circle()
@@ -607,6 +666,8 @@ private struct SkyLightCloudField: View {
     let dayFraction: CGFloat
     let crestY: CGFloat
     let edgeY: CGFloat
+    /// 云朵 α 的缩放系数（着色模式 < 1，fullColor = 1，见 `WidgetTheme.SkyLight`）
+    let alphaScale: Double
     let size: CGSize
 
     /// 云的颜色。
@@ -668,7 +729,8 @@ private struct SkyLightCloudField: View {
         .frame(width: size.width, height: size.height)
     }
 
-    private func cloud(spec: SkyLightCloudSpec, alpha: Double) -> some View {
+    private func cloud(spec: SkyLightCloudSpec, alpha raw: Double) -> some View {
+        let alpha = min(raw * alphaScale, 1)
         return SkyLightCloudShape()
             .fill(tint.opacity(alpha))
             .frame(width: spec.width * size.width, height: spec.height * size.height)

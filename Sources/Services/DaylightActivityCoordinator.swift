@@ -57,6 +57,14 @@ final class DaylightActivityCoordinator {
     private var lastUpdateAt: Date?
     /// 上一次写进活动的天气指纹（值变了才值得推一次 update）
     private var lastWeatherSignature: String = ""
+    /// 上一次写进活动时的天光阶段（`SunClock.phase` 七档）。
+    ///
+    /// 3.8.1 新增：tick 的心跳路径用它做**阶段变更检测** —— 蓝调→日出→黄金→白天→
+    /// 日落→蓝调→夜的每一次换档，卡片颜色 / 阶段名 / 倒计时目标都要跟着变，
+    /// 不能等 10 分钟心跳。视图层虽然按 `Date()` 现算，但系统不重绘就什么都看不到；
+    /// 换档立刻 `activity.update` 是唯一可靠的"定点切换"。App 被杀重启后为 nil，
+    /// 第一次 tick 会当作"变了"补一次 update（与 `lastUpdateAt == nil` 时 `due == true` 同理）。
+    private var lastPhase: SkyPhase?
 
     /// `init` 必须 `nonisolated`：整类被 `@MainActor` 隔离后，合成的 init 也是默认的
     /// 隔离成员，而 `static let shared` 的惰性初始化发生在**非隔离上下文**里
@@ -106,8 +114,12 @@ final class DaylightActivityCoordinator {
     }
 
     /// 一个 tick 的纳秒数。**由 `tickSeconds` 派生**，不另写一份 `60 * 1_000_000_000` ——
-    /// 两份就一定会漂成"改了秒忘了纳秒"
-    private static let tickNanoseconds: UInt64 = UInt64(Self.tickSeconds) * 1_000_000_000
+    /// 两份就一定会漂成"改了秒忘了纳秒"。
+    /// 显式写全类型名：static 存储属性初始化器里不能引用协变 `Self`
+    /// （3.8.0 CI 编译错误 `covariant 'Self' type cannot be referenced from a stored
+    /// property initializer` 的修法 —— 存储属性初始化发生在类型尚未完全成形的时候，
+    /// `Self` 在那里是协变的、不可引用，只有具体类型名是安全的）。
+    private static let tickNanoseconds: UInt64 = UInt64(DaylightActivityCoordinator.tickSeconds) * 1_000_000_000
 
     // MARK: - 评估
 
@@ -195,10 +207,12 @@ final class DaylightActivityCoordinator {
             Task { await activity.end(content, dismissalPolicy: .immediate) }
         }
         // 内部记录一并清干净：下一次 tick 要按"从零开始"判定，
-        // 否则残留的 `lastWeatherSignature` 会让重启后的第一次 update 被"值没变"挡掉
+        // 否则残留的 `lastWeatherSignature` / `lastPhase` 会让重启后的第一次
+        // update 被"值没变"挡掉
         lastStartAt = nil
         lastUpdateAt = nil
         lastWeatherSignature = ""
+        lastPhase = nil
         if !running.isEmpty {
             reloadWidgets()
         }
@@ -236,6 +250,7 @@ final class DaylightActivityCoordinator {
             lastStartAt = now
             lastUpdateAt = now
             lastWeatherSignature = Self.signature(of: weather)
+            lastPhase = SunClock.phase(at: now)
             reloadWidgets()
         } catch {
             // 启动失败（系统限制 / 用户在设置里关了实时活动）不该影响 App 任何功能
@@ -245,26 +260,66 @@ final class DaylightActivityCoordinator {
 
     // MARK: - 心跳
 
-    /// 保活更新（§1.3）：只有「距上次 update ≥ 10 分钟」或「天气值变了」才推。
+    /// 保活更新（§1.3）：只有「距上次 update ≥ 10 分钟」「天气值变了」或「阶段变了」才推。
     ///
     /// 为什么不是每 tick 都推：update 是带唤醒成本的推送帧。太阳位置与天色由视图按
-    /// `Date()` **现算**，update 唯一要送的是**本进程之外拿不到的东西** —— 天气。
+    /// `Date()` **现算**，update 唯一要送的是**本进程之外拿不到的东西** —— 天气，
+    /// 以及"到下一阶段边界该重绘"这个提示（staleDate）。
+    ///
+    /// 3.8.1 追加的阶段变更路径：换档（蓝调→日出→黄金→白天→日落→蓝调→夜）那一刻
+    /// 卡片的颜色 / 阶段名 / 倒计时目标同时变，**不受 `heartbeatSeconds` 节流** ——
+    /// 太阳落了卡片还蓝着 10 分钟，是用户看得见的错。
+    /// 同时把 `staleDate` 设为下一阶段边界（不越过窗口上界）：让系统知道
+    /// "到这一刻数据该翻篇"，而不是把整段窗口当成一次性的过期提示。
     private func heartbeat(_ activity: Activity<DaylightActivityAttributes>, now: Date) {
         let weather = Self.currentWeather()
         let signature = Self.signature(of: weather)
+        let phase = SunClock.phase(at: now)
         let due = lastUpdateAt.map { now.timeIntervalSince($0) >= Self.heartbeatSeconds } ?? true
-        guard due || signature != lastWeatherSignature else { return }
+        let phaseChanged = (lastPhase != phase)
+        guard due || signature != lastWeatherSignature || phaseChanged else { return }
 
         var state = activity.content.state
         state.weatherCode = weather?.code
         state.weatherText = weather?.text
         state.tempC = weather?.temp
 
-        let content = ActivityContent(state: state, staleDate: state.windowEnd)
+        let boundary = Self.nextPhaseBoundary(after: now) ?? state.windowEnd
+        let content = ActivityContent(state: state, staleDate: min(boundary, state.windowEnd))
         Task { await activity.update(content) }
 
         lastUpdateAt = now
         lastWeatherSignature = signature
+        lastPhase = phase
+    }
+
+    // MARK: - 阶段边界
+
+    /// 严格晚于 `now` 的下一个天光阶段边界时刻。
+    ///
+    /// **跨 target 的复制表，必须同步**：权威出处是 Widget 侧的
+    /// `SkyLightEntry.nextPhaseBoundary(after:on:)`（Sources/Widget/SkyLightProvider.swift），
+    /// 但 `Sources/Services` 不编译 Widget target，这里只能复制一份。七个偏移
+    /// （日出 −24min / 日出 / +24min / +70min；日落 −70min / 日落 / +30min）
+    /// 与 `SunClock.phase(at:)` 的判定阈值、与 Widget 侧那张表**逐条一一对应** ——
+    /// 改任何一处必须三处同步，否则会出现"卡片换档了、staleDate 还没到"。
+    /// 取前后各一天共三天的边界再筛 `> now` 取最小：跨子夜、跨年都不需要特殊分支。
+    private static func nextPhaseBoundary(after now: Date) -> Date? {
+        var candidates: [Date] = []
+        for offset in [-1, 0, 1] {
+            guard let day = RedstoneClock.calendar.date(byAdding: .day, value: offset, to: now) else {
+                continue
+            }
+            guard let times = SunClock.times(on: day) else { continue }
+            candidates.append(times.sunrise.addingTimeInterval(-24 * 60))
+            candidates.append(times.sunrise)
+            candidates.append(times.sunrise.addingTimeInterval(24 * 60))
+            candidates.append(times.sunrise.addingTimeInterval(70 * 60))
+            candidates.append(times.sunset.addingTimeInterval(-70 * 60))
+            candidates.append(times.sunset)
+            candidates.append(times.sunset.addingTimeInterval(30 * 60))
+        }
+        return candidates.filter { $0 > now }.min()
     }
 
     // MARK: - 收尾

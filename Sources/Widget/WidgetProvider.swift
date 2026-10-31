@@ -398,6 +398,14 @@ struct RedstoneEntry: TimelineEntry {
     let todayCount: Int
     /// 今日是否有待核对场次
     let needsCheck: Bool
+    /// 空窗期（`focus == nil`）时整卡切换的天光帧。
+    ///
+    /// 为什么由 Provider 在生成 entry 时顺带算好、而不是视图里现造：红石卡面只能在
+    /// **自己的 entry** 上画（provider 契约一张卡一个 Provider，视图里再起一个
+    /// `SkyLightProvider` 会破坏这条契约），而 `SkyLightFace` 吃的是 `SkyLightEntry`。
+    /// 同进程同 target，直接用 `SkyLightEntry.make(date:)`（纯函数、零网络）造一帧
+    /// 带在身上即可。有场次的日子它根本不会被读到，成本只是几次日出日落三角函数。
+    let daylight: SkyLightEntry?
 
     /// 下一场 / 进行中的那一场（没有就 nil）
     var focus: Occurrence? { phase.occurrence }
@@ -422,11 +430,12 @@ extension RedstoneEntry {
             phase: phase,
             todayOccurrences: today,
             todayCount: today.count,
-            needsCheck: today.contains { $0.needsCheck }
+            needsCheck: today.contains { $0.needsCheck },
+            daylight: SkyLightEntry.make(date: date)
         )
     }
 
-    /// 空态 entry（没数据 / 首次安装）
+    /// 空态 entry（没数据 / 首次安装）。同样带上天光帧：空窗期整卡换成天光面
     static func empty(date: Date) -> RedstoneEntry {
         return RedstoneEntry(
             date: date,
@@ -435,7 +444,8 @@ extension RedstoneEntry {
             phase: .notGenerated,
             todayOccurrences: [],
             todayCount: 0,
-            needsCheck: false
+            needsCheck: false,
+            daylight: SkyLightEntry.make(date: date)
         )
     }
 }

@@ -506,6 +506,10 @@ struct BriefFace: View {
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // 关键文字进 accent 组：iOS 26 桌面透明 / 着色（accented 渲染模式）下，
+            // 系统拿掉 containerBackground、把未标记内容压成 primary —— 标题是这张卡
+            // 的身份，必须在压完之后仍是第一眼读到的（iOS 16+ API，直接用）
+            .widgetAccentable()
     }
 
     // MARK: - 正文首句
@@ -581,13 +585,14 @@ struct BriefFace: View {
             Spacer(minLength: 4)
 
             // 右端 = 日出 + 日落，用主字色（`ink`，跟着纸走）压上去：它们是"时刻"，
-            // 比左边的历书注脚更重要，所以不压暗。
+            // 比左边的历书注脚更重要，所以不压暗。着色模式下也进 accent 组（与标题同一理由）
             if let rise = sunTexts.rise {
                 Text(rise)
                     .font(BriefMetrics.footnoteTime)
                     .foregroundStyle(ink)
                     .monospacedDigit()
                     .lineLimit(1)
+                    .widgetAccentable()
             }
 
             if let set = sunTexts.set {
@@ -596,6 +601,7 @@ struct BriefFace: View {
                     .foregroundStyle(ink)
                     .monospacedDigit()
                     .lineLimit(1)
+                    .widgetAccentable()
             }
         }
     }

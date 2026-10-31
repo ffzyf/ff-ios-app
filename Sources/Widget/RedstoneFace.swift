@@ -322,6 +322,10 @@ struct RedstoneFace: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                // 卡面上唯一的"关键数字"进 accent 组：iOS 26 桌面透明 / 着色（accented
+                // 渲染模式）下，系统会把未标记的内容压成 primary、accent 组保持强调色，
+                // 34pt 的主时刻因此仍是第一眼读到的那个数（iOS 16+ API，直接用）
+                .widgetAccentable()
 
             if entry.phase.isOngoing {
                 Text("进行中")
