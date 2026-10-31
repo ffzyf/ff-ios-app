@@ -94,13 +94,18 @@ struct DaylightActivitySection: View {
         .glassSurface(.card, in: RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
         .onChange(of: isEnabled) { _, newValue in
             Haptics.light()
-            if !newValue {
+            if newValue {
+                // 用户点开关就是要"立马出现在灵动岛上"——等下一次 60 秒 tick 等于假开关。
+                // `startNow()` 是同步的 @MainActor 方法，直接调即可，不需要包 Task。
+                // 它保留硬守卫（开关 / 系统能力 / 红石优先），但刻意跳过两条自动启动守卫：
+                // "夜里不启动"——夜里手动开就是要看那张夜间卡；
+                // "距日落不足 10 分钟不启动"——那是自动启动省 request 的规则，
+                // 用户手点的每一次 request 都是明确要花的。守卫的推导在 Coordinator 侧。
+                DaylightActivityCoordinator.shared.startNow()
+            } else {
                 // 关掉即收尾：不等下一次 60 秒评估（与红石同一纪律）
                 DaylightActivityCoordinator.shared.endAll()
             }
-            // 打开时不开活动：交给协调器的下一次前台 tick（≤60 秒）按守卫链判定 ——
-            // 夜里、日落后、红石占用中都体面拒绝，Coordinator 那里才有这些判断，
-            // 这里硬开一次会绕过它们（而 <10 分钟那一条正是为了防止"开了等于没开"）
         }
     }
 
@@ -111,7 +116,7 @@ struct DaylightActivitySection: View {
         guard activitiesEnabled else {
             return "此设备没有锁屏实时活动，桌面添加「天光」小组件是一样的效果。"
         }
-        return "白天会在锁屏与灵动岛显示此刻的太阳位置、天色与天气。日落或 8 小时后自动消失，回到 App 会重新出现。"
+        return "开启后立刻出现在锁屏与灵动岛：此刻的太阳位置、天色与天气。日落或 8 小时后自动消失，回到 App 会重新出现。"
     }
 
     /// 副标题：可用时说"能做什么"，不可用时说"为什么不能用 + 还有什么能用"

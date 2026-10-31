@@ -13,7 +13,8 @@ import WidgetKit
 /// 3. **红石占用 → 立刻收**（`.immediate`）：两个活动同屏会被系统折叠成一组，
 ///    用户点开看到的是一团乱；也正因为如此，红石那里（见 `LiveActivityCoordinator.start`）
 ///    成功后会回调 `suspendForRock()`，不等下一个 tick；
-/// 4. **窗口上界 = min(日落, 创建 + 8h)**，在**创建那一刻**定死。
+/// 4. **窗口上界 = min(deadline, 创建 + 8h)**，在**创建那一刻**定死
+///    （deadline 由调用方给：白天 = 日落，夜间手动启动 = 下一阶段边界，见 `startNow()`）。
 ///    不能每次按 `now + 8h` 算 —— 那永远到不了点，卡片就变常驻了；
 /// 5. **同一时刻只允许 1 个**：已有自己的活动就只做心跳 update，不再开第二个。
 ///
@@ -160,7 +161,7 @@ final class DaylightActivityCoordinator {
         guard today.sunset > now,
               today.sunset.timeIntervalSince(now) >= Self.minimumRemainSeconds else { return }
 
-        start(sunrise: today.sunrise, sunset: today.sunset, now: now)
+        start(sunrise: today.sunrise, sunset: today.sunset, deadline: today.sunset, now: now)
     }
 
     // MARK: - 红石占用
@@ -195,6 +196,69 @@ final class DaylightActivityCoordinator {
         endAll()
     }
 
+    /// 用户在设置页打开开关那一刻的**显式立即启动**（3.8.2）。
+    ///
+    /// 与 `evaluate(now:)` 的自动启动是两回事：evaluate 是"App 替用户决定要不要常驻"，
+    /// 这里是"用户点了开关就是要『立马出现在灵动岛上』"——等下一次 60 秒 tick，
+    /// 开关就成了假开关。因此：
+    /// - **保留硬规则**：开关、系统能力、红石优先（红石占用时写 `lastErrorDescription`
+    ///   说明原因并返回——红石是"20 分钟后有个限时场次"，等不起，铁律不破）；
+    /// - **刻意跳过两条自动启动守卫**（它们只对"自动"成立，不是被"绕过"）：
+    ///   1. "夜里不启动"：夜里没有太阳可画，是针对**自动常驻**的成本考量；
+    ///      夜里手动开，用户就是要看那张夜间卡（近黑天色 + 距日出倒计时）；
+    ///   2. "距日落不足 10 分钟不启动"：那条是为了**自动启动**省一次 request——
+    ///      即将过期的窗口不值得常驻；而用户手点的每一次 request 都是明确要花的。
+    ///
+    /// 同步方法（无 await）：设置页的 `.onChange` 直接调，不需要包 `Task { }`。
+    func startNow() {
+        // 硬规则 2：开关 / 系统能力。任一不满足就什么都不做
+        //（与 evaluate 不同：evaluate 会顺手收掉已有活动，这里是"打开"方向的意图，
+        // 能力不存在时活动也不存在，无事可收）
+        guard isEnabled, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+
+        // 硬规则 3：红石优先。不收自己的活动也不报错给 UI——
+        // 红石结束后下一次 tick / 下次回前台，evaluate 会自动把天光接回来
+        guard !Self.isRockOccupying() else {
+            lastErrorDescription = "红石占用中，结束后天光自动回来"
+            return
+        }
+
+        let now = Date()
+
+        // 先收掉过了窗口上界的残留（App 被杀之后可能留下），
+        // 避免"过期残影 + 新活动"在同一块锁屏上短暂并存
+        endExpired(now: now)
+
+        // 硬规则 5：已有自己在跑的活动 → 立即心跳一次，绝不开第二个。
+        // 这里绕过 heartbeat 的 10 分钟节流是刻意的：用户刚点开关，
+        // "值没变"不能成为"点了没反应"的理由——这是显式意图，不是例行 tick
+        if let existing = Self.runningActivities().first {
+            heartbeat(existing, now: now)
+            return
+        }
+
+        // 算不出日出日落（极昼 / 极夜）就不启动 —— 与 evaluate 同一条"不假装有太阳"
+        guard let today = SunClock.times(on: now) else { return }
+
+        // 窗口语义终点（deadline）：白天还有日落就用日落；夜里日落已过，
+        // 倒计时口径 = 距下一阶段边界（与 Widget 侧 `SkyLightEntry` 一致）。
+        // 兜底不用 today.sunset：走到这里说明日落已过，today 有值但前后一天
+        // times 缺失且当日边界全部过点时，传入的 sunset 是已过期时刻
+        // （windowEnd <= now），卡片一创建就 stale。改给足 8 小时窗口——
+        // 算不准就放最宽，后续由 endExpired 与 60 秒 tick 兜住收尾。
+        // 注：当前坐标硬编码北京，nextPhaseBoundary 不会返回 nil，该分支不可达；
+        // 未来坐标动态化（高纬度可能连续数日算不出边界）后会可达，属预防性加固。
+        let deadline: Date
+        if today.sunset > now {
+            deadline = today.sunset
+        } else {
+            deadline = Self.nextPhaseBoundary(after: now)
+                ?? now.addingTimeInterval(Self.maxWindowSeconds)
+        }
+
+        start(sunrise: today.sunrise, sunset: today.sunset, deadline: deadline, now: now)
+    }
+
     /// 关掉全部活动（关开关 / 到点 / 让位给红石，都走这里）。
     ///
     /// 一律 `.immediate`：卡片直接消失，不留"已结束"的残影 ——
@@ -221,9 +285,15 @@ final class DaylightActivityCoordinator {
     // MARK: - 启动
 
     /// 启动一次活动。`windowEnd` 在这里定死，之后永不改变。
-    private func start(sunrise: Date, sunset: Date, now: Date) {
-        // min(日落, 创建 + 8h)：见文件头规则 4
-        let windowEnd = min(sunset, now.addingTimeInterval(Self.maxWindowSeconds))
+    ///
+    /// `deadline` 是这次窗口的**语义终点**，由调用方按场景给：
+    /// - `evaluate`（白天自动启动）传 `today.sunset`——卡片跟着太阳走；
+    /// - `startNow`（夜间手动启动）传下一阶段边界——夜间卡的倒计时口径与 Widget 一致。
+    /// 上界仍由创建时刻 + 8h 兜住：两个取 min，见文件头规则 4。
+    /// 3.8.2 前签名只有 sunset，隐含"启动必在白天"的假设——夜间手动启动不成立，故拆出。
+    private func start(sunrise: Date, sunset: Date, deadline: Date, now: Date) {
+        // min(deadline, 创建 + 8h)：见文件头规则 4
+        let windowEnd = min(deadline, now.addingTimeInterval(Self.maxWindowSeconds))
         let weather = Self.currentWeather()
 
         let state = DaylightActivityAttributes.ContentState(
