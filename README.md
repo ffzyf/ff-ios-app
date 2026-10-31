@@ -68,3 +68,39 @@ open SkyApp.xcodeproj
 # V3.1 轨迹卡重构：弧线几何下沉 Shared，App/Widget 同源
 
 - 弧线带参数：红石卡 `bandTop 0.52 / bandBottom 0.98 / peak 0.70`，简报卡 `0.46 / 0.98 / 0.64`。
+
+---
+
+## 六、出包方式（2026-10-31 改：GitHub 额度省着用）
+
+macOS runner 按 **10 倍** 计费，旧配置下「推一次 ≈ 250 计费分钟」，额度很容易烧穿。
+现在有两条路，按需选：
+
+| 方式 | 花什么 | 适合 |
+|---|---|---|
+| `bash scripts/build-local.sh` | 本地 CPU，**零额度** | 日常出包；需要 Xcode + `brew install xcodegen` |
+| GitHub Actions | macOS 计费分钟 | 手上没有 Mac 时 |
+
+CI 侧也做了三处省钱改造，改动落在 `.github/workflows/build-ipa.yml`：
+① 不再 `on: push`，只在网页端手动 Run workflow；
+② 先跑 `ubuntu-latest` 的 gate（主题闸门 + 静态预检），**失败了 macOS 机器根本不起**；
+③ DerivedData 缓存 + 截图默认关闭，日常出包只编译一次。
+
+### 版本号
+
+每次改动后跑一下，构建号自动 +1（`project.yml` 里**两处**都要改，脚本不会漏）：
+
+```bash
+bash scripts/bump.sh          # 构建号 +1
+bash scripts/bump.sh minor    # 顺带版本号小数位 +1
+```
+
+### 推送前自查
+
+```bash
+python3 scripts/preflight.py   # 括号配对 + 跨文件符号引用，毫秒级
+bash scripts/lint-theme.sh     # 主题规范闸门
+```
+
+这两个脚本在 CI 里也跑，但**本地先跑一遍省的是真金白银** —— 静态检查在 macOS 上
+失败的成本是 Linux 的 10 倍。
