@@ -13,6 +13,14 @@ import SwiftUI
 struct MonitorView: View {
     @ObservedObject private var store = MonitorStore.shared
     @Environment(\.dismiss) private var dismiss
+    /// 尺寸模型（设计文档 §4.9）：国服 / 国际服本来就是**对照**信息 ——
+    /// iPad 上把两张卡并排，比的才是"哪个服更新"，隔着上下两屏只能靠记忆。
+    @Environment(\.layoutMetrics) private var metrics
+
+    /// 两张版本卡并排时的列定义（canvas 1080 → 各 528 = (1080 − 24) / 2）
+    private var cardColumns: [GridItem] {
+        return Array(repeating: GridItem(.flexible(), spacing: Layout.gridGutter), count: 2)
+    }
 
     /// 显式空 init：`@ObservedObject` 是 private 存储属性，
     /// 编译器会把自动生成的 memberwise init 降级成 private，跨文件 `MonitorView()` 就调不到。
@@ -33,9 +41,11 @@ struct MonitorView: View {
                 .padding(.horizontal, Spacing.page)
                 .padding(.top, 8)
                 .padding(.bottom, Spacing.page)
-                // 表单列宽 640（§3.7 / §3.1 总表）：两张版本卡 + 一段说明，拉宽只会让
-                // "版本号 …… 时间"之间空出一大截。窄屏无副作用。
-                .pageColumn(Layout.formMaxWidth)
+                // 列宽：单列时 720（窄屏 393 → `maxWidth` 不生效，与今天逐像素一致），
+                // 多列时是画布 1080（左右各 57）—— 两张 528 的卡只有放得下才谈得上"对照"。
+                // 不用 `formMaxWidth 640`：640 在 1194 上会让两张卡各 308，"版本号 …… 时间"
+                // 之间的空白和卡一样宽，比竖排还难读。
+                .pageColumn(metrics.gridPageWidth)
             }
             .scrollIndicators(.hidden)
             .refreshable {
@@ -136,17 +146,18 @@ struct MonitorView: View {
     @ViewBuilder
     private var cards: some View {
         if store.state.hasContent {
-            VStack(spacing: Spacing.cardGap) {
-                ForEach(store.apps) { app in
-                    VersionStatusCard(app: app, now: Date())
-                }
-                if store.apps.isEmpty {
-                    // 接口通了但没有任何服的数据：如实说，不画两张空卡
-                    EmptyStateView(
-                        icon: "antenna.radiowaves.left.and.right",
-                        title: "还没有版本记录。",
-                        message: "服务端第一次巡检成功后，这里会出现国服与国际服的版本号。"
-                    )
+            if store.apps.isEmpty {
+                // 接口通了但没有任何服的数据：如实说，不画两张空卡
+                EmptyStateView(
+                    icon: "antenna.radiowaves.left.and.right",
+                    title: "还没有版本记录。",
+                    message: "服务端第一次巡检成功后，这里会出现国服与国际服的版本号。"
+                )
+            } else {
+                cardContainer {
+                    ForEach(store.apps) { app in
+                        VersionStatusCard(app: app, now: Date())
+                    }
                 }
             }
         } else if let error = store.state.error {
@@ -163,9 +174,27 @@ struct MonitorView: View {
         }
     }
 
+    /// 版本卡的容器：**窄档竖排 / 宽档并排**，两种形态共用同一份内容。
+    ///
+    /// 抽成一个 `@ViewBuilder` 函数而不是在两个地方各写一遍 `if`：
+    /// 真实卡片与骨架必须落在同一个容器里，否则加载完成时页面会从"1080 宽的一条"跳成
+    /// "两张 528 的卡"（正是这个文件里"骨架与真实卡同高同距"那条注释要避免的跳动）。
+    @ViewBuilder
+    private func cardContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if metrics.gridColumns > 1 {
+            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: Layout.gridGutter) {
+                content()
+            }
+        } else {
+            VStack(spacing: Spacing.cardGap) {
+                content()
+            }
+        }
+    }
+
     /// 骨架：一张卡三行，与真实卡片同高同距，避免加载完成时页面整体跳动
     private var skeletonCards: some View {
-        VStack(spacing: Spacing.cardGap) {
+        cardContainer {
             ForEach(0..<2, id: \.self) { _ in
                 GlassCard {
                     VStack(alignment: .leading, spacing: 10) {

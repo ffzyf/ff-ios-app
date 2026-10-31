@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// 天气实况的 App 侧缓存（`GET /api/app/weather`，匿名只读）。
@@ -20,6 +21,11 @@ import Foundation
 ///
 /// 与 Widget 的关系：两个小组件**不引用本类**（Widget target 不编译 `Sources/Services`），
 /// 它们各自按 Timeline 直接请求，本类只服务主 App。
+///
+/// ## 3.7.0：跟着设备位置走
+/// 请求前读一次 `LocationStore.shared.coordinate`，有就带给 `API.weather(lat:lon:)`，
+/// 没有（开关关着 / 权限被拒 / 还没拿到）就不带 —— 服务端回落默认坐标，
+/// 与 3.7.0 之前的行为完全一致。没权限时不弹任何错误 UI，静默回落。
 @MainActor
 final class WeatherStore: ObservableObject {
 
@@ -27,6 +33,11 @@ final class WeatherStore: ObservableObject {
 
     /// 内存缓存窗口（秒）。与后端 KV 的 TTL 对齐，见类型注释
     private static let freshWindow: TimeInterval = 600
+
+    /// 坐标变化的作废阈值（0.05° ≈ 5.5km）。
+    ///
+    /// 天气按公里级网格算：移动不到 5km 换来的仍是同一份天气，作废缓存只是白打一次接口。
+    private static let coordinateTolerance: Double = 0.05
 
     /// 最近一次成功拿到的天气。nil = 从来没成功过（首次安装 / 一直断网）
     @Published private(set) var current: WeatherNow?
@@ -37,6 +48,13 @@ final class WeatherStore: ObservableObject {
     /// 最近一次**成功**的时间。用成功而不是发起时间：
     /// 否则一次失败会把缓存窗重新计满 10 分钟，用户接下来点刷新也只能干等
     private var lastSuccessAt: Date?
+
+    /// 上一次请求用的坐标（`nil` = 用的服务端默认坐标）。
+    ///
+    /// 只做一件事：判断"地点换了没有"。有坐标和没坐标**不是同一份数据**
+    /// （一个是当地、一个是默认城市），所以两种状态之间的切换也一律作废缓存，
+    /// 否则用户会在大西洋两岸的天气之间来回看到同一个幻觉。
+    private var lastQueryCoordinate: CLLocationCoordinate2D?
 
     private let client: APIClient
 
@@ -59,6 +77,17 @@ final class WeatherStore: ObservableObject {
         // 上一发还在飞：直接返回，别叠加请求
         guard !isLoading else { return }
 
+        // 设备定位（可能为 nil）。`LocationStore` 与 `WeatherStore` 都是 `@MainActor`，
+        // 这里可以直接读，不需要显式跳 actor。
+        let coordinate = LocationStore.shared.coordinate
+
+        // 地点变了 → 内存里那份天气不是"这里"的天气，必须作废。
+        // 不做这一步的话，用户飞到另一个城市后卡片会继续显示出发地的天空 —— 而且看起来完全正常。
+        if Self.hasMoved(from: lastQueryCoordinate, to: coordinate) {
+            lastSuccessAt = nil
+            lastQueryCoordinate = coordinate
+        }
+
         // 缓存命中：什么都不做。`current` 已经是它了，重发只会多一次网络往返
         if !force, let lastSuccessAt = lastSuccessAt,
            Date().timeIntervalSince(lastSuccessAt) < Self.freshWindow {
@@ -66,7 +95,7 @@ final class WeatherStore: ObservableObject {
         }
 
         // 地址拼错是代码问题，不该表现为"天气未知"之外的任何东西：静默即可
-        guard let url = API.weather() else { return }
+        guard let url = API.weather(lat: coordinate?.latitude, lon: coordinate?.longitude) else { return }
 
         isLoading = true
         defer { isLoading = false }
@@ -89,6 +118,29 @@ final class WeatherStore: ObservableObject {
         } catch {
             // 传输 / 解码失败一律静默（`APIError.cancelled` 也走这里：页面切走时取消是正常行为）
             return
+        }
+    }
+
+    // MARK: - 坐标变了没有
+
+    /// 两次请求之间的坐标是否算"换了地方"（见 `coordinateTolerance`）。
+    ///
+    /// 三种情况各自的意义：
+    /// · 都没有坐标 → 没换（一直是默认城市）；
+    /// · 都有坐标 → 差得超过 0.05° 才算换（同城内的移动不换天气）；
+    /// · 一边有一边没有 → **算换**。这是最容易漏的一条：从"有坐标"变成"没有"
+    ///   （用户关了开关）如果不作废缓存，卡片会继续显示当地天气，
+    ///   而开关的文案说的是"关闭时用默认城市"。
+    private static func hasMoved(from previous: CLLocationCoordinate2D?,
+                                 to current: CLLocationCoordinate2D?) -> Bool {
+        switch (previous, current) {
+        case (nil, nil):
+            return false
+        case let (previous?, current?):
+            return abs(previous.latitude - current.latitude) > coordinateTolerance
+                || abs(previous.longitude - current.longitude) > coordinateTolerance
+        default:
+            return true
         }
     }
 }

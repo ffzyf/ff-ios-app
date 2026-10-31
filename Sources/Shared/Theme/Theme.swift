@@ -507,68 +507,145 @@ extension Theme {
     }
 }
 
-// MARK: - 天气氛围色（V3.7 简报卡按当天天气换一套氛围）
+// MARK: - 天气氛围色（V3.7 简报卡按当天天气换一套氛围；3.7.1 起纸面跟着系统浅色/深色走）
 
 extension Theme {
 
-    /// 「今天的天气」的八档氛围色 —— 简报卡的底色 + 中心柔光。
+    /// 「今天的天气」的八档氛围色 —— 简报卡的**纸基 + 中心柔光 + 墨色**。
     ///
-    /// **为什么不用 `Palette`、不走 `dyn`（不参与换肤）**：
-    /// 换肤改的是界面自己的情绪（青柠 / 暮紫 / 暖砂 / 海蓝 / 樱粉），而天气是**物理事实**——
-    /// 切到樱粉主题时把「下雨」染成粉色，这张卡就不再是天气报表，而是一张装饰插画了。
-    /// 所以八档用固定 hex：五套主题下同一场雨永远是同一种蓝。
-    /// 它们**只做面**（底色 / 柔光 / 粒子），文字一律走 `sky(.night).ink`，
-    /// 因此换主题也不会让任何一处对比度失守（`ink` = `#F5F8FF`，与八档顶色的对比度都在 15:1 以上）。
+    /// **为什么要有两张纸（3.7.1 修的就是这一条）**：3.7 起八档天气的 `top` 全是近黑
+    /// （阴天 `#15181C`、雷 `#100E18`），渐变终点又固定是 `sky(.night).ground`（`#02040A`），
+    /// 于是**不管什么天气，这张卡在桌面上都是一块黑砖** —— 12%~30% 的柔光与粒子压在近黑底上
+    /// 根本看不见；而用户在浅色系统里把 App 用成浅色，桌面这张卡却是一块黑砖，完全不合群。
+    /// 所以纸面改成**跟着系统的浅色 / 深色走**，八档天气在两种纸面上都看得出来。
     ///
-    /// **为什么八档全是深色**：简报卡要压住近白的白字。底色一浅，白字立刻读不清，
-    /// 而"换一天天气就得换一套字色"是这套系统里最容易漏掉、又最难在评审时发现的错误。
-    /// 于是明度全部贴着 `sky(.night)`（`#05070E`）走，**只靠色相区分天气**：
-    /// 晴是暖褐、雨是深蓝、雷是近黑紫 —— 用户扫一眼读到的是"今天是暖的还是冷的"，
-    /// 而不是"今天卡片亮还是暗"。
+    /// 三条不变量：
+    /// 1. **深色纸基 = 3.6.0 那张夜纸**（`sky(.night).top` → `sky(.night).ground`，墨 = `sky(.night).ink`）：
+    ///    **深色纸基与墨色未变；八档天气的 `top` 是*有意*提亮了一到两档**（阴天 `#15181C → #262C33`、
+    ///    雷 `#100E18 → #1A1526`）—— 底色得先亮起来，粒子和柔光在深色纸上才看得见。
+    ///    这是"黑砖"的直接解药；
+    /// 2. **浅色纸是"被天气染过的纸"**（`#F1EDE3` → `#E3DDCE` + 高明度低饱和的天气顶色），
+    ///    不是彩色块，也不是第二块黑；墨是深灰 `#24262A` 而不是纯黑 —— 粒子用 ink 与 glow
+    ///    画出来才有层次；
+    /// 3. **没有天气（`nil`）不许兜底成晴天**：两张纸各自退回自己的纸基，
+    ///    与 `WeatherKind.from(code:)` 拒绝兜底是同一条原则。
+    ///
+    /// **为什么不用 `Palette`、不走 `dyn`（不参与换肤）**：换肤改的是界面自己的情绪
+    /// （青柠 / 暮紫 / 暖砂 / 海蓝 / 樱粉），而天气是**物理事实** —— 切到樱粉主题时把「下雨」
+    /// 染成粉色，这张卡就不再是天气报表，而是一张装饰插画了。所以八档仍是固定 hex：
+    /// 五套主题下同一场雨永远是同一种蓝。深浅不是主题，是系统外观，由 `Paper` 表达。
     enum Weather {
 
-        /// 天气 → (底色, 柔光)。
+        /// 纸面档位 —— 由**系统浅色 / 深色**决定，与 App 的三态设置无关。
         ///
-        /// - 底色 `top`：最暗的一档，铺满整卡的线性渐变**起点**（终点固定是 `sky(.night).ground`，
-        ///   也就是下面那张"夜纸"），所以八档的卡片下沿都是同一块近黑，只有上半张在变天。
-        /// - 柔光 `glow`：比底色亮一档，**必须靠 `opacity` 压成光**再叠上去（0.12~0.30，
-        ///   由云量反向决定，见 `BriefMetrics.glowAlpha(cloudiness:)`）—— 直接用会变成一块色斑。
-        ///
-        /// - Parameter kind: 天气类型。**`nil` 时返回现有纸面的两个色**（`sky(.night)` 的
-        ///   `top` / `ground`）：没拿到天气就回到现在这张卡的样子，绝不用晴天兜底
-        ///   （与 `WeatherKind.from(code:)` 拒绝兜底是同一条原则）。
-        static func of(_ kind: WeatherKind?) -> (top: Color, glow: Color) {
-            // 没有天气数据：退回现有"夜纸"，一个像素都不变
-            guard let kind = kind else {
-                let night = Theme.sky(.night)
-                return (night.top, night.ground)
-            }
+        /// 为什么用一个枚举表达而不是在每个 View 里各判一次：Widget 进程里只有 `BriefFace`
+        /// 那唯一一处能读 `colorScheme`（Widget 扩展没有 `ThemeScope`），其余组件只收这个枚举 ——
+        /// 于是"深浅"在整张简报卡里**只有一个来源**，漏改一处也不会出现半浅半深。
+        enum Paper {
+            /// 浅色系统：米纸 + 深灰墨
+            case light
+            /// 深色系统：3.6.0 的夜纸 + 近白墨
+            case dark
+        }
 
-            switch kind {
-            case .clear:
-                // 晒过太阳的纸：暖褐黑 + 暖金。云量 0，所以柔光最亮的一档
-                return (Color(hex: "#1A1510"), Color(hex: "#6B4E22"))
-            case .partly:
-                // 深蓝灰 + 银蓝：还是蓝调，只是被云压暗了一档
-                return (Color(hex: "#131A22"), Color(hex: "#3A4E63"))
-            case .overcast:
-                // 冷灰 + 灰蓝：无色彩倾向，正是"阴天没有光照方向"的感觉
-                return (Color(hex: "#15181C"), Color(hex: "#3B434E"))
-            case .fog:
-                // 灰青：比阴略微发青，让人想到湿度而不是雨
-                return (Color(hex: "#161B1D"), Color(hex: "#445155"))
-            case .drizzle:
-                // 深青 + 青：毛毛雨的青是"空气里的水汽"，不是大雨那种蓝
-                return (Color(hex: "#0F191C"), Color(hex: "#2E5459"))
-            case .rain:
-                // 深蓝 + 蓝：最"正"的雨天色，与 drizzle 的青拉开一档
-                return (Color(hex: "#0C1420"), Color(hex: "#2A4A72"))
-            case .snow:
-                // 冷青白：雪天要"冷"，但不许"亮" —— 底色仍是深的，亮的是落下来的点
-                return (Color(hex: "#121820"), Color(hex: "#5A7080"))
-            case .thunder:
-                // 近黑紫：雷暴的电是紫的（闪电本身用 `glow` 画，见 `BriefFace`）
-                return (Color(hex: "#100E18"), Color(hex: "#463466"))
+        // MARK: 纸基与墨色
+
+        /// 纸基两端（渐变起点 / 终点）。
+        ///
+        /// 深色那一支刻意**直接取 `sky(.night)`** 而不是再抄一遍 hex：3.6.0 的深色卡就是这两支，
+        /// 这样"深色纸基与墨色未变"才是可验证的（将来调 `sky(.night)` 这张卡跟着走）。
+        /// 变的是八档天气的 `top`（有意提亮一到两档，见 `hexes`）—— 纸基这一层一个 hex 都没动。
+        static func paperBase(_ paper: Paper) -> (top: Color, bottom: Color) {
+            switch paper {
+            case .light:
+                // 米纸：高明度、低饱和。看起来是"纸"，而不是又一块白板
+                return (top: Color(hex: "#F1EDE3"), bottom: Color(hex: "#E3DDCE"))
+            case .dark:
+                let night = Theme.sky(.night)
+                return (top: night.top, bottom: night.ground)
+            }
+        }
+
+        /// 墨色（字 / 轨迹刻度 / 光点 / 粒子）。
+        ///
+        /// 浅色下是**深灰** `#24262A` 而不是纯黑：纯黑压在米纸上像加粗，深灰才有"印上去"的层次，
+        /// 粒子用它再叠 `glow` 也分得出前后。深色下沿用 `sky(.night).ink`（`#F5F8FF`）——
+        /// 深色**墨色**与 3.6.0 逐点相同（提亮的是八档 `top`，不是墨）。
+        static func ink(_ paper: Paper) -> Color {
+            switch paper {
+            case .light:
+                return Color(hex: "#24262A")
+            case .dark:
+                return Theme.sky(.night).ink
+            }
+        }
+
+        // MARK: 八档
+
+        /// 天气 → (底色, 柔光, 墨色)。
+        ///
+        /// - 底色 `top`：线性渐变**起点**（终点是 `paperBase(_:)` 的 `bottom`，两张纸各一张）；
+        /// - 柔光 `glow`：比底色亮一档，**必须靠 `opacity` 压成光**再叠上去（0.12~0.30，
+        ///   由云量反向决定，见 `BriefMetrics.glowAlpha(cloudiness:)`）—— 直接用会变成一块色斑；
+        /// - 墨色 `ink`：字与粒子。天气只改"面"，但**纸换了墨必须跟着换** —— 这正是 3.7 那块
+        ///   黑砖的根因：纸是近黑、墨是近白，两者绑死，浅色系统里没有出路。
+        ///
+        /// - Parameters:
+        ///   - kind: 天气类型。**`nil` 时返回这张纸自己的两个底色**（不含任何天气氛围）：
+        ///     没拿到天气就退回"这张纸本来的样子"，绝不用晴天兜底。
+        ///   - paper: 纸面档位（由 `BriefFace` 那唯一一处 `colorScheme` 给出）
+        static func of(_ kind: WeatherKind?, paper: Paper) -> (top: Color, glow: Color, ink: Color) {
+            let base = paperBase(paper)
+            let ink = self.ink(paper)
+            guard let kind = kind else {
+                // 没有天气：起点 / 终点就是这张纸本身，`glow` 也回到底色 ——
+                // 调用方因此拿不到任何天气氛围（浅色纸上尤其重要：不需要那层青柠光）
+                return (top: base.top, glow: base.bottom, ink: ink)
+            }
+            let hex = hexes(kind, paper: paper)
+            return (top: Color(hex: hex.top), glow: Color(hex: hex.glow), ink: ink)
+        }
+
+        /// 旧签名：等价于 `of(kind, paper: .dark)`。
+        ///
+        /// **保留、不改签名**：3.7 的那些调用点（以及天光组件的备用路径）按两元组写的，
+        /// 改签名会把"只错在简报卡"升级成"整个 Widget target 编译失败"。
+        /// 需要纸面档位的新代码请用 `of(_:paper:)`；这一支永远只给 3.6.0 的深色观感。
+        static func of(_ kind: WeatherKind?) -> (top: Color, glow: Color) {
+            let mood = of(kind, paper: .dark)
+            return (top: mood.top, glow: mood.glow)
+        }
+
+        /// 八档 × 两张纸的 hex 表 —— **全工程唯一**写天气色的地方。
+        ///
+        /// 两张表的意图完全不同，别当成同一张表的明暗版：
+        /// · 浅色是"被天气染过的纸"：高明度、低饱和，只差色相与一点点明度；
+        /// · 深色是"夜里的天光"：整体提亮一到两档（阴天 `#15181C` → `#262C33`、
+        ///   雷 `#100E18` → `#1A1526`），靠色相 + 柔光区分天气。
+        private static func hexes(_ kind: WeatherKind, paper: Paper) -> (top: String, glow: String) {
+            switch paper {
+            case .light:
+                switch kind {
+                case .clear:    return ("#F7E4C0", "#C08A3A")  // 晒暖的米纸 + 琥珀
+                case .partly:   return ("#E4EAF1", "#5B7794")  // 薄云蓝灰 + 银蓝
+                case .overcast: return ("#D3D8DE", "#6E7A87")  // 无色彩倾向的冷灰
+                case .fog:      return ("#DCE1DF", "#6E7C7A")  // 微青灰：湿度而不是雨
+                case .drizzle:  return ("#D6E2E2", "#4C7C80")  // 水汽青
+                case .rain:     return ("#D5E0EC", "#43679A")  // 最"正"的雨天色，蓝得比毛毛雨深
+                case .snow:     return ("#E6ECF3", "#6A8298")  // 冷到发光，但不刺眼
+                case .thunder:  return ("#DED8EC", "#5A4787")  // 雷暴的电是紫的
+                }
+            case .dark:
+                switch kind {
+                case .clear:    return ("#241C12", "#C08A3E")  // 暖褐 + 暖金（云量 0，柔光最亮）
+                case .partly:   return ("#1B232C", "#6E87A3")  // 深蓝灰 + 银蓝
+                case .overcast: return ("#262C33", "#8B96A3")  // 原来最黑的那一档，提亮两档
+                case .fog:      return ("#232B2D", "#8C9A9C")  // 灰青
+                case .drizzle:  return ("#16232A", "#5E9298")  // 深青
+                case .rain:     return ("#131E2C", "#5A7FAC")  // 深蓝
+                case .snow:     return ("#1C2530", "#93A8BC")  // 冷青白：亮的是落下来的点
+                case .thunder:  return ("#1A1526", "#8A6FBF")  // 近黑紫（闪电本身用 `glow` 画）
+                }
             }
         }
     }

@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// 版式档（设计文档 §3.2）：**这一页怎么排**，不是"内容的列数"。
+///
+/// 为什么不合并成一个自适应栅格（§3.4）：红石月历必须恰好 7 列、收益 hero 必须跨列 ——
+/// 用 `LazyVGrid(.adaptive)` 表达不了这些。版式档是"排法"，栅格列数是"排法的一个结果"。
+///
+/// 四个档只由**画布宽度**推出（门槛 760 / 1020 / 1040），与设备类型无关：
+/// iPad 1⁄3 分屏（320）落在 `single`，13" 竖屏（canvas 984）落在 `grid2` 但 rail 页退回单列。
+enum PageTier: Equatable {
+    /// 单列（iPhone / Slide Over / 竖屏 / 分屏）：与 3.7.0 完全一致
+    case single
+    /// 2 列列表（834 竖屏 canvas 794）
+    case grid2
+    /// 3 列（canvas 1020…1039，只在 Stage Manager 的窄窗口里出现）
+    case grid3
+    /// 主列 + 副列（canvas ≥ 1040：1194 横屏 / 1210 / 1366）
+    case rail
+}
+
 /// 全工程唯一的"设备有多大"判定（设计文档 §1.3 / §1.4）。
 ///
 /// 为什么不是 `UIDevice.current.userInterfaceIdiom`：iPad 的 Split View / Slide Over /
@@ -43,9 +61,6 @@ struct LayoutMetrics: Equatable {
         return .regularWide
     }
 
-    /// 只有 `regularWide` 才并排。8pt 级的差异不改结构，避免边界抖动时反复重排。
-    var isTwoColumn: Bool { widthClass == .regularWide }
-
     /// 单列页面列宽（§3.1：概览 / 简报 / 更多 / 问卷列表与结果）
     var contentWidth: CGFloat { min(effectiveWidth, Layout.contentMaxWidth) }
 
@@ -55,8 +70,117 @@ struct LayoutMetrics: Equatable {
     /// 表单列宽（§3.7 设置行"标题 …… 值"不折行的上限）
     var formWidth: CGFloat { min(effectiveWidth, Layout.formMaxWidth) }
 
-    /// 两列页面总宽（560 + 32 + 368）
-    var twoColumnWidth: CGFloat { min(effectiveWidth, Layout.twoColumnMaxWidth) }
+    // MARK: - 画布与版式档（2026-10-31 iPad 版式重做，设计文档 §3）
+
+    /// 画布宽度 = **内容区**最多多宽（不含页边距 20×2）。
+    ///
+    /// 1194 → `min(1194 − 40, 1080)` = **1080**；834 → **794**；393 → **353**（= 今天）。
+    ///
+    /// 为什么减 `Spacing.page * 2`：`pageColumn(_:)` 套在 `.padding(.horizontal, 20)` **外面**，
+    /// 所以它收到的是"内容 + 页边距"的总宽。画布量的是内容 —— 两列栅格 344 / 385 都是内容宽，
+    /// 只有把 40 扣掉，三列 344×3 + 24×2 才恰好等于 1080（设计文档 R1 的"留白 57"也是这么算的：
+    /// 37 列区外留白 + 20 页边距）。
+    var canvasWidth: CGFloat {
+        let usable = effectiveWidth - Spacing.page * 2
+        return max(0, min(usable, Layout.canvasMaxWidth))
+    }
+
+    /// 版式档。门槛顺序必须从大到小 —— 1040 也满足 1020，反过来判定会把 rail 判成 grid3。
+    var pageTier: PageTier {
+        if canvasWidth >= Layout.railMinCanvas { return .rail }
+        if canvasWidth >= Layout.grid3MinCanvas { return .grid3 }
+        if canvasWidth >= Layout.grid2MinCanvas { return .grid2 }
+        return .single
+    }
+
+    /// 这一页要不要"主列 + 副列"。**页面里唯一的宽档判断入口之一**（另一个是 `gridColumns`）。
+    var usesRail: Bool { pageTier == .rail }
+
+    /// 宽档是否把 Tab 栏搬到屏幕顶部（设计文档 §6.2 选 C）。
+    ///
+    /// 判据是"不是 compact"而不是"画布够宽"：iPad 竖屏 834 也该是顶部的系统形态（HIG：
+    /// iPadOS 的 tab bar 在屏幕顶部）。`compact`（iPhone / Slide Over / 1⁄3 分屏）继续用底部胶囊，
+    /// 几何一个像素都不变。
+    ///
+    /// **只读 `horizontalSizeClass`，不读 `widthClass`（3.7.0 修首帧闪）**：`widthClass` 混了
+    /// `containerSize.width`，而那是 `LayoutMetricsScope` 用 GeometryReader 量出来的 ——
+    /// iPad 冷启动首帧 `containerSize == .zero`，于是首帧判成 `.compact` 先用底部胶囊条、
+    /// 第二帧量到宽度再跳成顶部条：chrome 从屏幕底部跳到顶部，是全页最显眼的一种闪。
+    /// `horizontalSizeClass` 由系统直接给，不依赖任何测量，首帧就是正确的。
+    /// 三种情况都不会漏：
+    /// - Stage Manager 把窗口拖窄 → 尺寸类自己变成 `.compact` → 仍然退回底部条；
+    /// - iPad 竖屏 834 / 横屏 1194 → 一直是 `.regular` → 从第一帧就是顶部条；
+    /// - iPhone 恒为 `.compact` → 恒 false，零回归。
+    var usesTopTabStrip: Bool { horizontalSizeClass == .regular }
+
+    /// 画布 + 页边距 = **传给 `pageColumn` 的值**。
+    ///
+    /// 页面里的所有 `pageColumn(...)` 实参都该从这三个派生值里取，而不是自己算：
+    /// - 正文列（640 / 720）→ `readingWidth` / `contentWidth`
+    /// - 画布那一层（导航条 / 顶部条）→ `canvasPageWidth`
+    /// - 版式档那一层 → `railPageWidth` / `gridPageWidth`
+    ///
+    /// 为什么必须加 `Spacing.page * 2`：`pageColumn` 套在 `.padding(.horizontal, 20)` 外面，
+    /// 它收到的是"内容 + 页边距"。少加这 40，iPad 上每一列都会瘦 40/n（三列时每列瘦 13.3），
+    /// 而 iPhone 上看不出来（宽于 393 的限宽本来就不生效）。
+    var canvasPageWidth: CGFloat {
+        return canvasWidth + Spacing.page * 2
+    }
+
+    /// rail 页（红石 / 收益 / 简报 / 更多）传给 `pageColumn` 的值。
+    ///
+    /// rail 不成立时等于今天的 720（834 竖屏、1024 竖屏、所有 compact 尺寸都是这条路）。
+    /// 成立时是画布 + 页边距：渲染出来的内容宽才等于画布 1080（主列 680 / 栏距 32 / 副列 368）。
+    var railPageWidth: CGFloat {
+        usesRail ? canvasPageWidth : min(effectiveWidth, Layout.contentMaxWidth)
+    }
+
+    /// grid 页（概览 / 文章 / 攻略 / 监控 / 问卷结果）传给 `pageColumn` 的值。
+    ///
+    /// 单列时与今天完全一致（720）；多列时是画布 + 页边距（理由同上）。
+    var gridPageWidth: CGFloat {
+        gridColumns > 1 ? canvasPageWidth : min(effectiveWidth, Layout.contentMaxWidth)
+    }
+
+    /// 栅格列数：1 / 2 / 3。门槛与 `pageTier` 用同一组常量，两处不会漂。
+    var gridColumns: Int {
+        if canvasWidth >= Layout.grid3MinCanvas { return 3 }
+        if canvasWidth >= Layout.grid2MinCanvas { return 2 }
+        return 1
+    }
+
+    /// rail 页主列宽 = 画布 − 栏距 − 副列（1194 → 680）。
+    ///
+    /// 从画布算而不是写死 680：Stage Manager 拖到 1100 时主列会自动变窄，
+    /// 写死会让副列被挤出画布（横向裁掉右半边卡）。
+    /// `min(..., Layout.mainColumnMaxWidth)` 是把"主列不超过 680"这条写进代码 ——
+    /// 画布已经封顶 1080，所以它今天恒不生效，但换个封顶值也不会悄悄把主列撑宽。
+    var railMainWidth: CGFloat {
+        let derived = canvasWidth - Layout.columnGap - Layout.sideColumnWidth
+        return max(0, min(derived, Layout.mainColumnMaxWidth))
+    }
+
+    /// 单列宽度 = 画布按列数切开后的一格（1080 三列 → 344；794 两列 → 385）。
+    var gridColumnWidth: CGFloat {
+        let count = CGFloat(gridColumns)
+        let gutters = Layout.gridGutter * (count - 1)
+        return max(0, (canvasWidth - gutters) / count)
+    }
+
+    /// 卡片是否走宽档档位。`cardHeight(_:)` 与"hero 数字要不要换 56pt"共用这一个判据。
+    ///
+    /// 为什么要暴露出来而不是让页面各自判 `widthClass`：卡高与卡内字号是**同一件事的两面** ——
+    /// 卡长到 344、数字却还是 40pt，就是设计文档 §5.2 说的"放大的空卡"。
+    /// 两处共用一个布尔，才不会出现"高度换了字号没换"这种一半一半的状态。
+    var usesWideCards: Bool { widthClass != .compact }
+
+    /// 卡片高度：窄档给今天的值，宽档给同比例放大后的值（设计文档 §5.1）。
+    ///
+    /// 页面**不许**再直接写 `CardTier.xxx.height` —— 那个值只服务窄档，
+    /// 在 1080 的画布上摆 240 高的卡就是"放大的手机"（设计文档 §5.4 的验收线 1.4…3.1:1）。
+    func cardHeight(_ tier: CardTier) -> CGFloat {
+        usesWideCards ? tier.wideHeight : tier.height
+    }
 
     /// Tab 胶囊宽度。
     ///

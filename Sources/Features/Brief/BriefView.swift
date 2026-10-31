@@ -16,6 +16,11 @@ struct BriefView: View {
     /// 用单例观察而不是再注入一个环境对象：简报页只需要它的两个字段（最近推送 / 时段），
     /// 多一层注入就多一处「模态没继承环境对象」的运行期风险。
     @ObservedObject private var monitor = MonitorStore.shared
+    /// 尺寸模型（设计文档 §4.3）：rail 档把「两服版本 + 版本与推送」搬到右侧 368，
+    /// 正文留在 680 —— 正文行宽一个字都不变（R9：行宽由字形决定，不由屏幕决定）。
+    @Environment(\.layoutMetrics) private var metrics
+    /// 主列实测高度（副列靠它撑高，`Spacer` 才吸得到差额；理由见 `View.measureHeight(into:)`）
+    @State private var mainColumnHeight: CGFloat = 0
     /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
     let scrollPosition: Binding<ScrollPosition>
 
@@ -34,10 +39,12 @@ struct BriefView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 单列 720 居中（设计文档 §3.4）。这一页**刻意不做两列**：
-            // 主体是文字，680 的正文折成两列只剩 340 ≈ 19 汉字/行，低于 30 字的下限；
-            // 而且"版本对比"与"今日详情"并排会让读者以为它们是同一层级的两件事。
-            .pageColumn(Layout.contentMaxWidth)
+            // 列宽：rail 档 = 画布 1080 + 页边距（主 680 / 32 / 副 368），否则 720（= 今天）。
+            //
+            // 这一页仍然**不做"正文分两栏"**：正文 680 折成两列只剩 340 ≈ 19 汉字/行，
+            // 低于 30 字的下限（R9）。宽档只是把与正文不同性质的两组（两服版本 / 版本与推送）
+            // 挪到右侧 —— 行宽没变，右侧那 474 的永久空白变成了 368 的对照信息。
+            .pageColumn(metrics.railPageWidth)
         }
         .scrollPosition(scrollPosition)
         .pageScrollLight()
@@ -99,25 +106,73 @@ struct BriefView: View {
         }
     }
 
+    /// 已加载时的分组排布：**窄档单列 / rail 档"正文 + 副列"**。
+    ///
+    /// 三个分组各自是一个属性（`versionSection` / `briefSection` / `recordSection`），
+    /// 定义只有一份 —— 宽档改的是"谁在谁旁边"，不是"再写一套简报页"。
+    /// 窄档分支的顺序与 3.7.0 一字不差：两服版本 → 今日详情 → 版本与推送。
+    @ViewBuilder
     private var loadedBlocks: some View {
+        if metrics.usesRail {
+            HStack(alignment: .top, spacing: Layout.columnGap) {
+                briefSection
+                    .frame(maxWidth: metrics.railMainWidth, alignment: .topLeading)
+                    .measureHeight(into: $mainColumnHeight)
+                sideColumn
+                    .frame(width: Layout.sideColumnWidth)
+                    // `minHeight` 而不是 `height`：副列内容比主列高时不溢出卡片，
+                    // 内容矮时仍然撑到主列高度 —— `Spacer` 吃差额，最后一块压到底边（齐平保留）。
+                    .frame(minHeight: sideColumnHeight, alignment: .top)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+                versionSection
+                briefSection
+                recordSection
+            }
+        }
+    }
+
+    /// rail 档副列：两服版本 → 版本与推送 → `Spacer(minLength: 32)`（设计文档 §4.3）。
+    ///
+    /// 两块的高度都由内容决定（三个组件都没有固定高度），所以这里不设任何阈值：
+    /// 副列短时 `Spacer` 把「推送状态行」压到底边、副列长时主列底部留白（规则见 §4.0）。
+    private var sideColumn: some View {
         VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
-            // 三个分组各给一个 22pt 分区标题：版本 / 简报详情 / 版本记录是这页的三件事，
-            // 改版前它们都是"同宽同圆角的玻璃卡"，只能靠读内容猜边界（报告 §3.3）
-            section("两服版本") {
-                SkyVersionPanel(status: model.skyStatus)
-            }
-            section("今日详情") {
-                TodayBriefCard(snapshot: model.todayBrief)
-            }
-            section("版本与推送") {
-                // `VersionRecordCard` 卡内自带「版本记录」这行 17pt 标题，
-                // 所以分区标题不同名（同一句话上下重复会被读成 bug）；
-                // 顺带把「推送状态」这一行收进同一个组 —— 改版前它是 11pt 单行收尾，页面止于最轻元素
-                VStack(alignment: .leading, spacing: Spacing.cardGap) {
-                    VersionRecordCard(status: model.skyStatus)
-                    // 批次 4：推送状态只读行。取不到时组件自己渲染 EmptyView（整行隐藏，不写"未知"）
-                    PushStatusRow(snapshot: model.todayBrief, monitor: monitor.response)
-                }
+            versionSection
+            recordSection
+            Spacer(minLength: Layout.columnGap)
+        }
+    }
+
+    /// 副列高度：量到主列才给值，首帧（0）给 `nil` = 按内容自然高。
+    private var sideColumnHeight: CGFloat? {
+        return mainColumnHeight > 0 ? mainColumnHeight : nil
+    }
+
+    // MARK: - 三个分组（定义只有一份，两个档共用）
+
+    private var versionSection: some View {
+        section("两服版本") {
+            SkyVersionPanel(status: model.skyStatus)
+        }
+    }
+
+    private var briefSection: some View {
+        section("今日详情") {
+            TodayBriefCard(snapshot: model.todayBrief)
+        }
+    }
+
+    private var recordSection: some View {
+        section("版本与推送") {
+            // `VersionRecordCard` 卡内自带「版本记录」这行 17pt 标题，
+            // 所以分区标题不同名（同一句话上下重复会被读成 bug）；
+            // 顺带把「推送状态」这一行收进同一个组 —— 改版前它是 11pt 单行收尾，页面止于最轻元素
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                VersionRecordCard(status: model.skyStatus)
+                // 批次 4：推送状态只读行。取不到时组件自己渲染 EmptyView（整行隐藏，不写"未知"）
+                PushStatusRow(snapshot: model.todayBrief, monitor: monitor.response)
             }
         }
     }

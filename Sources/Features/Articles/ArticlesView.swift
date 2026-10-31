@@ -16,15 +16,20 @@ struct ArticlesView: View {
     private let scrollPosition: Binding<ScrollPosition>
     private let onOpenArticle: (ArticleSummary) -> Void
 
-    /// 宽屏 2 列网格的列定义。每列 474 = (960 − 12) / 2。
+    /// 网格列定义：`metrics.gridColumns` 决定 1 / 2 / 3 列（窄档不建网格，走 `ForEach`）。
     ///
     /// 为什么不用 `.adaptive(minimum:)`：adaptive 会随宽度自己变成 3–4 列，
     /// 一屏从 8 篇变成 16 篇的同时每张卡的标题可读宽度也变了 —— 版式就不再"所有设备一致"。
-    /// 固定两列让窄屏 = 单列、宽屏 = 两列，中间没有第三种形态。
-    private let gridColumns: [GridItem] = [
-        GridItem(.flexible(), spacing: Spacing.cardGap),
-        GridItem(.flexible(), spacing: Spacing.cardGap)
-    ]
+    /// 列数只来自 `LayoutMetrics`（它只在 `onChange(of: proxy.size)` 时变），
+    /// 所以滚动、切页、动画期间不会重排（设计文档 R7）。
+    ///
+    /// 栏距 24 = `Layout.gridGutter`：1080 = 344×3 + 24×2 就是按它算出来的。
+    /// 行距（`LazyVGrid(spacing:)`）仍是 12 —— 栅格管"画布怎么切"，组内节奏管"两张卡隔多远"。
+    private var columnDefs: [GridItem] {
+        let count = metrics.gridColumns
+        guard count > 1 else { return [] }
+        return Array(repeating: GridItem(.flexible(), spacing: Layout.gridGutter), count: count)
+    }
 
     /// 只在「本页正在追加」时置真，避免同一页被触发两次
     @State private var isLoadingMore: Bool = false
@@ -50,13 +55,10 @@ struct ArticlesView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 窄屏 393 < 720 → 无影响。宽屏时 960 是**列区**宽度（2 × 474 + 12），
-            // 页边距 20×2 在它外面，所以要加回去（与红石 / 收益两页同一处推导）。
-            .pageColumn(
-                metrics.isTwoColumn
-                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
-                    : Layout.contentMaxWidth
-            )
+            // 列宽：单列 720（= 今天）/ 多列时画布（1080 / 794）。
+            // `gridPageWidth` 已经是"内容 + 页边距"，页边距 20×2 在它里面 —— 不要再减 40。
+            // 窄屏 393 < 720 → 无影响。
+            .pageColumn(metrics.gridPageWidth)
         }
         .scrollPosition(scrollPosition)
         .pageScrollLight()
@@ -68,16 +70,11 @@ struct ArticlesView: View {
                 OfflineBanner()
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
-                    // 细条必须和上面那个 ScrollView 的列宽一模一样（两列时 960，单列时 720），
-                    // 否则 iPad 上胶囊比内容列宽出 194、左右各探出 97 —— 一条"出血"的横杠。
-                    // 所以这里照抄 body 里 `pageColumn` 的表达式，而不是写死 720：
-                    // 写死的 720 在两列时又会比内容列窄 240，变成另一种错位。
-                    // 窄屏两个值都 > 393，`maxWidth` 不生效 → 零影响。
-                    .pageColumn(
-                        metrics.isTwoColumn
-                            ? Layout.twoColumnMaxWidth + Spacing.page * 2
-                            : Layout.contentMaxWidth
-                    )
+                    // 细条必须和上面那个 ScrollView 的列宽一模一样（多列时画布，单列时 720），
+                    // 否则 iPad 上胶囊比内容列窄、左右各缩进一大截 —— 一条"没对齐"的横杠。
+                    // 所以照抄 body 里那条表达式而不是写死 720。
+                    // 窄屏 720 > 393，`maxWidth` 不生效 → 零影响。
+                    .pageColumn(metrics.gridPageWidth)
             }
         }
         .refreshable {
@@ -114,11 +111,11 @@ struct ArticlesView: View {
         } else if model.articles.isEmpty && model.pinnedArticles.isEmpty {
             EmptyStateView.noArticles
         } else {
-            if metrics.isTwoColumn {
-                // 宽屏：置顶卡不单独加「置顶」小标题，直接当网格第一格 ——
-                // 卡片自带 `置顶` 徽标，一行只有两格时再加一个 11pt 小标题会把网格切成两段。
+            if metrics.gridColumns > 1 {
+                // 宽档：置顶卡不单独加「置顶」小标题，直接当网格第一格 ——
+                // 卡片自带 `置顶` 徽标，网格里再加一个 11pt 小标题会把网格切成两段。
                 // 这个分叉只在这里，窄屏的「置顶」分段标题一行都没动。
-                twoColumnGrid
+                articleGrid
             } else {
                 if !model.pinnedArticles.isEmpty {
                     sectionLabel("置顶")
@@ -138,10 +135,10 @@ struct ArticlesView: View {
         }
     }
 
-    /// 宽屏 2 列网格。置顶在前、普通在后（与服务端给的顺序一致，不在客户端重排）。
-    private var twoColumnGrid: some View {
+    /// 宽档网格（2 或 3 列）。置顶在前、普通在后（与服务端给的顺序一致，不在客户端重排）。
+    private var articleGrid: some View {
         LazyVGrid(
-            columns: gridColumns,
+            columns: columnDefs,
             alignment: .leading,
             spacing: Spacing.cardGap
         ) {

@@ -54,11 +54,16 @@ struct OverviewView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 列宽 720 居中（含 page padding 20×2 → 文字 680）。
-            // 挂在最外层：`Spacing.page` 是"列边距"的一部分，720 必须把它算在里面，
-            // 否则 iPad 上文字会变成 720 − 40 = 680 之外再被裁一次。
-            // 窄屏 393 < 720，`maxWidth` 不生效 —— 与 3.4.0 逐像素一致。
-            .pageColumn(Layout.contentMaxWidth)
+            // 列宽：bento 行只在 rail 档出现（canvas ≥ 1040），此时读画布；否则 720（= 今天）。
+            //
+            // **不能用 `gridPageWidth`**：它在 canvas 760…1019（834 / 1024 竖屏）也会返回画布，
+            // 而概览在那些尺寸上仍然是**单列 720** 的版式（设计文档 §3.2 注：rail 页在
+            // rail 不成立时一律退回 single 720）。用 gridPageWidth 会让竖屏的首页正文
+            // 从 680 变成 984 宽 —— 一行 60 多个汉字，正是 R9 禁止的事。
+            //
+            // `railPageWidth` 已经含页边距（宽档 = 1080 + 40），页面里不要再减 40。
+            // 窄屏 393 < 720，`maxWidth` 不生效 → 与 3.7.0 逐像素一致。
+            .pageColumn(metrics.railPageWidth)
         }
         .scrollPosition(scrollPosition)
         .pageScrollLight()
@@ -70,11 +75,10 @@ struct OverviewView: View {
                 OfflineBanner()
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
-                    // 细条与主体同列宽（720 含 page padding 20×2 = 680 的胶囊）。
-                    // 细条本身是 `.frame(maxWidth: .infinity)` 的胶囊，不吃列宽的话
-                    // iPad 上它会比下面的内容列宽出整整 (1194 − 40) − 680，左右各探出一大截。
-                    // 窄屏 393 < 720，`maxWidth` 不生效 → 与今天逐像素一致。
-                    .pageColumn(Layout.contentMaxWidth)
+                    // 细条与主体同列宽。**照抄 body 里那条表达式**而不是写死 720：
+                    // 写死会让宽档（画布 1080）的胶囊比内容列窄 360、左右各缩进 180，
+                    // 变成一条"没对齐"的横杠。窄屏 720 > 393，`maxWidth` 不生效 → 零影响。
+                    .pageColumn(metrics.railPageWidth)
             }
         }
         .refreshable {
@@ -100,13 +104,56 @@ struct OverviewView: View {
     ///
     /// 两张卡**恒定渲染**、与 feed 的加载状态解耦 —— feed 慢或挂了，首页上半屏依然是完整内容，
     /// 不会出现"整页灰骨架"（红石卡的数据源与 feed 完全不同域，没有理由被连坐）。
+    ///
+    /// **宽档（rail / bento）改横排**：712 的大卡 + 344 的右栏（设计文档 §4.1）。
+    /// 分叉只有这一处，两个分支里的卡片、组件、动作全部是同一批定义 —— 宽档改的是"谁在谁旁边"，
+    /// 不是"再写一套首页"。窄档分支与 3.7.0 逐字一致（纵向 hero 240 + medium 168）。
+    ///
+    /// 判据用 `usesRail` 而不是 `gridColumns == 3`：概览的 bento 行只在"画布 ≥ 1040"时成立，
+    /// 1020…1039 那条窄带里它按 §3.2 的约定退回单列（与红石 / 简报 / 更多一致）。
+    @ViewBuilder
     private var topPair: some View {
-        VStack(alignment: .leading, spacing: Spacing.cardGap) {
-            RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
+        if metrics.usesRail {
+            HStack(alignment: .top, spacing: Layout.gridGutter) {
+                RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
+                    // 712 由"344×2 + 24"推出来，但这里用 `maxWidth: .infinity` 让它自己吃掉
+                    // 剩余宽度：1020…1039 那条窄带里列宽不是 344，写死 712 会横向溢出被裁。
+                    .frame(maxWidth: .infinity)
+                overviewSideColumn
+                    // 高度给死 344（= `cardHeight(.hero)`）：
+                    // ① 右栏里的简报卡用 `maxHeight: .infinity` 撑满剩余空间（168 → 172），
+                    // ② 左右两块底边因此严格齐平，不需要任何 `Spacer` / 测量。
+                    // 不给高度的话，`ScrollView` 里 `HStack` 拿到的是"高度未定"的 proposal，
+                    // 右栏只会按内容自然高排，简报卡撑不到 172、底边差 4–8pt。
+                    .frame(
+                        width: metrics.gridColumnWidth,
+                        height: metrics.cardHeight(.hero),
+                        alignment: .top
+                    )
+            }
+        } else {
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
 
+                TodayBriefTrackCard(snapshot: model.todayBrief) {
+                    openBrief()
+                }
+            }
+        }
+    }
+
+    /// grid3 档 Row A 的右栏：简报摘要（168 → 172，被拉伸）+「今日一览」两张 tile。
+    ///
+    /// 172 + 12 + 40（分区标题）+ 120（tile）= 344 = hero 高 —— 这是"两个数字来自同一张栅格"
+    /// 的直接结果（设计文档 §4.1），不是凑出来的。
+    private var overviewSideColumn: some View {
+        VStack(alignment: .leading, spacing: Spacing.cardGap) {
             TodayBriefTrackCard(snapshot: model.todayBrief) {
                 openBrief()
             }
+            .frame(maxHeight: .infinity)
+
+            versionsSection
         }
     }
 
@@ -117,8 +164,12 @@ struct OverviewView: View {
     private var loadedBlocks: some View {
         if model.hasAnyContent {
             VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
-                versionsSection
-                if railArticles.isEmpty == false {
+                // 「今日一览」在 grid3 档被搬进 Row A 的右栏（它现在与 hero 同一行），
+                // 这里就不再重复渲染一次 —— 同一屏出现两组完全相同的版本 tile 是最典型的"半成品"。
+                if showsVersionsInline {
+                    versionsSection
+                }
+                if continueReadingArticles.isEmpty == false {
                     continueReadingSection
                 }
                 quickSection
@@ -133,12 +184,18 @@ struct OverviewView: View {
                 }
             )
         } else {
-            // 轻量骨架：只托住还没到的分区，不再整页铺 6 块灰条
+            // 轻量骨架：只托住还没到的分区，不再整页铺 6 块灰条。
+            // 高度走 `cardHeight(.tile)`：宽档是 120，与最终渲染出来的 tile 等高，收起时不跳。
             VStack(alignment: .leading, spacing: Spacing.cardGap) {
-                SkeletonBlock(height: CardTier.tile.height, cornerRadius: Radius.card)
-                SkeletonBlock(height: CardTier.tile.height, cornerRadius: Radius.card)
+                SkeletonBlock(height: metrics.cardHeight(.tile), cornerRadius: Radius.card)
+                SkeletonBlock(height: metrics.cardHeight(.tile), cornerRadius: Radius.card)
             }
         }
+    }
+
+    /// 「今日一览」留在正文流里吗？bento 档它在 Row A 的右栏里。
+    private var showsVersionsInline: Bool {
+        return !metrics.usesRail
     }
 
     /// 「今日一览」：两张 96 tile（原 `SkyStatusCard` 整卡留给简报页）
@@ -150,20 +207,50 @@ struct OverviewView: View {
         }
     }
 
-    /// 「继续读」：横向 rail。**没有文章就整块不渲染** —— 宁可少一组，不画空卡
+    /// 「继续读」：**窄档横滑 rail / 宽档 3 列网格**，同一份数据、同一个入口。
+    ///
+    /// 为什么宽档不继续用 rail：140×188 的竖卡在 1080 的画布上一行只放 6 张、还露出半张，
+    /// 而它横向只看得到 8 篇里的 4 篇 —— 屏幕宽了 3 倍、信息量却没变（设计文档 §1.1 的"唯一没退化的一块"）。
+    /// 换成 3 列 344×116 的列表卡，一行 3 篇、两行 6 篇，是高宽比 2.97:1（≈ iPhone 的 3.04:1）。
+    ///
+    /// **没有文章就整块不渲染** —— 宁可少一组，不画空卡。
     private var continueReadingSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "继续读", actionTitle: "更多", action: openArticles)
-            // 出血只对"列宽 = 屏宽"成立。宽屏列宽 720 < 1194，继续出血会让卡片滑到列外
-            // 压在空白上（§4.3），所以由 `allowsRailBleed` 决定。窄屏它恒为 true → 与今天一致。
-            Rail(bleeds: metrics.allowsRailBleed) {
-                ForEach(railArticles) { article in
-                    ArticleRailCard(article: article) {
-                        openArticles()
+            if metrics.usesRail {
+                LazyVGrid(
+                    columns: continueReadingColumns,
+                    alignment: .leading,
+                    // 行距用 12（组内节奏），栏距由 `GridItem.spacing` 给 24（栅格）。
+                    // 两个方向本来就不同：栅格是"画布怎么切"，行距是"同组内两张卡隔多远"。
+                    spacing: Spacing.cardGap
+                ) {
+                    ForEach(continueReadingArticles) { article in
+                        ArticleRowCard(article: article) {
+                            openArticles()
+                        }
+                    }
+                }
+            } else {
+                // 出血只对"列宽 = 屏宽"成立。宽屏列宽 720 < 1194，继续出血会让卡片滑到列外
+                // 压在空白上（§4.3），所以由 `allowsRailBleed` 决定。窄屏它恒为 true → 与今天一致。
+                Rail(bleeds: metrics.allowsRailBleed) {
+                    ForEach(continueReadingArticles) { article in
+                        ArticleRailCard(article: article) {
+                            openArticles()
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// 3 列网格的列定义（栏距 24 = `Layout.gridGutter`，对齐 1080 = 344×3 + 24×2）
+    private var continueReadingColumns: [GridItem] {
+        return Array(
+            repeating: GridItem(.flexible(), spacing: Layout.gridGutter),
+            count: 3
+        )
     }
 
     /// 「快捷」：分组标题 + 3 枚胶囊（组件保留不动，只升格进分组）
@@ -197,12 +284,13 @@ struct OverviewView: View {
 
     // MARK: - 派生数据
 
-    /// 「继续读」的数据源：已加载文章的前 8 篇。
+    /// 「继续读」的数据源：横滑 8 篇 / bento 3 列网格 6 篇（2 行 × 3）。
     ///
-    /// 只取 8 篇而不是全量：rail 是"看看还有什么"的入口，不是列表页；
+    /// 为什么不是全量：rail 是"看看还有什么"的入口，不是列表页；
     /// 全量塞进 `LazyHStack` 会让首帧多算几十个 `CoverArt`（每个都带 Canvas 噪点）。
-    private var railArticles: [ArticleSummary] {
-        return Array(model.articles.prefix(8))
+    /// 宽档取 6 而不是 8：3 列网格里 8 篇会留一行只有 2 格的"半行"，比少两篇更显眼。
+    private var continueReadingArticles: [ArticleSummary] {
+        return Array(model.articles.prefix(metrics.usesRail ? 6 : 8))
     }
 
     /// 农历 / 节气副行：取不到就返回 nil，整行不占位（PRD §3.1 第 3 条）

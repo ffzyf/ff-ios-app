@@ -213,6 +213,32 @@ enum BriefMetrics {
         let clamped = min(max(cloudiness, 0), 1)
         return weatherGlowAlphaMin + (weatherGlowAlphaMax - weatherGlowAlphaMin) * (1 - clamped)
     }
+
+    // MARK: 纸面 α 补偿（3.7.1）
+
+    /// 浅色纸上的粒子 / 云 α 补偿系数。
+    ///
+    /// **同一个 α 在两张纸上不等强**：深色纸是"亮了就看得见"，浅色纸是"压下去才看得见"。
+    /// 实测（雨丝 α0.22 压在 `#E3DDCE` 上）：浅色纸对比度只有 1.21:1、深色纸是 1.5:1 ——
+    /// 1pt 细线在米纸上会被自己的明度吃掉，看起来像"没画天气"。所以浅色纸乘这一档。
+    /// **深色纸乘 1**（见 `paperAlpha`）：这一档 α 补偿在深色纸上一动没动。
+    /// 深色**纸基与墨色**与 3.6.0 相同；八档天气的 `top` 是**有意**提亮了一到两档
+    /// （阴天 `#15181C → #262C33`、雷 `#100E18 → #1A1526`），为的是让粒子和柔光在深色纸上也看得见。
+    static let lightPaperAlphaBoost: Double = 1.7
+
+    /// 粒子 / 云的不透明度上限：再往上就从"天气"变成"色斑"（雪点与闪电不走这条，
+    /// 它们本来就是实心形状，浅色纸上看得很清楚）。
+    static let lightPaperAlphaCap: Double = 0.36
+
+    /// 按纸补偿后的 α。深色纸原样返回（3.6.0 的 α 不变 —— 深色纸上变的是八档 `top`，不是这里）。
+    static func paperAlpha(_ alpha: Double, paper: Theme.Weather.Paper) -> Double {
+        switch paper {
+        case .dark:
+            return alpha
+        case .light:
+            return min(alpha * lightPaperAlphaBoost, lightPaperAlphaCap)
+        }
+    }
 }
 
 // MARK: - 卡面
@@ -235,10 +261,12 @@ enum BriefMetrics {
 /// └─────────────────────────────────────────┘
 /// ```
 ///
-/// V3.7 起，**底色与粒子跟着当天的真实天气走**（用户原话："把拉到的天气对应放到对应的效果上"）。
+/// V3.7 起，**底色与粒子跟着当天的真实天气走**（用户原话："把拉到的天气对应放到对应的效果上"）；
+/// 3.7.1 起，**纸面跟着系统的浅色 / 深色走**（用户第二次反馈"背景还是黑的"）。
 /// 五层，从下到上（顺序不能调，调了就挡字）：
 ///
-/// 1. **底色**：`Theme.Weather.of(kind).top` → `sky(.night).ground` 的两档线性渐变；
+/// 1. **纸面**：`Theme.Weather.of(kind, paper:).top` → `Theme.Weather.paperBase(paper).bottom`
+///    的两档线性渐变（浅色 = 米纸、深色 = 夜纸）；
 /// 2. **中心柔光**：`glow` 的径向渐变，alpha 随云量**反向**（晴 0.30 / 阴 0.12）；
 /// 3. **天气粒子**：云 / 雾带 / 毛毛雨 / 雨丝 / 雪点 / 闪电（本文件下半部分）；
 /// 4. **轨迹刻度 + 光点**：它是"现在几点"的读数，永远压在粒子之上；
@@ -247,14 +275,23 @@ enum BriefMetrics {
 /// 四条不能破的规矩：
 /// 1. **没有的字段整行不画**：宜忌为空就不画左下、日出算不出就不画右下、
 ///    正文为空就明说"今天还没有简报"，绝不编内容；
-/// 2. **没有天气就回到现在的样子**（`entry.weather == nil`）：不画任何粒子、中心柔光退回
-///    那层青柠光，一个像素都不变 —— 天气是装饰，简报才是主体，装饰缺失不该改变版式；
+/// 2. **没有天气就回到"这张纸本来的样子"**（`entry.weather == nil`）：不画任何粒子、
+///    深色纸下中心柔光退回那层青柠光（浅色纸不画光）—— 天气是装饰，简报才是主体；
 /// 3. **零模糊滤镜、零颜色字面量**：柔光用 `RadialGradient`，颜色全部走 `Theme` token；
-/// 4. **文字色只看 `sky(.night).ink`**：天气改的是"面"（底色 / 光 / 粒子），不改字色 ——
-///    否则换一天天气就可能出现一处读不清的灰字。
+/// 4. **字色只看 `Theme.Weather.ink(paper)`**：天气改的是"面"（底色 / 光 / 粒子），不改字色 ——
+///    否则换一天天气就可能出现一处读不清的灰字。纸换档时字色跟着换，那不是天气的事。
 struct BriefFace: View {
 
     @Environment(\.widgetFamily) private var family
+
+    /// 为什么这里必须读、而且**只在这里读**：`ThemeScope`（App 侧唯一那处）属于 App target，
+    /// Widget 进程里没有它；而 `Widget` 本身不是 `View`、拿不到环境 —— 所以"系统是浅色还是
+    /// 深色"只能在 `BriefFace`（真正的卡片视图）落到一个枚举上，往下全部走
+    /// `Theme.Weather.Paper`。其它 Widget 视图（`BriefCanvas` / `BriefTrack` /
+    /// `BriefWeatherLayer`）只收这个枚举，一处都不许再读。
+    /// lint:allow —— 简报卡（Widget face）里唯一允许读 colorScheme 的位置
+    ///（`SunEventLiveActivity` 那处属独立的灵动岛视图，本次一行未动）
+    @Environment(\.colorScheme) private var scheme
 
     private let entry: BriefEntry
 
@@ -283,10 +320,25 @@ struct BriefFace: View {
         return entry.weather?.kind
     }
 
-    /// 纸面基色（**只用来取字色**）。固定 `.night` 这一档，不随天气 / 时间换档：
-    /// 天气改的是底色与粒子，字色必须是一套稳定的近白，否则八档天气要配八套字色。
-    private var paper: Theme.SkyColors {
-        return Theme.sky(.night)
+    /// 纸面档位 —— 跟着**系统**浅色 / 深色走（不跟 App 的三态设置：桌面上不合群的方块最刺眼）。
+    ///
+    /// 为什么不是"再判一次天气"：纸是纸，天气是天气。纸只回答"现在是什么外观"，
+    /// 天气只回答"今天什么天"，两者在 `Theme.Weather.of(_:paper:)` 里合成一种颜色。
+    private var paperMode: Theme.Weather.Paper {
+        return scheme == .dark ? .dark : .light
+    }
+
+    /// 墨色（字 / 轨迹刻度 / 光点 / 粒子）。**整张卡唯一的字色来源**。
+    ///
+    /// 3.7 之前这里固定取「夜纸的墨色」那一档，于是浅色纸上一片白字看不见；
+    /// 现在它跟着纸走：浅色纸 → 深灰 `#24262A`，深色纸 → 近白（3.6.0 的墨色）。
+    private var ink: Color {
+        return Theme.Weather.of(kind, paper: paperMode).ink
+    }
+
+    /// 次要字色：主墨压 0.72（与 3.6.0 的 `sky.inkDim` 同一个比例；深色墨色未变，比例因此也不变）
+    private var inkDim: Color {
+        return ink.opacity(0.72)
     }
 
     var body: some View {
@@ -295,7 +347,10 @@ struct BriefFace: View {
             // 不必在 `content` 里插一层 ZStack（那会把版式骨架和天气耦合在一起）
             .background {
                 if let today = kind {
-                    BriefWeatherLayer(kind: today, date: entry.date, family: family)
+                    BriefWeatherLayer(kind: today,
+                                      date: entry.date,
+                                      family: family,
+                                      paper: paperMode)
                 }
             }
             // 画布测量：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
@@ -307,7 +362,7 @@ struct BriefFace: View {
             // 整卡可点：落到 `skyapp://brief`（深链契约见 `WidgetDeepLink`）
             .widgetURL(WidgetDeepLink.brief)
             .containerBackground(for: .widget) {
-                BriefCanvas(kind: kind)
+                BriefCanvas(kind: kind, paper: paperMode)
             }
     }
 
@@ -343,7 +398,7 @@ struct BriefFace: View {
 
             BriefTrack(progress: dayProgress,
                        dotCount: BriefMetrics.dotCount(family),
-                       ink: paper)
+                       ink: ink)
 
             if hasFooter {
                 footer
@@ -361,14 +416,14 @@ struct BriefFace: View {
         HStack(spacing: 6) {
             Text(entry.dateText)
                 .font(BriefMetrics.eyebrow)
-                .foregroundStyle(paper.ink)
+                .foregroundStyle(ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
             if !entry.weekdayText.isEmpty {
                 Text(entry.weekdayText)
                     .font(BriefMetrics.eyebrow)
-                    .foregroundStyle(paper.inkDim)
+                    .foregroundStyle(inkDim)
                     .lineLimit(1)
             }
 
@@ -378,15 +433,15 @@ struct BriefFace: View {
             if !isSmall {
                 Text("简报")
                     .font(BriefMetrics.tag)
-                    .foregroundStyle(paper.ink)
+                    .foregroundStyle(ink)
                     .padding(.horizontal, BriefMetrics.tagHorizontalPadding)
                     .padding(.vertical, BriefMetrics.tagVerticalPadding)
                     .background {
-                        // 面用天色 token 的半透白（`ink` 压一档），不是新造颜色
-                        Capsule().fill(paper.ink.opacity(0.10))
+                        // 面用墨色压一档（浅色纸 → 深灰底、深色纸 → 半透白底），不是新造颜色
+                        Capsule().fill(ink.opacity(0.10))
                     }
                     .overlay {
-                        Capsule().strokeBorder(paper.ink.opacity(0.28),
+                        Capsule().strokeBorder(ink.opacity(0.28),
                                                lineWidth: BriefMetrics.tagStrokeWidth)
                     }
             }
@@ -398,7 +453,7 @@ struct BriefFace: View {
     private var titleRow: some View {
         Text("每日简报")
             .font(BriefMetrics.titleScaled(s))
-            .foregroundStyle(paper.ink)
+            .foregroundStyle(ink)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -411,7 +466,7 @@ struct BriefFace: View {
         if let text = bodyText {
             Text(text)
                 .font(BriefMetrics.bodyScaled(s))
-                .foregroundStyle(paper.inkDim)
+                .foregroundStyle(inkDim)
                 .lineLimit(BriefMetrics.bodyLineLimit(family))
                 .lineSpacing(BriefMetrics.bodyLineSpacing)
                 .multilineTextAlignment(.leading)
@@ -420,7 +475,7 @@ struct BriefFace: View {
             // 早上简报还没生成是**正常业务状态**，不是错误：说清楚"还没有"，不吓人、不编内容
             Text("今天还没有简报")
                 .font(BriefMetrics.bodyScaled(s))
-                .foregroundStyle(paper.inkDim)
+                .foregroundStyle(inkDim)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -468,7 +523,7 @@ struct BriefFace: View {
             if let ritual = entry.ritualText {
                 Text(ritual)
                     .font(BriefMetrics.footnote)
-                    .foregroundStyle(paper.inkDim)
+                    .foregroundStyle(inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     .layoutPriority(1)
@@ -476,12 +531,12 @@ struct BriefFace: View {
 
             Spacer(minLength: 4)
 
-            // 右端 = 日出 + 日落，用主字色（`ink`）压在深纸上：它们是"时刻"，
+            // 右端 = 日出 + 日落，用主字色（`ink`，跟着纸走）压上去：它们是"时刻"，
             // 比左边的历书注脚更重要，所以不压暗。
             if let rise = sunTexts.rise {
                 Text(rise)
                     .font(BriefMetrics.footnoteTime)
-                    .foregroundStyle(paper.ink)
+                    .foregroundStyle(ink)
                     .monospacedDigit()
                     .lineLimit(1)
             }
@@ -489,7 +544,7 @@ struct BriefFace: View {
             if let set = sunTexts.set {
                 Text(set)
                     .font(BriefMetrics.footnoteTime)
-                    .foregroundStyle(paper.ink)
+                    .foregroundStyle(ink)
                     .monospacedDigit()
                     .lineLimit(1)
             }
@@ -539,8 +594,8 @@ private struct BriefTrack: View {
     let progress: Double
     /// 刻度点数量（中号 24 / 小号 20）
     let dotCount: Int
-    /// 纸面色组（只取 `ink`，本组件自己不再造色）
-    let ink: Theme.SkyColors
+    /// 刻度点与光点的墨色（`Theme.Weather` 给的那一支，本组件自己不再造色）
+    let ink: Color
 
     var body: some View {
         GeometryReader { proxy in
@@ -595,11 +650,11 @@ private struct BriefTrack: View {
     }
 
     /// 已过的点亮一些、未到的点暗一些 —— 光点两侧因此读得出"前后"。
-    /// 两支都是 `Theme.sky(.night).ink` 压不透明度，没有新颜色。
+    /// 两支都是同一支 `ink`（浅色纸是深灰、深色纸是近白）压不透明度，没有新颜色。
     private func dotFill(at index: Int) -> Color {
         return fraction(of: index) <= progress
-            ? ink.ink.opacity(0.55)
-            : ink.ink.opacity(0.20)
+            ? ink.opacity(0.55)
+            : ink.opacity(0.20)
     }
 }
 
@@ -607,21 +662,25 @@ private struct BriefTrack: View {
 
 /// 卡片的底色层（第 1、2 层）。
 ///
-/// · **底色**：`Theme.Weather.of(kind).top` → `Theme.sky(.night).ground` 的两档线性渐变
-///   （角度不变，还是自上而下）。下沿固定是那块近黑的"夜"，所以八档天气的卡片
-///   都压在同一个暗度上，只有上半张在变天 —— 这正是"深浅一致、只换色相"的实现方式。
+/// · **底色**：`Theme.Weather.of(kind, paper:).top` → `Theme.Weather.paperBase(paper).bottom`
+///   的两档线性渐变（角度不变，还是自上而下）。
+///   3.7.1 起**终点不再是那块近黑的夜**：浅色系统走 `#F1EDE3 → #E3DDCE` 的米纸、
+///   深色系统仍走 3.6.0 的夜纸 —— 这就是"桌面这张卡是一块黑砖"的修法。
 /// · **中心柔光**：`glow` 的径向渐变，alpha 由云量反向决定（见 `BriefMetrics.glowAlpha`）。
 ///   晴天 0.30（纸被晒过）、阴天 0.12（云把光挡了）—— 阴天本来就没光，给它打一团亮光就是假的。
 ///
-/// `kind == nil` 时**逐像素沿用旧版**：夜纸渐变 + 青柠光 α0.10，一颗粒子都不画。
+/// `kind == nil` 时：深色纸**逐像素沿用 3.6.0**（夜纸渐变 + 青柠光 α0.10）；
+/// 浅色纸就只是那张米纸，**不画任何光**（α0.10 的青柠压在米纸上是一块脏绿，不是"被打亮"）。
 private struct BriefCanvas: View {
 
-    /// 今天的天气；nil = 没拉到（退回旧版外观）
+    /// 今天的天气；nil = 没拉到（退回"这张纸本来的样子"）
     let kind: WeatherKind?
+    /// 纸面档位（深色 / 浅色），**只由 `BriefFace` 那唯一一处 colorScheme 决定**
+    let paper: Theme.Weather.Paper
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [mood.top, night.ground],
+            LinearGradient(colors: [mood.top, base.bottom],
                            startPoint: .top,
                            endPoint: .bottom)
 
@@ -629,37 +688,42 @@ private struct BriefCanvas: View {
         }
     }
 
-    /// 固定取 `.night` 这一档：这张卡讲的是"今天"，底色该是稳定的一张纸，
-    /// 而"今天什么天"由天气那八档负责，不再由时段负责。
-    private var night: Theme.SkyColors {
-        return Theme.sky(.night)
+    /// 纸基两端（深色 = 3.6.0 的那张夜纸，浅色 = 米纸）
+    private var base: (top: Color, bottom: Color) {
+        return Theme.Weather.paperBase(paper)
     }
 
-    /// 天气氛围的两色（nil 时是夜纸的 top / ground，本身不会被用到渐变终点上）
-    private var mood: (top: Color, glow: Color) {
-        return Theme.Weather.of(kind)
+    /// 天气氛围三色（`kind == nil` 时 `top` 就是纸基顶端、`glow` 也回到底色，不会被用到）
+    private var mood: (top: Color, glow: Color, ink: Color) {
+        return Theme.Weather.of(kind, paper: paper)
     }
 
     @ViewBuilder
     private var glow: some View {
         if let kind = kind {
-            RadialGradient(
-                colors: [mood.glow.opacity(BriefMetrics.glowAlpha(cloudiness: kind.cloudiness)),
-                         mood.glow.opacity(0)],
-                center: UnitPoint(x: 0.5, y: 0.22),
-                startRadius: 0,
-                endRadius: BriefMetrics.canvasGlowRadius
-            )
+            radial(mood.glow,
+                   alpha: BriefMetrics.glowAlpha(cloudiness: kind.cloudiness))
         } else {
-            // 无天气：旧版那层青柠光，α 0.10（PRD 的"纸面被中心打亮"）
-            RadialGradient(
-                colors: [Theme.lime.opacity(BriefMetrics.canvasGlowAlpha),
-                         Theme.lime.opacity(0)],
-                center: UnitPoint(x: 0.5, y: 0.22),
-                startRadius: 0,
-                endRadius: BriefMetrics.canvasGlowRadius
-            )
+            // 按纸判，而不是按 `==` 判：这里只需要"是哪张纸"，枚举 switch 更直白
+            switch paper {
+            case .dark:
+                // 无天气 + 深色：3.6.0 那层青柠光 α0.10（PRD 的"纸面被中心打亮"），逐像素不变
+                radial(Theme.lime, alpha: BriefMetrics.canvasGlowAlpha)
+            case .light:
+                // 无天气 + 浅色：不画光。米纸本身已经是亮的，再打一层只会脏
+                EmptyView()
+            }
         }
+    }
+
+    /// 一团中心亮、外圈归零的径向光（**零模糊滤镜**：Widget 每帧重绘，模糊太贵）
+    private func radial(_ color: Color, alpha: Double) -> some View {
+        return RadialGradient(
+            colors: [color.opacity(alpha), color.opacity(0)],
+            center: UnitPoint(x: 0.5, y: 0.22),
+            startRadius: 0,
+            endRadius: BriefMetrics.canvasGlowRadius
+        )
     }
 }
 
@@ -672,7 +736,7 @@ private struct BriefCanvas: View {
 /// 用户原话："做一个效果……把拉到的天气对应放到对应的效果上"，同时又要求"不能太假"。
 /// 所以四条硬约束写死在这里，任何一档天气都不许破：
 ///
-/// 1. **颜色只有两个来源**：`Theme.Weather.of(kind).glow` 与 `Theme.sky(.night).ink` 的
+/// 1. **颜色只有两个来源**：`Theme.Weather.of(kind, paper:).glow` 与同一处返回的 `ink` 的
 ///    `opacity` 变体。粒子一旦自己造一个"雨丝蓝"，它就不属于主题了 ——
 ///    换肤、换明暗、将来调色板，这个颜色都会是唯一一处对不上的地方；
 /// 2. **数量封顶**：云 ≤ 3、雨丝 ≤ 20、雪点 ≤ 14。再多就不是天气，是噪点
@@ -696,6 +760,18 @@ private struct BriefWeatherLayer: View {
     let date: Date
     /// 尺寸档：决定正文块的位置，进而决定净空带的位置
     let family: WidgetFamily
+    /// 纸面档位：粒子的颜色要压在**这张纸**上才立得住（浅色纸上近白的雨丝是看不见的）
+    let paper: Theme.Weather.Paper
+
+    /// 这一档天气压在**这张纸**上的三色（`glow` 与 `ink` 是粒子的全部颜色来源）
+    private var mood: (top: Color, glow: Color, ink: Color) {
+        return Theme.Weather.of(kind, paper: paper)
+    }
+
+    /// 粒子的墨色（雪点、阴天薄纱用它；其余粒子用 `glow`）
+    private var ink: Color {
+        return mood.ink
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -786,22 +862,29 @@ private struct BriefWeatherLayer: View {
     }
 
     /// 云的填充色：多云 0.12 / 阴 0.16（阴天的云更"实"）
+    ///
+    /// 3.7.1 起浅色纸上按 `paperAlpha` 提一档：同样的 0.16 压在米纸上几乎看不见
+    /// （深色纸是"亮云压暗纸"，浅色纸是"灰云压灰纸"，本来就更难读）。
     private var cloudFill: Color {
         let alpha = kind == .overcast ? 0.16 : 0.12
-        return Theme.Weather.of(kind).glow.opacity(alpha)
+        return mood.glow.opacity(BriefMetrics.paperAlpha(alpha, paper: paper))
     }
 
     // MARK: 阴天薄纱
 
-    /// 阴天那层"整卡蒙一层灰"的薄纱（`ground` 色 α0.10）
+    /// 阴天那层"整卡蒙一层灰"的薄纱（**墨色** α0.10）
     ///
-    /// 为什么薄纱能压在文字之上色的位置却仍然不挡字：它是**文字之下**的一层，
-    /// α 只有 0.10，作用是把整张卡的对比度压低一档 —— 那正是阴天的观感。
+    /// 为什么薄纱压在文字之下的位置仍然不挡字：它是文字**之下**的一层，α 只有 0.10，
+    /// 作用是把整张卡的对比度压低一档 —— 那正是阴天的观感。
+    ///
+    /// 3.7.1 起这支色从「夜纸的地面色」换成 `ink`：两张纸的"压暗方向"是相反的
+    /// （浅色纸要往墨里压、深色纸要往亮里提），只有 ink 在两边都等于"把对比度压低一档"，
+    /// 也才不会在浅色纸上糊出一块脏黑。
     @ViewBuilder
     private func overcastVeil(in size: CGSize) -> some View {
         if kind == .overcast {
             Rectangle()
-                .fill(Theme.sky(.night).ground.opacity(BriefMetrics.overcastVeilAlpha))
+                .fill(ink.opacity(BriefMetrics.overcastVeilAlpha))
                 .frame(width: size.width, height: size.height)
                 .position(x: size.width / 2, y: size.height / 2)
         }
@@ -906,7 +989,7 @@ private struct BriefWeatherLayer: View {
             let y = area.minY + area.height * CGFloat(0.10 + 0.80 * scattered(index, 9.4))
 
             Circle()
-                .fill(Theme.sky(.night).ink.opacity(0.35))
+                .fill(ink.opacity(0.35))
                 .frame(width: BriefMetrics.snowDotDiameter,
                        height: BriefMetrics.snowDotDiameter)
                 .position(x: x, y: y)
@@ -927,7 +1010,7 @@ private struct BriefWeatherLayer: View {
             path.addLine(to: CGPoint(x: middleX + band.width * 0.025, y: band.minY + segment * 2))
             path.addLine(to: CGPoint(x: middleX - band.width * 0.015, y: band.minY + segment * 3))
         }
-        return bolt.stroke(Theme.Weather.of(kind).glow.opacity(0.5),
+        return bolt.stroke(mood.glow.opacity(0.5),
                            style: StrokeStyle(lineWidth: BriefMetrics.lightningWidth,
                                               lineCap: .round,
                                               lineJoin: .round))
@@ -961,9 +1044,12 @@ private struct BriefWeatherLayer: View {
         return wrapped - cloudWidth / 2
     }
 
-    /// 粒子色：一律是 `glow` 压不透明度（唯一例外是雪点，用 `ink`，见 `snowDots`）
+    /// 粒子色：一律是 `glow` 压不透明度（唯一例外是雪点，用 `ink`，见 `snowDots`）。
+    ///
+    /// 浅色纸按 `BriefMetrics.paperAlpha` 提一档，深色纸原样 —— 深色纸上**这一层 α** 零变化
+    /// （深色纸基与墨色未变；变了的是八档天气的 `top`，有意提亮一到两档）。
     private func particle(_ alpha: Double) -> Color {
-        return Theme.Weather.of(kind).glow.opacity(alpha)
+        return mood.glow.opacity(BriefMetrics.paperAlpha(alpha, paper: paper))
     }
 
     /// 稳定伪随机（0…1）：同一 `index` + `salt` 永远得到同一个值。

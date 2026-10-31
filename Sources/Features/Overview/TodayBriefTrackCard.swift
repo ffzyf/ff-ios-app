@@ -22,6 +22,9 @@ import Foundation
 /// 正文只给 1 句 + 1 行补充：卡片不是阅读页，全文点进简报 Tab 看。
 struct TodayBriefTrackCard: View {
 
+    /// 首页这张是 `.medium`（窄档 168 / 宽档仍是 168，宽档靠外层 `maxHeight: .infinity` 拉到 172）
+    @Environment(\.layoutMetrics) private var metrics
+
     let snapshot: BriefSnapshot?
     private let onOpenBrief: () -> Void
 
@@ -55,8 +58,10 @@ struct TodayBriefTrackCard: View {
             sunsetText: sunText(snapshot?.sunset, isSunrise: false, now: now),
             note: ritualText,
             // 首页的是**摘要卡**（168），简报页才是 hero —— 同一份数据两页分饰两角，
-            // 不能是"一样高的两张卡"（设计报告 §4.3）
-            minHeight: CardTier.medium.height
+            // 不能是"一样高的两张卡"（设计报告 §4.3）。
+            // 宽档这里仍是 168（`CardTier.medium.wideHeight` 没动）：它在 Row A 右栏里是
+            // 192pt 高的那一格，多出来的高度由 `maxHeight: .infinity` 拉伸，不是靠改 `minHeight`。
+            minHeight: metrics.cardHeight(.medium)
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {

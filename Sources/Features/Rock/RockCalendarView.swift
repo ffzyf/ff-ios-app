@@ -17,6 +17,9 @@ struct RockCalendarView: View {
     /// 同一个视图上挂两个 `.sheet` 在 iOS 上容易互相顶掉，改成一个 `item` 派发最稳。
     @State private var activeSheet: RockSheet?
     @State private var showsGuide: Bool = false
+    /// 主列实测高度。副列要撑到同一高度，里面的 `Spacer(minLength: 32)` 才吸得到差额
+    /// （理由见 `View.measureHeight(into:)` 的注释）。首帧为 0 = 按内容自然高。
+    @State private var mainColumnHeight: CGFloat = 0
 
     /// 显式空 init：`@State` / `@EnvironmentObject` 是 private 存储属性，会把自动生成的
     /// memberwise init 降级成 private，跨文件 `RockCalendarView(scrollPosition:)` 就编译不过（同 `RootView`）。
@@ -38,17 +41,11 @@ struct RockCalendarView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 列宽：两列时 960（= 560 + 32 + 368 的**列区**），单列时 720。
-            //
-            // 为什么要 `+ Spacing.page * 2`：`pageColumn` 套在 `.padding(.horizontal, 20)` 外面，
-            // 页边距是"列区之外"的 40pt。若直接写 960，内容区只剩 920，
-            // 主列被压到 520 —— 月历 7 格每格瘦 5pt，恰好落在"看着不对劲但说不上哪不对"的区间。
-            // 窄屏 393 < 720，`maxWidth` 不生效 → 与 3.4.0 逐像素一致。
-            .pageColumn(
-                metrics.isTwoColumn
-                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
-                    : Layout.contentMaxWidth
-            )
+            // 列宽：rail 档 = 画布 1080 + 页边距 40（主列 680 / 栏距 32 / 副列 368），
+            // 否则 = 720（= 今天，834 竖屏 / 1024 竖屏 / 所有 compact 尺寸都走这条）。
+            // `railPageWidth` 已经含页边距，页面里不再加 `+ Spacing.page * 2`（加了主列会宽 40、
+            // 月历 7 格每格多 5pt，副列被挤出画布）。
+            .pageColumn(metrics.railPageWidth)
         }
         .scrollPosition(scrollPosition)
         .pageScrollLight()
@@ -83,28 +80,34 @@ struct RockCalendarView: View {
         }
     }
 
-    // MARK: - 分组排布（单列 / 两列）
+    // MARK: - 分组排布（单列 / rail）
 
-    /// 两列的写法：**同一个 body 里分支**，不复制两份布局。
+    /// rail 档的写法：**同一个 body 里分支**，不复制两份布局。
     ///
     /// 四个分组各自只是一个属性，定义只有一份；这里分叉的只有"谁在谁上面"这件事 ——
-    /// 而这正是宽屏真正要改的东西（宽屏把「下一场／分布／规律」从月历**下面**搬到**右边**）。
+    /// 而这正是宽屏真正要改的东西（宽屏把「下一场／今日场次／分布／规律」从月历**下面**
+    /// 搬到**右边**，并补一组今天还没有过场次的场内清单）。
     ///
-    /// 窄屏分支的视图顺序、间距与 3.4.0 完全一致：下一场 → 月历 → 分布 → 规律。
+    /// 窄屏分支的视图顺序、间距与 3.7.0 完全一致：下一场 → 月历 → 分布 → 规律。
     /// 顺序写反（比如把 `nextEventBar` 放到 `monthGroup` 之后）是这一页最隐蔽的回归 ——
     /// 因为它依然"看起来正常"，只是信息层级被悄悄换了。
     @ViewBuilder
     private var pageGroups: some View {
-        if metrics.isTwoColumn {
+        if metrics.usesRail {
             HStack(alignment: .top, spacing: Layout.columnGap) {
                 monthGroup
-                    // 560 是推出来的，不是拍的：960 − 368 − 32。
-                    // 用 `maxWidth` 而不是 `width`：900…1000 这段区间里列区不足 960，
-                    // 固定 560 的 HStack 总宽会超过可用宽度被横向裁掉（尾部的翻月 / 攻略钮消失）。
-                    // `maxWidth` 在列区够宽时等价于 560。
-                    .frame(maxWidth: mainColumnWidth)
+                    // 主列宽 = 画布 − 栏距 − 副列 = 680（从画布算，不写死：
+                    // Stage Manager 拖到 1100 时主列自动变窄，副列才不会被挤出画布）。
+                    // 用 `maxWidth` 而不是 `width`：不足时也不会横向溢出被裁。
+                    .frame(maxWidth: metrics.railMainWidth)
+                    .measureHeight(into: $mainColumnHeight)
                 sideColumn
                     .frame(width: Layout.sideColumnWidth)
+                    // 高度跟主列走，`Spacer` 才吸得到差额（见 `sideColumnHeight` 的注释）。
+                    // 用 `minHeight` 而不是 `height`：副列内容比主列高时（红石今天 4 场，
+                    // 副列 500 > 主列 481）固定高度会把最后一组顶出卡片；`minHeight` 让它在
+                    // 内容更高时自然长高、更矮时仍然撑到主列高度（`Spacer` 吃差额、底边齐平）。
+                    .frame(minHeight: sideColumnHeight, alignment: .top)
             }
         } else {
             nextEventBar
@@ -114,19 +117,34 @@ struct RockCalendarView: View {
         }
     }
 
-    /// 主列宽 = 两列总宽 − 副列 − 列间距
-    private var mainColumnWidth: CGFloat {
-        Layout.twoColumnMaxWidth - Layout.sideColumnWidth - Layout.columnGap
+    /// 副列高度：量到主列才给值，首帧（0）给 `nil` = 按内容自然高。
+    ///
+    /// 为什么不写死 481（设计文档给的"主列 481"）：月历行数随月份变（10 月是 5 行、11 月是 6 行），
+    /// 写死会让 5 行的月份右下角空出 64pt、6 行的月份把「规律」压出画布。
+    private var sideColumnHeight: CGFloat? {
+        return mainColumnHeight > 0 ? mainColumnHeight : nil
     }
 
-    /// 宽屏副列：顺序 `NextEventBar` → 分布 → 规律（§3.3）。
-    /// 组内 32 与整页同一套呼吸节奏，不另造一套间距。
+    /// 宽档副列：`NextEventBar` → 「今日场次」→ 分布 → `Spacer` → 规律（设计文档 §4.2）。
+    ///
+    /// `Spacer(minLength: 32)` 放在"会变长的内容"之后、最后一组之前：副列比主列短时它吃掉差额、
+    /// 把「规律」压到与月历同底；副列更长时它只吸不放（不生效），此时主列底部留白。
+    /// 这就是"右下角漏一块"被修掉的地方 —— 不塞东西，只把最后一组压到底边。
     private var sideColumn: some View {
         VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
             nextEventBar
+            RockTodayColumn(day: todayRow)
             distributionGroup
+            Spacer(minLength: Layout.columnGap)
             rulesGroup
         }
+    }
+
+    /// 侧栏「今日场次」的数据：**今天那一条**（`visibleDays` 里通常只有今天一天是"当天"）。
+    /// 取不到（那个月还没加载 / 今天没排期）→ 组件整块不渲染，副列由 `Spacer` 把规律压到底。
+    private var todayRow: RedstoneDay? {
+        let todayKey = RedstoneClock.dayKey(Date())
+        return rock.visibleDays.first { $0.date == todayKey }
     }
 
     /// 单独提出来是为了让"窄屏 / 宽屏两条路径引用同一个定义"，
@@ -293,7 +311,11 @@ struct RockCalendarView: View {
                 RedstoneMonthGrid(
                     monthKey: rock.visibleMonth,
                     days: response.items,
-                    todayKey: RedstoneClock.dayKey(Date())
+                    todayKey: RedstoneClock.dayKey(Date()),
+                    // 宽档格子 64 高（7 格各 88.3×64，1.38:1）：560→680 带来的是格宽 +17，
+                    // 只加宽不加高会让格子从 1.27:1 变成 1.38:1 的"扁片"，
+                    // 高度跟着 +8 才是"同一块格子变大了"（设计文档 §4.2）。
+                    cellHeight: metrics.usesRail ? 64 : 56
                 ) { day in
                     activeSheet = .day(day)
                 }
@@ -335,16 +357,14 @@ struct RockCalendarView: View {
 
     // MARK: - 顶部细条
 
-    /// 顶部细条要与主体同列宽：主体在 `pageColumn` 里限到 960（两列）/ 720（单列），
+    /// 顶部细条要与主体同列宽：主体在 `pageColumn` 里限到画布（rail 档 1120 / 单列 720），
     /// 而细条是 `.frame(maxWidth: .infinity)` 的胶囊、挂在 `safeAreaInset` 上拿的是满宽 ——
-    /// 不吃列宽的话 iPad 上它会比内容列宽 194、左右各探出 97。
-    /// 照抄 body 里那条表达式（含 `+ Spacing.page * 2`）而不是写死一个常量：
-    /// 细条外面同样套了 `.padding(.horizontal, Spacing.page)`，页边距在列区之外。
+    /// 不吃列宽的话 iPad 上它会比内容列宽一大截、左右各探出一块。
+    /// 直接引用 `metrics.railPageWidth`（它就是 body 里那个实参），不再手写一遍表达式：
+    /// 手写的那一份在这次改版里已经和 body 漂过一次（960 vs 1080）。
     /// 窄屏两个值都 > 393，`maxWidth` 不生效 → 零影响。
     private var bannerColumnWidth: CGFloat {
-        metrics.isTwoColumn
-            ? Layout.twoColumnMaxWidth + Spacing.page * 2
-            : Layout.contentMaxWidth
+        metrics.railPageWidth
     }
 
     @ViewBuilder

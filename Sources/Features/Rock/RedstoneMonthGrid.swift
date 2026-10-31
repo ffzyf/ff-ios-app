@@ -49,19 +49,31 @@ struct RedstoneMonthGrid: View {
     let days: [RedstoneDay]
     /// 今天的 `dayKey`（用于高亮，由调用方传，避免组件内部读 `Date()` 造成预览不稳定）
     let todayKey: String
+    /// 一格的高度。**默认 56 = 3.7.0 的值**：三个调用点里只有宽档那个显式传 64，
+    /// 其余（含预览）一个参数都不加就是今天的样子 —— 加参数必须带默认值，否则三处同时红。
+    let cellHeight: CGFloat
     /// 点某天（当天空场次的日子不响应）
     let onSelect: (RedstoneDay) -> Void
 
     private let columns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 5), count: 7)
-    private let cellHeight: CGFloat = 56
     private let weekdayLabels = ["一", "二", "三", "四", "五", "六", "日"]
 
-    /// 显式 init：`columns` / `cellHeight` / `weekdayLabels` 是 private 存储属性，
+    /// 显式 init：`columns` / `weekdayLabels` 是 private 存储属性，
     /// 自动合成的 memberwise init 会变成 private，跨文件就构造不了。
-    init(monthKey: String, days: [RedstoneDay], todayKey: String, onSelect: @escaping (RedstoneDay) -> Void) {
+    ///
+    /// `cellHeight` 排在 `onSelect` **之前**：现有三个调用点里宽档那个是显式传参、
+    /// 窄档两个用尾随闭包，放在前面才不会把尾随闭包错配到 `CGFloat` 参数上。
+    init(
+        monthKey: String,
+        days: [RedstoneDay],
+        todayKey: String,
+        cellHeight: CGFloat = 56,
+        onSelect: @escaping (RedstoneDay) -> Void
+    ) {
         self.monthKey = monthKey
         self.days = days
         self.todayKey = todayKey
+        self.cellHeight = cellHeight
         self.onSelect = onSelect
     }
 

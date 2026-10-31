@@ -52,4 +52,59 @@ extension View {
             .keyboardShortcut("r", modifiers: .command)
         }
     }
+
+    /// 用隐藏按钮挂 ⌘,（打开设置）。iPad 上 ⌘, 是肌肉记忆，iPhone 无键盘时是死代码。
+    ///
+    /// 与 `refreshShortcut` 逐行同款，只换键：隐藏按钮的四个约束（不占位 / 不可见 /
+    /// VoiceOver 跳过 / 一定挂在本层）在那边已经论证过，这里不重复第二套写法 ——
+    /// 两套写法迟早会有一套忘记 `frame(0,0)`，然后某个页面多出 1pt 白块。
+    func settingsShortcut(_ action: @escaping () -> Void) -> some View {
+        self.background {
+            Button(action: action) {
+                Color.clear
+            }
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+            .keyboardShortcut(",", modifiers: .command)
+        }
+    }
+
+    /// 量出本子树的真实高度，写回 `Binding`。
+    ///
+    /// **为什么需要它**（设计文档 §4.0 规则 1 的落地难点）：
+    /// 规则原文是"副列 `VStack` 里在会变长的内容之后放 `Spacer(minLength: columnGap)`，
+    /// 它把最后一组压到底边"。但 `Spacer` 只吸不放 —— 它吸的是**父级给出的高度**，
+    /// 而在 `ScrollView` 里 `HStack(alignment: .top)` 拿到的纵向 proposal 是"未定"
+    /// （滚动轴方向不约束），副列于是只按内容自然高排列，`Spacer` 只贡献 32pt。
+    /// 结果是"规则写了、底边依旧不齐"。
+    ///
+    /// 所以先量主列、再给副列一个确定高度：`Spacer` 这时才吸得到差额。
+    /// 用 `GeometryReader` + `PreferenceKey`（与 `ArticleDetailView` 采集滚动偏移同一手法），
+    /// 不引 iOS 17+ 的 `onGeometryChange` —— 本机无 Xcode，签名没把握的 API 不赌。
+    /// 挂在 `.background` 里，不参与布局、不改任何尺寸。
+    func measureHeight(into height: Binding<CGFloat>) -> some View {
+        self
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: MeasuredHeightKey.self, value: proxy.size.height)
+                }
+            }
+            .onPreferenceChange(MeasuredHeightKey.self) { value in
+                // 只在真的变了才写：量到的小数抖动会让页面反复重算 body
+                if abs(height.wrappedValue - value) > 0.5 {
+                    height.wrappedValue = value
+                }
+            }
+    }
+}
+
+/// 子树高度的采集键。取 `max` 而不是后者覆盖前者：同一子树里可能有多个生产者。
+private struct MeasuredHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }

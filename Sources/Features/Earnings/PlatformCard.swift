@@ -20,6 +20,10 @@ import SwiftUI
 /// （口径只留在服务端那一处；卡片一旦自己加总，App 与网页端的数就会开始漂）。
 struct PlatformCard: View {
 
+    /// 卡最小高度：窄档 96（今天）、宽档 120（与 tile 同档 —— 收益页里"并排小卡"只有这一个高度）。
+    /// 用 `minHeight` 而不是 `height`：金额极大时卡可以长高，不裁字。
+    @Environment(\.layoutMetrics) private var metrics
+
     /// 该平台的金额占比单项（来自总览 `summary.platformBreakdown`）
     let item: EarningsPlatformBreakdown
     /// 所有平台金额之和 —— 细条的分母。0 时整条不画（新账号没有任何金额）
@@ -34,13 +38,29 @@ struct PlatformCard: View {
     /// 收进嵌套 `Metrics` 而不是散成三个 `private let`：`private` 存储属性会把 memberwise init
     /// 降级成 `private`，跨文件就构造不出来（`EarningsRecordSheet` 踩过这个坑）；
     /// 嵌套类型不参与 memberwise init，所以这样写既保留了默认值，也保留了 internal 的构造入口。
+    ///
+    /// 高度**不在**这里：它要读 `layoutMetrics`（96 窄档 / 120 宽档），静态类型读不到环境，
+    /// 所以走 `metrics.cardHeight(.tile)`（与「本月」三张 tile 同一个调用，两处不会漂）。
     private enum Metrics {
-        /// 卡最小高度 96 —— 与 `CardTier.tile` 同档，两列网格 2×2 时四张卡等高
-        static let minHeight: CGFloat = 96
         /// 占比细条厚度 3pt：只回答"谁更大"，不需要精确读数，所以比 hero 的构成条（10pt）细
         static let barHeight: CGFloat = 3
         /// 品牌色圆点直径
         static let dot: CGFloat = 8
+    }
+
+    /// 显式 init：`@Environment` 是 private 存储属性，会把自动生成的 memberwise init 降级成
+    /// private，跨文件 `PlatformCard(item:totalAmount:activityCount:action:)` 就构造不了。
+    /// 参数顺序保持原样（`action` 仍在最后），调用点的尾随闭包继续配到它身上。
+    init(
+        item: EarningsPlatformBreakdown,
+        totalAmount: Int,
+        activityCount: Int,
+        action: @escaping () -> Void
+    ) {
+        self.item = item
+        self.totalAmount = totalAmount
+        self.activityCount = activityCount
+        self.action = action
     }
 
     var body: some View {
@@ -71,7 +91,7 @@ struct PlatformCard: View {
                 ratioBar
             }
             .padding(Spacing.smallCardPadding)
-            .frame(minHeight: Metrics.minHeight, alignment: .topLeading)
+            .frame(minHeight: metrics.cardHeight(.tile), alignment: .topLeading)
         }
         // 只换 label，不加 `.accessibilityElement(children: .ignore)`：
         // 整卡本身是 `Button`（`PressableGlassCard` 里包的），读屏需要它保留"按钮"语义；

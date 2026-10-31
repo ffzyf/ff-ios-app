@@ -1,0 +1,52 @@
+%% iPad 版式重做（3.8.0）· 关键调用流
+%% 来源：docs/design/2026-10-31-ipad-layout-redo.md 附录 B
+sequenceDiagram
+    autonumber
+    participant App as FFWangApp
+    participant Scope as LayoutMetricsScope
+    participant Geo as GeometryReader(.background)
+    participant Env as EnvironmentValues
+    participant Root as RootView
+    participant Strip as WideTabStrip
+    participant Bar as FloatingTabBar
+    participant Page as 一级页(View)
+    participant M as LayoutMetrics
+
+    App->>Scope: body
+    Scope->>Geo: .background { Color.clear }
+    Geo->>Geo: onAppear / onChange(proxy.size)
+    Geo-->>Scope: containerSize = (1194, 834)
+    Scope->>M: LayoutMetrics(containerSize, hSizeClass)
+    Scope->>Env: environment(layoutMetrics, M)
+    Env-->>Root: metrics
+
+    Note over Root: widthClass = regularWide<br/>canvasWidth = min(1194-40, 1080) = 1080<br/>pageTier = rail（1080 >= 1040）
+
+    Root->>Root: usesTopTabStrip = (widthClass != .compact) -> true
+    Root->>Strip: safeAreaInset(edge: .top) WideTabStrip
+    Strip-->>Root: 高 44，viewport 700 -> 760
+    Note over Root,Bar: 窄档（320/393）走 safeAreaInset(edge: .bottom) FloatingTabBar，几何不变
+
+    Root->>Page: page(for: tab)
+    Page->>M: railPageWidth / gridPageWidth / railMainWidth / gridColumns
+    M-->>Page: 1080 / 1080 / 680 / 3
+
+    alt pageTier == rail（红石 / 收益 / 简报 / 更多）
+        Page->>Page: HStack(top, 32) 主列.frame(maxWidth 680) + 副列.frame(width 368)
+        Page->>Page: 副列 = 内容 + Spacer(minLength 32) + 最后一组（贴底）
+    else pageTier == grid3（概览 / 文章）
+        Page->>Page: LazyVGrid(3 x GridItem(.flexible(), spacing: 24))
+    else pageTier == grid2（监控 / 攻略 / 问卷结果）
+        Page->>Page: LazyVGrid(2 x GridItem(.flexible(), spacing: 24))
+    else pageTier == single（iPhone / Slide Over / 1024 竖屏）
+        Page->>Page: pageColumn(720 / 640) —— 与 3.7.0 完全一致
+    end
+
+    Page->>M: cardHeight(.hero / .tile / .medium)
+    M-->>Page: 344 / 120 / 168（compact 时为 240 / 96 / 168）
+
+    Note over Root: 旋转 / 分屏 / Stage Manager 拖宽
+    Geo->>Scope: onChange(proxy.size)（尺寸真变才写）
+    Scope->>M: 重建 LayoutMetrics
+    M-->>Root: pageTier 变化
+    Root->>Page: 切档（rail <-> single），滚动位置由 scrollPositions 保活

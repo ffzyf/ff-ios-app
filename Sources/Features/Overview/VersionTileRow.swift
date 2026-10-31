@@ -9,9 +9,18 @@ import SwiftUI
 /// 业务判定**不复制**：四态全部来自 `SkyCardPhase.resolve(_ app:)`（与整卡用的是同一张映射表），
 /// 本文件只负责长相。原 `SkyStatusCard` 保留不动 —— 简报页还要用它的整卡形态。
 struct VersionTileRow: View {
+    /// tile 高度走 `cardHeight(.tile)`：窄档 96（今天）、宽档 120（同比例 ×1.25）
+    @Environment(\.layoutMetrics) private var metrics
     let status: SkyStatus?
     /// 点任意一张 tile（首页：切到简报 Tab 看两服详情）
     let onTap: () -> Void
+
+    /// 显式 init：`@Environment` 是 private 存储属性，会把自动生成的 memberwise init 降级成
+    /// private，跨文件 `VersionTileRow(status:onTap:)` 就构造不了（与 `RootView` 同一条约定）。
+    init(status: SkyStatus?, onTap: @escaping () -> Void) {
+        self.status = status
+        self.onTap = onTap
+    }
 
     var body: some View {
         HStack(spacing: Spacing.cardGap) {
@@ -75,7 +84,7 @@ struct VersionTileRow: View {
                     .lineLimit(1)
             }
             .padding(Spacing.smallCardPadding)
-            .frame(maxWidth: .infinity, minHeight: CardTier.tile.height, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: metrics.cardHeight(.tile), alignment: .topLeading)
             .glassStatic(
                 in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous),
                 tint: phase.tint

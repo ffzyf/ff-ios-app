@@ -23,6 +23,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: Spacing.sectionGap) {
                     header
                     group("外观") { AppearanceSection() }
+                    // 3.7.0：天气用设备定位（默认关闭，见 LocationStore 的类型注释）
+                    group("天气") { WeatherLocationSection() }
                     // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
                     group("红石") { LiveActivitySection() }
                     // 批次 3：问卷管理（登录 / 退出）。单例观察，不依赖环境对象注入

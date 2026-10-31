@@ -38,6 +38,12 @@ enum Typography {
     /// 之前这两个位置分别 inline 硬写 36 与 40：同一个语义两个值，还没法统一调。
     /// 走 `.rounded` 是因为数字在圆角卡片上是"读数"不是"正文"，圆体让 0/8/9 更易分辨。
     static let metricL = Font.system(size: 40, weight: .bold, design: .rounded)
+    /// 56pt Bold Rounded —— **宽档**大卡里的那一个数字（iPad 画布上的首页倒计时）。
+    ///
+    /// 为什么宽档要单独一档、而不是把 `metricL` 整个放大：40pt 在 712 宽的卡里只占 16.5%，
+    /// 卡变大了锚点却没变大，读起来就是"放大的空卡"（设计文档 §5.2）。
+    /// 而窄档 353 宽的卡里 40pt 占 35%，正好 —— 所以只增一档、只在宽档取。
+    static let metricXL = Font.system(size: 56, weight: .bold, design: .rounded)
     /// 28pt Bold Rounded —— tile（96pt）里的数字：比 `titleL` 大、比 `metricL` 小，
     /// 补的正是现有字阶 22 → 34 之间的空档
     static let metricM = Font.system(size: 28, weight: .bold, design: .rounded)

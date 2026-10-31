@@ -16,6 +16,11 @@ struct MoreView: View {
     /// 批次 4：监控行的右侧状态字来自这里（有新版本 / 已是最新 / 检查失败）。
     /// 单例观察，与问卷那一行同款写法 —— 少一层环境注入，少一处运行期崩溃面。
     @ObservedObject private var monitor = MonitorStore.shared
+    /// 尺寸模型（设计文档 §4.6）：rail 档把两张状态 tile 搬到右侧 368，
+    /// 四行工具列表留在主列 —— 这一页原来最"空"（内容 752 高、只占 57% 的宽度）。
+    @Environment(\.layoutMetrics) private var metrics
+    /// 主列实测高度（副列靠它撑高，`Spacer` 才吸得到差额；理由见 `View.measureHeight(into:)`）
+    @State private var mainColumnHeight: CGFloat = 0
 
     @State private var showsWorkspace: Bool = false
     @State private var showsMonitor: Bool = false
@@ -36,90 +41,15 @@ struct MoreView: View {
             // 问卷 / 监控 / 设置 / 关于混在一列里，谁跟谁都读不出关系（设计报告 §4.5）
             VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 header
-
-                // 顶部两张 96pt tile：把"连接状态"从行内 13pt 的一小串字，
-                // 提成一组 20pt 的状态卡 —— 这一页最先该被看到的就是"连上了没有"
-                HStack(spacing: Spacing.cardGap) {
-                    statusTile(
-                        title: "问卷",
-                        value: auth.isLoggedIn ? "已连接" : "未连接",
-                        valueColor: auth.isLoggedIn ? Theme.limeInk : Theme.textTertiary,
-                        detail: auth.isLoggedIn ? "可进工作台" : "要管理密码"
-                    ) {
-                        openWorkspace()
-                    }
-
-                    statusTile(
-                        title: "推送监控",
-                        value: monitorTimeText,
-                        valueColor: Theme.textPrimary,
-                        detail: monitor.summaryText ?? "点开看明细"
-                    ) {
-                        showsMonitor = true
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: "工具")
-                    VStack(spacing: Spacing.gridUnit) {
-                        MoreRow(
-                            icon: "list.bullet.rectangle.portrait",
-                            title: "问卷工作台",
-                            detail: auth.isLoggedIn ? "已连接" : "未连接",
-                            isMuted: !auth.isLoggedIn
-                        ) {
-                            openWorkspace()
-                        }
-
-                        MoreRow(
-                            icon: "antenna.radiowaves.left.and.right",
-                            title: "推送监控",
-                            // 取不到就显示 nil（右侧留白）；绝不写「未知」——
-                            // 这行要么说事实（有新版本 / 已是最新 + 时间），要么什么都不说
-                            detail: monitor.summaryText,
-                            isMuted: monitor.summaryText == nil
-                        ) {
-                            showsMonitor = true
-                        }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: "其他")
-                    VStack(spacing: Spacing.gridUnit) {
-                        MoreRow(
-                            icon: "gearshape",
-                            title: "设置",
-                            detail: nil,
-                            isMuted: false
-                        ) {
-                            showsSettings = true
-                        }
-
-                        MoreRow(
-                            icon: "info.circle",
-                            title: "关于",
-                            detail: appVersion,
-                            isMuted: false
-                        ) {
-                            showsAbout = true
-                        }
-                    }
-                }
-
-                Text("问卷工作台要管理密码；推送监控是匿名只读，不需要登录。")
-                    .font(Typography.captionXS)
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
-                    .padding(.horizontal, 4)
+                mainGroups
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 单列 720 居中（设计文档 §3.7）。这一页只有 2 tile + 4 行，分栏反而更空。
+            // 列宽：rail 档 = 画布 1080 + 页边距（主 680 / 32 / 副 368），否则 720（= 今天）。
             // 窄屏 393 < 720 → 无影响。
-            .pageColumn(Layout.contentMaxWidth)
+            .pageColumn(metrics.railPageWidth)
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -151,6 +81,151 @@ struct MoreView: View {
         .sheet(isPresented: $showsAbout) {
             MoreAboutSheet()
         }
+    }
+
+    // MARK: - 分组排布（单列 / rail）
+
+    /// 窄档：两张 tile 横排 → 工具 → 其他 → 页脚（顺序与 3.7.0 一字不差）。
+    /// rail 档：工具 + 其他 留主列，两张 tile 竖排搬进 368 的副列，页脚贴副列底
+    /// （设计文档 §4.6：左 ≈ 328、右自然 ≈ 252 → `Spacer` 吃掉 76，两列底边齐）。
+    @ViewBuilder
+    private var mainGroups: some View {
+        if metrics.usesRail {
+            HStack(alignment: .top, spacing: Layout.columnGap) {
+                mainColumn
+                    .frame(maxWidth: metrics.railMainWidth)
+                    .measureHeight(into: $mainColumnHeight)
+                sideColumn
+                    .frame(width: Layout.sideColumnWidth)
+                    // `minHeight` 而不是 `height`：副列内容比主列高时不溢出卡片，
+                    // 内容矮时仍然撑到主列高度 —— `Spacer` 吃差额，页脚压到底边（齐平保留）。
+                    .frame(minHeight: sideColumnHeight, alignment: .top)
+            }
+        } else {
+            statusRow
+            mainColumn
+            footNote
+        }
+    }
+
+    /// 主列：工具 + 其他（两组的定义只有一份，两个档共用）
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+            toolsGroup
+            otherGroup
+        }
+    }
+
+    /// 副列：两张状态 tile（368×120，间距 12）+ `Spacer(minLength: 32)` + 页脚说明
+    ///
+    /// 两张 tile 用内层 `VStack(spacing: cardGap)` 而不是两个 `Spacer`：12 是**固定间距**，
+    /// `Spacer` 是"吸收剩余"，用它当间距会让两个 120 高的卡被拉开到 248 —— 那是另一种错。
+    private var sideColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(spacing: Spacing.cardGap) {
+                surveyTile
+                monitorTile
+            }
+            Spacer(minLength: Layout.columnGap)
+            footNote
+        }
+    }
+
+    /// 副列高度：量到主列才给值，首帧（0）给 `nil` = 按内容自然高
+    private var sideColumnHeight: CGFloat? {
+        return mainColumnHeight > 0 ? mainColumnHeight : nil
+    }
+
+    /// 窄档的两张 tile 横排。宽档不渲染这一行（它们在副列里竖排）。
+    private var statusRow: some View {
+        // 顶部两张 tile：把"连接状态"从行内 13pt 的一小串字，
+        // 提成一组 20pt 的状态卡 —— 这一页最先该被看到的就是"连上了没有"
+        HStack(spacing: Spacing.cardGap) {
+            surveyTile
+            monitorTile
+        }
+    }
+
+    private var surveyTile: some View {
+        statusTile(
+            title: "问卷",
+            value: auth.isLoggedIn ? "已连接" : "未连接",
+            valueColor: auth.isLoggedIn ? Theme.limeInk : Theme.textTertiary,
+            detail: auth.isLoggedIn ? "可进工作台" : "要管理密码"
+        ) {
+            openWorkspace()
+        }
+    }
+
+    private var monitorTile: some View {
+        statusTile(
+            title: "推送监控",
+            value: monitorTimeText,
+            valueColor: Theme.textPrimary,
+            detail: monitor.summaryText ?? "点开看明细"
+        ) {
+            showsMonitor = true
+        }
+    }
+
+    private var toolsGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "工具")
+            VStack(spacing: Spacing.gridUnit) {
+                MoreRow(
+                    icon: "list.bullet.rectangle.portrait",
+                    title: "问卷工作台",
+                    detail: auth.isLoggedIn ? "已连接" : "未连接",
+                    isMuted: !auth.isLoggedIn
+                ) {
+                    openWorkspace()
+                }
+
+                MoreRow(
+                    icon: "antenna.radiowaves.left.and.right",
+                    title: "推送监控",
+                    // 取不到就显示 nil（右侧留白）；绝不写「未知」——
+                    // 这行要么说事实（有新版本 / 已是最新 + 时间），要么什么都不说
+                    detail: monitor.summaryText,
+                    isMuted: monitor.summaryText == nil
+                ) {
+                    showsMonitor = true
+                }
+            }
+        }
+    }
+
+    private var otherGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "其他")
+            VStack(spacing: Spacing.gridUnit) {
+                MoreRow(
+                    icon: "gearshape",
+                    title: "设置",
+                    detail: nil,
+                    isMuted: false
+                ) {
+                    showsSettings = true
+                }
+
+                MoreRow(
+                    icon: "info.circle",
+                    title: "关于",
+                    detail: appVersion,
+                    isMuted: false
+                ) {
+                    showsAbout = true
+                }
+            }
+        }
+    }
+
+    private var footNote: some View {
+        Text("问卷工作台要管理密码；推送监控是匿名只读，不需要登录。")
+            .font(Typography.captionXS)
+            .foregroundStyle(Theme.textTertiary)
+            .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+            .padding(.horizontal, 4)
     }
 
     // MARK: - 头部
@@ -185,8 +260,10 @@ struct MoreView: View {
             action()
         }) {
             GlassCard {
+                // 高度走 `cardHeight(.tile)`：窄档 96（今天）/ 宽档 120。
                 // 96 − 24（上下内距）= 72pt 可用：眉题 13 + 状态 24 + 说明 16 + 3 条 4pt 间距 = 65，
-                // 剩下的 7pt 由 `Spacer` 吃掉 —— 状态字因此被压到卡的下半部，两张 tile 底线对齐
+                // 剩下的由 `Spacer` 吃掉 —— 状态字因此被压到卡的下半部，两张 tile 底线对齐。
+                // 宽档 120 走同一套推导，多的 24pt 也全给 `Spacer`，所以文字位置不变、卡变高。
                 VStack(alignment: .leading, spacing: 4) {
                     Eyebrow(text: title)
                     Spacer(minLength: 0)
@@ -203,7 +280,7 @@ struct MoreView: View {
                         .minimumScaleFactor(0.8)
                 }
                 .padding(Spacing.smallCardPadding)
-                .frame(height: CardTier.tile.height, alignment: .leading)
+                .frame(height: metrics.cardHeight(.tile), alignment: .leading)
             }
             .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }

@@ -58,17 +58,29 @@ struct EarningsView: View {
     @State private var showsAllActivities: Bool = false
     @FocusState private var isPasswordFocused: Bool
 
-    /// hero 卡最小高度（报告 §4.4 线框图指定 216pt）。
+    /// hero 卡最小高度。
     ///
     /// 为什么不直接用 `CardTier.hero.height`：240 是首页红石倒计时那一档（它还有 4pt 进度轨
     /// 与"三场并列"行）；收益 hero 里只有一个数字 + 一条构成条 + 一行图例，216 才是它的内容高度。
     /// 用 `minHeight` 而不是固定 `height`：数字换行或大字号时卡可以长高，不会裁字。
-    private let heroMinHeight: CGFloat = 216.0
+    ///
+    /// **宽档 264**（设计文档 §4.4）：主列从 560 长到 680（×1.21），高度跟着 ×1.22 ——
+    /// 高宽比 2.59:1 → 2.58:1 不变，观感是"同一张卡变大了"；等比放大（×1.56）会把 216 撑到 337，
+    /// 卡里只剩空气。这是全工程唯一一处"页面本地卡片高度"，保留它是因为它不属于 `CardTier`
+    /// 的任何一档（红石 hero 有进度轨，收益 hero 没有）。
+    private var heroMinHeight: CGFloat {
+        metrics.usesRail ? 264 : 216
+    }
+
+    /// 主列实测高度（副列靠它撑高，`Spacer` 才吸得到差额；理由见 `View.measureHeight(into:)`）
+    @State private var mainColumnHeight: CGFloat = 0
+
     /// 平台网格列定义。两列等宽、列间距 `Spacing.cardGap`（12）：
     ///
     /// 为什么不是 `.adaptive` —— 屏幕更宽时（iPad / 横屏）adaptive 会自己变成 3~4 列，
     /// 而收益页的金额字号是按"单卡约 150pt 宽"定的，列数一变就得再判宽度换字号。
     /// 固定两列让版式在所有设备上一致：平台再多，也只会往下排。
+    /// 宽档副列仍是 368（`Layout.sideColumnWidth`），两列各 178 —— 所以这里不用改。
     private let platformGridColumns: [GridItem] = [
         GridItem(.flexible(), spacing: Spacing.cardGap),
         GridItem(.flexible(), spacing: Spacing.cardGap)
@@ -105,13 +117,9 @@ struct EarningsView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 窄屏 393 < 720 → 无影响。宽屏两列时 960 是**列区**宽度，
-            // 页边距 20×2 在它外面，所以要加回去（理由与红石页同一处）。
-            .pageColumn(
-                metrics.isTwoColumn
-                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
-                    : Layout.contentMaxWidth
-            )
+            // 列宽：rail 档 = 画布 1080 + 页边距（主列 680 / 32 / 副列 368），否则 720（= 今天）。
+            // `railPageWidth` 已含页边距，页面里不再 `+ Spacing.page * 2`。
+            .pageColumn(metrics.railPageWidth)
         }
         .scrollPosition(scrollPosition)
         .pageScrollLight()
@@ -145,43 +153,77 @@ struct EarningsView: View {
         }
     }
 
-    /// 主列宽 = 两列总宽 − 副列 − 列间距（= 560）
+    /// 主列宽 = 画布 − 栏距 − 副列（rail 档 = 680）。
+    /// 从画布算而不是写死：Stage Manager 拖窄时主列自动收，副列不会被挤出画布。
     private var mainColumnWidth: CGFloat {
-        Layout.twoColumnMaxWidth - Layout.sideColumnWidth - Layout.columnGap
+        metrics.railMainWidth
     }
 
-    /// 已登录且有数据时的正文（设计文档 §3.5）。
+    /// 已登录且有数据时的正文（设计文档 §4.4）。
     ///
-    /// 窄屏分支的顺序与 3.4.0 一致：hero → 本月 → 平台 → 活动流水 → 页脚。
-    /// 宽屏只是把「平台」从下方搬到右边 —— 四个分组各自只有一份定义。
+    /// 窄屏分支的顺序与 3.7.0 一致：hero → 本月 → 平台 → 活动流水 → 页脚。
+    /// rail 档只是把「平台」从下方搬到右边、把页脚搬进副列底部 —— 四个分组各自只有一份定义。
     ///
-    /// 为什么两列条件里还要带上 `platformBreakdown.isEmpty == false`：
+    /// 为什么宽档条件里还要带上 `platformBreakdown.isEmpty == false`：
     /// 平台区块在没有平台数据时**整块不渲染**（`platformSection` 内部就是空分支），
     /// 但副列那个 `.frame(width: Layout.sideColumnWidth)` 是挂在调用处的 ——
-    /// 于是 iPad 上会出现"左 560 有内容 + 32 间隔 + 右 368 全空"，右侧白掉一大条。
-    /// 没有可放进副列的东西时就不该有副列：退回单列后主列自然吃满 960。
-    /// 窄屏本来就只渲染主列（下面 else 分支），所以这只是把宽屏对齐到窄屏的规则。
+    /// 于是 iPad 上会出现"左 680 有内容 + 32 间隔 + 右 368 全空"，右侧白掉一大条。
+    /// 没有可放进副列的东西时就不该有副列：退回单列后主列自然吃满画布。
+    /// （3.5.1 修过一次的同一个 bug，这次把条件原样带过来，没有退回去。）
     @ViewBuilder
     private func loadedBlocks(summary: EarningsSummary) -> some View {
-        if metrics.isTwoColumn && !summary.platformBreakdown.isEmpty {
+        if usesRail(summary) {
             HStack(alignment: .top, spacing: Layout.columnGap) {
                 mainColumn(summary: summary)
-                    // 560 是推出来的（960 − 368 − 32）。用 `maxWidth` 而不是 `width`：
-                    // 列区不足 960 时（900…1000 这段）固定宽度会横向溢出被裁。
                     .frame(maxWidth: mainColumnWidth)
-                // 副列固定 368：平台网格仍是两列（(368 − 12) / 2 = 178 一张），
+                    .measureHeight(into: $mainColumnHeight)
+                // 副列 368：平台网格仍是两列（(368 − 12) / 2 = 178 一张），
                 // 不改 `.adaptive` —— 金额字号是按 150pt 卡宽定的（文件上方已写明理由）。
-                platformSection(summary: summary)
+                sideColumn(summary: summary)
                     .frame(width: Layout.sideColumnWidth)
+                    // `minHeight` 而不是 `height`：副列内容比主列高时不溢出卡片，
+                    // 内容矮时仍然撑到主列高度 —— `Spacer` 吃差额，页脚压到底边（齐平保留）。
+                    .frame(minHeight: sideColumnHeight, alignment: .top)
             }
+            // 活动流水**通栏**：它天然是"流水"，宽度越大越好读；放副列会让右列比左列高一倍。
+            // 它必须在两列**之外**（通栏 1080），否则 680 里塞一张 12 列的表会把金额列挤成省略号。
+            activitySection
         } else {
             mainColumn(summary: summary)
             platformSection(summary: summary)
+            // 单列：活动流与页脚照旧跟在平台后面 —— 顺序与 3.7.0 一字不差
+            activitySection
+            footerNote
         }
+    }
 
-        // 活动流水**通栏**：它天然是"流水"，宽度越大越好读；放副列会让右列比左列高一倍
-        activitySection
-        footerNote
+    /// 这一页要不要走"主列 + 副列"。**页面里唯一一处宽档判断**（设计文档 §4.0 规则 2）。
+    ///
+    /// 除了 rail 档成立，还要求平台数据非空：平台区块在没有数据时**整块不渲染**
+    /// （`platformSection` 内部就是空分支），但副列那个 `.frame(width: 368)` 挂在调用处 ——
+    /// 于是 iPad 上会出现"左 680 有内容 + 32 间隔 + 右 368 全空"，右侧白掉一大条。
+    /// 没有可放进副列的东西时就不该有副列：退回单列后主列自然吃满画布。
+    /// （3.5.1 修过同一个 bug，这次把条件原样带过来，没有退回去。）
+    private func usesRail(_ summary: EarningsSummary) -> Bool {
+        return metrics.usesRail && !summary.platformBreakdown.isEmpty
+    }
+
+    /// 副列高度：量到主列才给值，首帧（0）给 `nil` = 按内容自然高。
+    private var sideColumnHeight: CGFloat? {
+        return mainColumnHeight > 0 ? mainColumnHeight : nil
+    }
+
+    /// rail 档副列：平台卡墙 + `Spacer(minLength: 32)` + 页脚说明（设计文档 §4.4）。
+    ///
+    /// 页脚从"整页最底部"搬到这里，是为了让左右两列的**底边同高收尾**：
+    /// 平台卡只有 292，主列有 456 —— `Spacer` 吃掉 164，页脚正好贴在主列的底边线上。
+    /// 单列时页脚仍在页面最底部（`else` 分支），一个字都没动。
+    private func sideColumn(summary: EarningsSummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            platformSection(summary: summary)
+            Spacer(minLength: Layout.columnGap)
+            footerNote
+        }
     }
 
     // MARK: - 头部
@@ -253,7 +295,9 @@ struct EarningsView: View {
                 }
 
                 Text(EarningsMoney.formatCents(summary.total))
-                    .font(Typography.metricL)
+                    // hero 在宽档是 680 宽的整块（264 高），40pt 在里面就是"放大的空卡"；
+                    // 与概览 hero 同一判据 —— 宽档 56pt（`metricXL`），窄档仍是今天的 40pt（`metricL`）。
+                    .font(metrics.usesRail ? Typography.metricXL : Typography.metricL)
                     .foregroundStyle(Theme.textPrimary)
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
@@ -367,6 +411,9 @@ struct EarningsView: View {
 
     /// 96pt tile 的统一外壳：眉题在顶、数字在底（`Spacer` 把两边顶开，
     /// 三张卡的数字基线因此永远对齐，即便某张数字因缩放变窄）。
+    ///
+    /// 高度走 `cardHeight(.tile)`：窄档 96（今天）/ 宽档 120。三张 tile 在 680 的主列里
+    /// 各 218.7 宽、120 高 = 1.82:1，与今天 178.7×96 的 1.86:1 同比例（设计文档 §4.4）。
     private func statTile<Value: View>(
         title: String,
         @ViewBuilder value: () -> Value
@@ -379,7 +426,7 @@ struct EarningsView: View {
                 Spacer(minLength: 0)
             }
             .padding(Spacing.smallCardPadding)
-            .frame(height: CardTier.tile.height, alignment: .leading)
+            .frame(height: metrics.cardHeight(.tile), alignment: .leading)
         }
     }
 

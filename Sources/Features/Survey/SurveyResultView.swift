@@ -16,6 +16,10 @@ struct SurveyResultView: View {
     let surveyId: String
 
     @ObservedObject private var store = SurveyStore.shared
+    /// 尺寸模型（设计文档 §4.11）：题目统计彼此独立，是唯一适合并排的一组 ——
+    /// 2 列各 528 后，"题目 + 占比条"仍然按容器宽算（`QuestionStatView` 内部就是 `maxWidth`，
+    /// 不写死列宽），所以这一页只改容器，不改任何一条柱。
+    @Environment(\.layoutMetrics) private var metrics
     @State private var showsResponses: Bool = false
 
     private let onBack: () -> Void
@@ -47,8 +51,10 @@ struct SurveyResultView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 6)
             .padding(.bottom, Spacing.pageBottomInset)
-            // 结果看板列宽 720（§3.9）：理由同详情页 —— 条形图的可比性依赖行宽一致。
-            .pageColumn(Layout.contentMaxWidth)
+            // 列宽：单列 720（= 今天）/ 多列时画布 1080。
+            // 结果页的条形图可读性依赖"同一行里两条柱长度可比"——并排 2 列之后，
+            // 每题仍然占满自己那一列（528），柱长比例不变，只是左右多了一题。
+            .pageColumn(metrics.gridPageWidth)
         }
         .scrollIndicators(.hidden)
         .refreshable {
@@ -100,11 +106,7 @@ struct SurveyResultView: View {
             } else if data.stats.perQuestion.isEmpty {
                 emptyCard
             } else {
-                VStack(spacing: Spacing.cardGap) {
-                    ForEach(Array(data.stats.perQuestion.enumerated()), id: \.element.id) { pair in
-                        QuestionStatView(stat: pair.element, index: pair.offset)
-                    }
-                }
+                questionStats(data.stats.perQuestion)
             }
             footerNote(data)
         } else if let error = store.resultFailure, !store.isLoadingResult {
@@ -215,6 +217,35 @@ struct SurveyResultView: View {
             }
             .padding(Spacing.cardPadding)
         }
+    }
+
+    // MARK: - 每题统计
+
+    /// 每题统计的容器：**窄档单列 / 宽档 2 列**（各 528）。题目彼此独立，并排不会串台。
+    ///
+    /// `QuestionStatView` 一行都没改：它的柱宽本来就是按容器宽算的
+    /// （`GeometryReader` 读的是父级给的宽度），所以进网格之后柱仍然铺满自己那一列，
+    /// 不会因为列变窄而失真 —— 这是"只改容器不改内容"能成立的前提。
+    @ViewBuilder
+    private func questionStats(_ questions: [QuestionStat]) -> some View {
+        if metrics.gridColumns > 1 {
+            LazyVGrid(columns: statColumns, alignment: .leading, spacing: Layout.gridGutter) {
+                ForEach(Array(questions.enumerated()), id: \.element.id) { pair in
+                    QuestionStatView(stat: pair.element, index: pair.offset)
+                }
+            }
+        } else {
+            VStack(spacing: Spacing.cardGap) {
+                ForEach(Array(questions.enumerated()), id: \.element.id) { pair in
+                    QuestionStatView(stat: pair.element, index: pair.offset)
+                }
+            }
+        }
+    }
+
+    /// 宽档 2 列（栏距 24 = `Layout.gridGutter`，列宽 = (1080 − 24) / 2 = 528）
+    private var statColumns: [GridItem] {
+        return Array(repeating: GridItem(.flexible(), spacing: Layout.gridGutter), count: 2)
     }
 
     // MARK: - 空态与页脚

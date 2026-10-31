@@ -11,6 +11,9 @@ import SwiftUI
 struct RockGuideView: View {
     @EnvironmentObject private var store: RockGuideStore
     @Environment(\.dismiss) private var dismiss
+    /// 尺寸模型（设计文档 §4.10）：图墙最该吃满宽度 —— 1194 上一列 680 的 4:3 图
+    /// 等于把一半屏幕留成空白，2 列各 528 才是"看攻略"的密度。
+    @Environment(\.layoutMetrics) private var metrics
 
     /// 图片转场命名空间（来源卡与全屏图共享）
     @Namespace private var zoomNamespace: Namespace.ID
@@ -52,10 +55,10 @@ struct RockGuideView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
             .padding(.bottom, 40)
-            // 列宽 720（含 page padding 20×2 → 文字 680）。这是全屏覆盖页，没有 Tab 栏兜底，
+            // 列宽：单列 720（= 今天）/ 多列时画布 1080。这是全屏覆盖页，没有 Tab 栏兜底，
             // 所以必须自己限宽：不限的话 iPad 横屏正文行宽会到 1154，一行塞 60 多个汉字。
             // 窄屏 393 < 720，`maxWidth` 不生效 → 与今天逐像素一致。
-            .pageColumn(Layout.contentMaxWidth)
+            .pageColumn(metrics.gridPageWidth)
         }
         .scrollIndicators(.hidden)
         .refreshable {
@@ -83,10 +86,35 @@ struct RockGuideView: View {
         }
     }
 
+    /// 图墙：**窄档单列 / 宽档 2 列**（各 528，图 528×396 仍是 4:3）。
+    ///
+    /// 分叉只有容器这一处：`row(index:item:)` 的定义只有一份，图卡 / 文字卡两种长相也在这一个
+    /// 函数里分派 —— 网格只决定"几列"，不影响任何一张卡的内部结构。
+    ///
+    /// 文字卡也进同一栅格（没有固定高度，`LazyVGrid` 按行取高）：严格对齐要给文字卡也上
+    /// `minHeight: 396`，本次不做（设计文档 §4.10 明确），因为文字卡极少。
+    ///
+    /// `matchedGeometryEffect` 的 `zoomNamespace` 与 `transitionID`（= 序号）**一个字都没动**：
+    /// 缩放转场靠"来源与目标同一个 namespace + 同一个 id"，换栅格不改变 id。
+    @ViewBuilder
     private var itemList: some View {
-        ForEach(store.items.indices, id: \.self) { index in
-            row(index: index, item: store.items[index])
+        if metrics.gridColumns > 1 {
+            LazyVGrid(columns: guideColumns, alignment: .leading, spacing: 14) {
+                ForEach(store.items.indices, id: \.self) { index in
+                    row(index: index, item: store.items[index])
+                }
+            }
+        } else {
+            // 窄档：与今天一字不差（外层 VStack 的 14pt 组距仍在，这里只放列表项）
+            ForEach(store.items.indices, id: \.self) { index in
+                row(index: index, item: store.items[index])
+            }
         }
+    }
+
+    /// 宽档 2 列（栏距 24 = `Layout.gridGutter`，列宽 = (1080 − 24) / 2 = 528）
+    private var guideColumns: [GridItem] {
+        return Array(repeating: GridItem(.flexible(), spacing: Layout.gridGutter), count: 2)
     }
 
     @ViewBuilder
@@ -190,11 +218,14 @@ struct RockGuideView: View {
         .padding(.bottom, 6)
         // 按钮行与正文同列：`topBar` 是浮在内容上的独立 HStack（ZStack 的一层），
         // 不是 VStack 流里的一员，也没有自己的背景 —— 所以 `pageColumn` 加在这个 HStack
-        // 自己身上（在 page padding *之后*，与 `scrollContent` 的顺序一致：列宽 720 含
-        // padding 20×2，内宽 680 与正文逐像素对齐）。加在外层 ZStack 上无效（ZStack 已被
-        // `PageBackground` 撑满），加 `PageBackground` 则会把满屏渐变缩成 720 窄条。
+        // 自己身上（在 page padding *之后*，与 `scrollContent` 的顺序一致：列宽含 padding 20×2，
+        // 内宽与正文逐像素对齐）。加在外层 ZStack 上无效（ZStack 已被
+        // `PageBackground` 撑满），加 `PageBackground` 则会把满屏渐变缩成窄条。
+        //
+        // 宽档跟着正文一起用画布（1080）：返回钮留在左上角 x≈57，而不是跑到屏幕中间偏左的
+        // x≈237 —— 全屏页的按钮不在角落比"视线横跨"更伤手感（同 §4.8 对文章详情的判断）。
         // 窄屏 393 < 720，两次 frame 都不生效 → iPhone 零影响。
-        .pageColumn(Layout.contentMaxWidth)
+        .pageColumn(metrics.gridPageWidth)
     }
 
     // MARK: - 全屏看图

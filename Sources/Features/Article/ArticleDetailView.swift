@@ -22,6 +22,8 @@ struct ArticleDetailView: View {
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    /// 尺寸模型（设计文档 §4.8）：**只给导航条用** —— 正文列宽一个字都不改（行宽由字形决定）。
+    @Environment(\.layoutMetrics) private var metrics
 
     @State private var showsShare: Bool = false
     /// 内容顶边在滚动坐标系里的 minY：0 = 顶部，往上滚为负数
@@ -119,10 +121,14 @@ struct ArticleDetailView: View {
             .accessibilityLabel("分享")
         }
         .padding(.horizontal, Spacing.page)
-        // 导航条与正文**同列**。这一行不是锦上添花：导航条若是满宽，iPad 上返回钮会贴在
-        // 1194 屏幕的最左边、正文却在中间的 640 里，视线要横跨 500pt 才能对上。
-        // 窄屏下 640 > 393，`maxWidth` 不生效 → 与今天逐像素一致。
-        .pageColumn(Layout.readingMaxWidth)
+        // 导航条走**画布**（宽档 1080 / 窄档 = 屏宽），正文仍是 640。
+        //
+        // 这一行是本次唯一改动的导航几何，理由与旧注释正好相反：
+        // 旧文档写"导航条必须与正文同列"，那条在小屏成立；但在 1194 上，"同列"意味着返回钮
+        // 距屏幕左边 277pt —— 拇指和指针都要往里够 277，**按钮不在角落**比"视线横跨"更伤手感。
+        // 所以宽档把按钮放回左上角（x ≈ 57），正文继续在中间 640 里（那 277 的空白是行宽决定的，
+        // 不是浪费）。窄屏 `canvasPageWidth` = 393，`maxWidth` 不生效 → 与今天逐像素一致。
+        .pageColumn(metrics.canvasPageWidth)
         .padding(.top, 6)
         .padding(.bottom, 8)
         // 玻璃底必须满宽（它是"条"，不是"列"）：所以 `pageColumn` 加在 `.background` **之前**，

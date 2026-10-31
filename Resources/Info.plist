@@ -55,6 +55,18 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!--
+	  3.7.0：天气卡片用设备定位（设置 → 天气 → 用我的位置，**默认关闭**）。
+
+	  只写 WhenInUse 这一条，刻意**不**写 NSLocationAlwaysAndWhenInUseUsageDescription：
+	  · 我们只需要"打开 App 时取一次坐标"，从不后台定位、从不 startUpdatingLocation；
+	  · 多写 Always 会在审核时被要求解释"为什么需要始终允许"，而这个问题我们没有正当答案。
+
+	  没有这一条，requestWhenInUseAuthorization() 会直接失败（不弹框、不报错），
+	  滑块开关看起来"点了没反应"—— 这是最容易被当成玄学 bug 的一类配置遗漏。
+	-->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用你的位置获取当地天气，只用于请求天气接口，不上传、不保存到我们的服务器。</string>
+	<!--
 	  批次 4：实时活动。Apple 要求写在**宿主 App** 的 Info.plist 上（Widget 扩展不需要）。
 	  没有这一条，Activity.request 会直接抛错，锁屏与灵动岛永远不会出现红石活动。
 	-->

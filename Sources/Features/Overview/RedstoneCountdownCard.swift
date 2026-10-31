@@ -35,8 +35,10 @@ import SwiftUI
 /// 卡片底盘（渐变 / 云海 / 描边）在 `TimelineView` 之外常驻。
 struct RedstoneCountdownCard: View {
     @EnvironmentObject private var rock: RockStore
+    /// 卡片档位只在宽档变大（240 → 344），所以高度与"大数字"都要读同一个判据 `usesWideCards`。
+    @Environment(\.layoutMetrics) private var metrics
 
-    /// 卡片高度档：首页传 `.hero`（240），其它场景想复用可以降级
+    /// 卡片高度档：首页传 `.hero`（窄档 240 / 宽档 344），其它场景想复用可以降级
     private let tier: CardTier
     /// 点击整卡 → 切到红石 Tab（由 `OverviewView` 通过现有 tab binding 完成，不新建导航栈）
     private let onOpenRock: () -> Void
@@ -50,7 +52,9 @@ struct RedstoneCountdownCard: View {
         TrackCard(
             progress: ArcGeometry.dayProgress(),
             peak: 0.70,
-            minHeight: tier.height,
+            // 高度走 `cardHeight(_:)`：**窄档必须仍然是 240**（iPhone 逐像素铁律），
+            // 宽档才是 344。直接写 `tier.height` 会让 iPad 上继续是"放大的手机"。
+            minHeight: metrics.cardHeight(tier),
             backdrop: .skyGame
         ) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -208,7 +212,10 @@ struct RedstoneCountdownCard: View {
         default:
             if let occurrence = phase.occurrence {
                 Text(occurrence.time)
-                    .font(Typography.metricL)
+                    // 宽档 56pt（`metricXL`）：卡片宽度 ×2、高度 ×1.43，40pt 在 712 宽的卡里
+                    // 只占 16.5%，锚点不跟着变大就是"放大的空卡"（设计文档 §5.2）。
+                    // 窄档仍是 40pt —— 这一行是 iPhone 上唯一会变的字号判据，判据就是卡高用的那个。
+                    .font(metrics.usesWideCards ? Typography.metricXL : Typography.metricL)
                     .foregroundStyle(Theme.textPrimary)
                     .monospacedDigit()
                     .contentTransition(.numericText())

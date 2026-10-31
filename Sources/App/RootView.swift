@@ -27,6 +27,9 @@ struct RootView: View {
     @State private var openedArticle: ArticleSummary?
     /// 各页滚动偏移保活：只存「当前 tab 对应那页」的偏移，页面卸载也不丢（RootView 常驻）。
     @State private var scrollPositions: [AppTab: ScrollPosition] = [:]
+    /// 设置浮层（⌘, 打开，设计文档 §7.1）。iPad 上 ⌘, 是肌肉记忆，
+    /// iPhone 无外接键盘时它是死代码 —— 隐藏按钮不占布局、不改变任何像素。
+    @State private var showsSettings: Bool = false
     /// 配色主题。`Theme.*` 是全局静态 token，SwiftUI 不会替我们追踪它的变化，
     /// 所以切换时靠下面的 `.id(themeId)` 把内容区整块重建一次（滚动位置存在字典里，不受影响）。
     @ObservedObject private var appearance = AppearanceStore.shared
@@ -54,6 +57,106 @@ struct RootView: View {
     }
 
     var body: some View {
+        tabChrome
+        // 详情页全屏覆盖（盖在 Tab 栏之上）：`environmentObject` 显式再注入一遍，
+        // 不依赖模态呈现是否继承环境（两行代码换掉一类「找不到 AppModel」的运行期崩溃）。
+        // 关闭时清详情状态，避免下次进详情先看到上一篇的正文。
+        .fullScreenCover(item: $openedArticle, onDismiss: {
+            model.clearArticle()
+        }) { article in
+            ArticleDetailView(articleId: article.id)
+                .environmentObject(model)
+        }
+        // ⌘, 打开的设置浮层（⌘, 的隐藏按钮挂在 `pageContent` 上，见 `settingsShortcut`）
+        .sheet(isPresented: $showsSettings) {
+            SettingsView()
+        }
+        .task {
+            await model.loadOverview()
+        }
+        // 红石单独一个 task：与概览的两请求并行，互不阻塞（红石站与博客/简报站是三个域）
+        .task {
+            await rock.loadSchedule()
+        }
+        // 天气定位（3.7.0）：进 App 时补一次。
+        //
+        // 这里**只挂一个 `.task`**（视图出现时跑一次），不放进任何按帧 / 按秒的路径：
+        // `refreshIfNeeded()` 内部会在"开关关着"或"坐标还在 6 小时有效期内"时直接短路，
+        // 所以默认安装（开关默认关闭）**不会**弹权限框，也不会多一次定位。
+        .task {
+            // `LocationStore` 是 `@MainActor`，`refreshIfNeeded()` 是主 actor 上的同步方法；
+            // 而 `.task` 的闭包是非隔离的 `@Sendable async` —— 这里必须 `await`，
+            // 由编译器插一次 hop 到主 actor（对 MainActor 上的同步方法 `await` 合法）。
+            // 相邻的两个 `.task`（`model.loadOverview()` / `rock.loadSchedule()`）就是同一写法。
+            // 不要包 `Task { }`：那会多一层不带取消语义的嵌套任务。
+            await LocationStore.shared.refreshIfNeeded()
+        }
+        // 深链：桌面小组件点一下 → skyapp://brief / skyapp://rock → 落到对应 Tab。
+        //
+        // 为什么挂在根视图的 `body` 上就够冷启动也生效：SwiftUI 会在视图进入层级后
+        // 把「启动 App 的那个 URL」补发一次 `onOpenURL`。所以冷启动（App 没在跑）与
+        // 热启动（App 在后台）走的是**同一条**路径，不需要在 `FFWangApp` 里再存一份待处理的 URL。
+        .onOpenURL { url in
+            open(deepLink: url)
+        }
+    }
+
+    // MARK: - Tab 栏（宽档顶部 / 窄档底部）
+
+    /// Tab 栏的两个形态（设计文档 §6.4）。**同一份 `tabs` / `selection` 传给两边**，
+    /// 分叉只发生在"挂在屏幕哪条边"上。
+    ///
+    /// 为什么宽档不用 `NavigationSplitView`：它的 sidebar + detail 是两个常驻视图，
+    /// 会让 B3 的"同一时刻只 1 页"变成 2 页，并与 `ScrollLightStore` 的单份 progress、
+    /// `AppModel.articleState` 的单例状态直接冲突（设计文档 §7.3 的三条具体冲突）。
+    @ViewBuilder
+    private var tabChrome: some View {
+        if metrics.usesTopTabStrip {
+            // 宽档：顶部 44pt 居中胶囊条。**不加底部 inset** —— 底部腾出来的 90pt
+            // 正是"viewport 700 → 760"的来源；`pageBottomInset 120` 保持不变
+            // （多留 80 只是滚动尾部留白，改它要动 12 个文件）。
+            pageContent
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    WideTabStrip(tabs: tabBarTabs, selection: tabSelection)
+                        // 水平居中：iPadOS 26 的窗口按钮浮在窗口左上角，居中的条让左上角
+                        // 保持空白，页面标题在条**下面**一行，两者永远不在同一行打架（§6.3）。
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 6)
+                }
+        } else {
+            // 窄档：今天这条，逐字不动。
+            //
+            // 限宽 + 居中（设计文档 §2.5）。顺序不能动：
+            //
+            // `maxWidth` 必须在 `padding(.horizontal, 8)` **之前**。今天栏宽 = 屏宽 − 16；
+            // 放在 padding 之后，iPad 上实际栏宽会变成 480 + 16 = 496，且 iPhone 会变成 361（回归）。
+            // 放在前面时 393 − 16 = 377 与今天逐像素一致。
+            //
+            // 限宽只能加在**外部**：`FloatingTabBar` 内部自带 `.frame(maxWidth: .infinity)`，
+            // 在里面再塞一个 maxWidth 会和它打架，5 项就不再等分。
+            pageContent
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    FloatingTabBar(tabs: tabBarTabs, selection: tabSelection)
+                        .frame(maxWidth: metrics.tabBarWidth)
+                        .padding(.horizontal, Spacing.tabBarInset)
+                        .padding(.bottom, Spacing.tabBarBottomGap)
+                        .padding(.top, 6)
+                        // 窄屏下等价于今天的满宽（父级 proposal 本来就等于可用宽度）
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+        }
+    }
+
+    /// 两个形态共用的 Tab 数据（顺序即视觉顺序）。
+    private var tabBarTabs: [TabSpec] {
+        return AppTab.tabBarTabs.map { $0.spec }
+    }
+
+    /// 页面层：背景 + 当前页 + 滚动光影 + 主题重建 + ⌘, 的隐藏按钮。
+    ///
+    /// 这一段原来是 `body` 里的 `ZStack` 加上后面几个修饰器，抽成一个属性只为让 `tabChrome`
+    /// 能在"顶部 / 底部"两条分支里都套同一份内容 —— 修饰器的**顺序与归属一个都没改**。
+    private var pageContent: some View {
         ZStack {
             // 文章列表是阅读页，保持中性（PRD §4.1：光斑只留在概览与简报）
             //
@@ -86,46 +189,10 @@ struct RootView: View {
         .environment(\.scrollLight, scrollLight)
         // 换配色 → 整块重建。挂在 ZStack 上而不是 RootView 上，`tab` 等 @State 不会被重置。
         .id(appearance.themeId)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // 限宽 + 居中（设计文档 §2.5）。顺序不能动：
-            //
-            // `maxWidth` 必须在 `padding(.horizontal, 8)` **之前**。今天栏宽 = 屏宽 − 16；
-            // 放在 padding 之后，iPad 上实际栏宽会变成 480 + 16 = 496，且 iPhone 会变成 361（回归）。
-            // 放在前面时 393 − 16 = 377 与今天逐像素一致。
-            //
-            // 限宽只能加在**外部**：`FloatingTabBar` 内部自带 `.frame(maxWidth: .infinity)`，
-            // 在里面再塞一个 maxWidth 会和它打架，5 项就不再等分。
-            FloatingTabBar(tabs: AppTab.tabBarTabs.map { $0.spec }, selection: tabSelection)
-                .frame(maxWidth: metrics.tabBarWidth)
-                .padding(.horizontal, Spacing.tabBarInset)
-                .padding(.bottom, Spacing.tabBarBottomGap)
-                .padding(.top, 6)
-                // 窄屏下等价于今天的满宽（父级 proposal 本来就等于可用宽度）
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        // 详情页全屏覆盖（盖在 Tab 栏之上）：`environmentObject` 显式再注入一遍，
-        // 不依赖模态呈现是否继承环境（两行代码换掉一类「找不到 AppModel」的运行期崩溃）。
-        // 关闭时清详情状态，避免下次进详情先看到上一篇的正文。
-        .fullScreenCover(item: $openedArticle, onDismiss: {
-            model.clearArticle()
-        }) { article in
-            ArticleDetailView(articleId: article.id)
-                .environmentObject(model)
-        }
-        .task {
-            await model.loadOverview()
-        }
-        // 红石单独一个 task：与概览的两请求并行，互不阻塞（红石站与博客/简报站是三个域）
-        .task {
-            await rock.loadSchedule()
-        }
-        // 深链：桌面小组件点一下 → skyapp://brief / skyapp://rock → 落到对应 Tab。
-        //
-        // 为什么挂在根视图的 `body` 上就够冷启动也生效：SwiftUI 会在视图进入层级后
-        // 把「启动 App 的那个 URL」补发一次 `onOpenURL`。所以冷启动（App 没在跑）与
-        // 热启动（App 在后台）走的是**同一条**路径，不需要在 `FFWangApp` 里再存一份待处理的 URL。
-        .onOpenURL { url in
-            open(deepLink: url)
+        // ⌘, 打开设置（设计文档 §7.1）。挂在页面层而不是 Tab 栏上：两条 Tab 栏分支都要有它，
+        // 挂在共同祖先上就只有一份。无键盘时零影响（`frame(0,0)` + `opacity(0)`）。
+        .settingsShortcut {
+            showsSettings = true
         }
     }
 

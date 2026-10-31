@@ -48,15 +48,44 @@ enum API {
         return Endpoint.url(base: briefHost, path: briefPath)
     }
 
-    /// 天气实况：`GET /api/app/weather`，无参数、匿名可读。
+    /// 天气实况：`GET /api/app/weather`，匿名可读。
     ///
     /// base 用 `briefHost`（**不是 `rockBase`**）：天气挂在简报站上，
     /// 与 `brief()` 打同一台机器、共用一份上游缓存；换成红石站域名会 404。
     ///
     /// 业务失败时服务端仍返回 HTTP 200 + `{"ok":false,"error":"…"}` ——
     /// 传输层判不出来，由调用方（`WeatherStore`）看 `ok` 决定，本层只拼地址。
-    static func weather() -> URL? {
-        return Endpoint.url(base: briefHost, path: Endpoint.weatherPath)
+    ///
+    /// - Parameters:
+    ///   - lat: 纬度。与 `lon` **成对出现**；任一为 nil（或超出合法范围）就不带参数。
+    ///   - lon: 经度。
+    ///
+    /// ## 为什么要保留两个默认值
+    /// 服务端不带 `lat/lon` 时用自己写死的默认坐标 —— 这正是 3.7.0 之前的行为。
+    /// 所以 `WidgetFetch.weather()` 这类"拿不到设备定位"的调用点照旧写 `API.weather()`，
+    /// 一个字符都不用改，行为与今天逐字一致（小组件没有 App Group，读不到设备坐标）。
+    ///
+    /// ## 为什么只保留两位小数
+    /// 天气按公里级网格算，0.01° ≈ 1.1km，两位小数已经比网格细。
+    /// 多给精度既没有意义，还会把同一片网格拆成多个缓存键（服务端与本机缓存都会命中变差）。
+    static func weather(lat: Double? = nil, lon: Double? = nil) -> URL? {
+        // 两个都有才拼 query；只有一个（或都不合法）时当作"没有坐标"，
+        // 让服务端回落默认坐标 —— 半对半错的坐标拼出来只会得到另一处的天气。
+        guard let lat = lat, let lon = lon,
+              lat.isFinite, lon.isFinite,
+              (-90.0...90.0).contains(lat),
+              (-180.0...180.0).contains(lon) else {
+            return Endpoint.url(base: briefHost, path: Endpoint.weatherPath)
+        }
+
+        return Endpoint.url(
+            base: briefHost,
+            path: Endpoint.weatherPath,
+            query: [
+                URLQueryItem(name: "lat", value: String(format: "%.2f", lat)),
+                URLQueryItem(name: "lon", value: String(format: "%.2f", lon))
+            ]
+        )
     }
 
     // MARK: - 红石站（批次 2）
