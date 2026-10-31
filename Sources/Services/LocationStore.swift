@@ -118,7 +118,14 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// 为什么是 `nonisolated`：与 `SurveyStore` / `ScrollLightStore` 同一条纪律 ——
     /// View 的属性初始化器在 Swift 5 的 minimal 并发检查下不保证是隔离上下文。
     /// 本 init 只做两件事：读缓存、初始化两个 `@Published` 的底层存储，都不需要主 actor。
-    nonisolated init() {
+    ///
+    /// 为什么还要 `override`（3.7.0 首次编译报错的一处）：本类是 `NSObject` 子类，
+    /// `NSObject` 自带 `init()`，所以这里的 `init()` 不是"新声明"而是**覆盖**父类的那个。
+    /// 漏掉 `override` 就是 `error: overriding declaration requires an 'override' keyword`。
+    /// 注意 `nonisolated` 与 `override` **不能**调换语义：父类的 `init()` 是 nonisolated 的，
+    /// 写了 `override init()` 却让 init 继承类上的 `@MainActor`，等于用隔离的声明去覆盖非隔离的，
+    /// 那是另一类编译错误。所以两个修饰符都要，且必须在同一行。
+    nonisolated override init() {
         let defaults = UserDefaults.standard
 
         // 缓存还原：开关开着 + 坐标存在 + 6 小时内 → 直接可用，避免每次冷启动都定位一次。
