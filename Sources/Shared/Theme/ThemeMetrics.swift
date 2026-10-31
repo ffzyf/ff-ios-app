@@ -3,19 +3,31 @@ import SwiftUI
 /// 随外观变化的**数值** token。
 ///
 /// 为什么 `Color` 能自动跟随 trait 而 `CGFloat` 不能：动态 `UIColor` 的 provider 每次解析都会重跑，
-/// 但一个 `CGFloat` 存下来就是死值。所以工程里只挑「必须变、且变了肉眼能看出来」的两个数值走环境注入：
-/// 页面光斑的半径与不透明度。其余的（阴影半径、描边宽度）按设计文档 §1.1.4 的取舍**几何固定**，
+/// 但一个 `CGFloat` 存下来就是死值。所以工程里只挑「必须变、且变了肉眼能看出来」的几个数值走环境注入：
+/// 页面光斑的半径 / 强度，以及 3.6.0 起滚动光影的基准不透明度。其余的（阴影半径、描边宽度）按设计文档 §1.1.4 的取舍**几何固定**，
 /// 差 6pt 肉眼不可辨，而"浅色不发灰"这个真正的观感目标由 `glassShadow` 换成灰蓝 + 双层阴影达成。
 ///
-/// 这两个值的来源是 PRD §3.3：`glowRadius / glowOpacity` 深 220 / 0.35，浅 160 / 0.16。
+/// `glowRadius / glowOpacity` 的来源是 PRD §3.3：深 220 / 0.35，浅 160 / 0.16。
 struct ThemeMetrics: Equatable {
     /// 光斑半径基准（PRD §3.3）
+    ///
+    /// 3.6.0 起滚动光影的半径改按「实际绘制区域最长边 × 0.9」算（分屏 / 旋转下才准），
+    /// 这个字段暂时没有消费方 —— **但不要删**：它仍是 PRD §3.3 的书面基准，
+    /// `ScrollLightLayer` 的 766.8 = 852 × 0.9 就是从这个量级推出来的。删了下次调参又得重新考古。
     var glowRadius: CGFloat
-    /// 光斑强度基准（PRD §3.3）
+    /// 光斑强度基准（PRD §3.3）。同上，语义未变，只是滚动光影改用下面的 `scrollGlowAlpha`
+    /// （= 本值 × 0.2 换算系数 的最终 alpha），避免"每次都要重新推导一遍"。
     var glowOpacity: Double
+    /// 滚动光影的基准不透明度。深色 0.07 = 3.5.0 的 0.35 × 0.2（**顶部未滚动时逐像素不变**）；
+    /// 浅色 0.048 ≈ 原来的 1.5 倍 —— 近白底上 0.032 根本看不见，但再高就会「整屏发绿」（PRD §3.3 的教训）。
+    ///
+    /// 为什么不能复用 `glowOpacity`：那个是 PRD 的**强度基准**（深 0.35），
+    /// 而滚动光影要的是**已经乘完 0.2 换算系数的最终 alpha**。两者混用会让
+    /// "顶部未滚动 = 3.5.0 原值" 这条硬约束变成一个需要每次都重新推导的隐式约定。
+    var scrollGlowAlpha: Double
 
-    static let dark = ThemeMetrics(glowRadius: 220, glowOpacity: 0.35)
-    static let light = ThemeMetrics(glowRadius: 160, glowOpacity: 0.16)
+    static let dark = ThemeMetrics(glowRadius: 220, glowOpacity: 0.35, scrollGlowAlpha: 0.07)
+    static let light = ThemeMetrics(glowRadius: 160, glowOpacity: 0.16, scrollGlowAlpha: 0.048)
 
     /// `colorScheme` → 数值。只有 `ThemeScope` 会调用它。
     static func resolve(_ scheme: ColorScheme) -> ThemeMetrics {

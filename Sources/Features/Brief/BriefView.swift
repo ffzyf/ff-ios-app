@@ -40,6 +40,7 @@ struct BriefView: View {
             .pageColumn(Layout.contentMaxWidth)
         }
         .scrollPosition(scrollPosition)
+        .pageScrollLight()
         .scrollIndicators(.hidden)
         .refreshable {
             await model.loadBrief()

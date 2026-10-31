@@ -30,10 +30,28 @@ struct RootView: View {
     /// 配色主题。`Theme.*` 是全局静态 token，SwiftUI 不会替我们追踪它的变化，
     /// 所以切换时靠下面的 `.id(themeId)` 把内容区整块重建一次（滚动位置存在字典里，不受影响）。
     @ObservedObject private var appearance = AppearanceStore.shared
+    /// 滚动光影（3.6.0）。放在根视图而不是页面里：**背景层与页面层是 `ZStack` 的兄弟节点**，
+    /// 页面里量到的滚动偏移没有任何视图层级可以"传上去"，只能由共同祖先持有的对象中转。
+    ///
+    /// `@State` 而不是 `@StateObject`：`@StateObject` 是订阅式的，store 每变一次
+    /// `RootView.body` 就要重算一次，滚动是每帧回调 —— 等于让整棵树跟着滚动帧率重算
+    /// （3.5.0 那个 Tab 卡顿的同源问题，但频率高得多）。`RootView.body` 根本不读 `progress`，
+    /// 它重算的唯一后果是 `page(for:)` 与 `scrollBinding` 被重建、当前页整棵子树跟着重算
+    /// （概览页三张真玻璃卡会重新采样）。
+    /// `@State` 只持有实例、不订阅；真正需要重绘的只有 `PageBackground` 里的 `ScrollLightHost`
+    /// （它自己 `@ObservedObject`）。
+    @State private var scrollLight: ScrollLightStore
 
-    /// 显式写空 init：避免「私有属性把自动生成的 memberwise init 降级成 private」
+    /// 显式写 init：避免「私有属性把自动生成的 memberwise init 降级成 private」
     /// 导致跨文件 `RootView()` 编译不过。属性包装器各自用自己的默认值初始化。
-    init() {}
+    ///
+    /// `scrollLight` 走 `State(initialValue:)` 而不是存储属性默认值 ——
+    /// 与 `FFWangApp.init()` 里 `RockStore()` 的写法保持一致：`@MainActor` 的类在
+    /// View 的属性初始化器位置构造时，隔离上下文在 Swift 5 minimal 检查下不是稳的
+    /// （`SurveyStore` 的类型注释里记过这个坑），显式包一层最稳。
+    init() {
+        _scrollLight = State(initialValue: ScrollLightStore())
+    }
 
     var body: some View {
         ZStack {
@@ -60,6 +78,12 @@ struct RootView: View {
             page(for: tab)
                 .transaction { $0.animation = nil }
         }
+        // 滚动光影注入（3.6.0）。**挂在整个 ZStack 上，不是挂在 `page(for:)` 上**：
+        // 生产者是页面里的 `ScrollView`（5 个页面各挂一个滚动修饰器上报偏移），
+        // 消费者是上面那层 `PageBackground`（读 `@Environment(\.scrollLight)` 画光）—— 两者是**兄弟节点**。
+        // 只注入页面子树的话，背景层永远拿到 `nil`，光会一动不动（"改了但没效果"）。
+        // 挂在这里一次覆盖两者，且 `.transaction { $0.animation = nil }` 一个字都没动。
+        .environment(\.scrollLight, scrollLight)
         // 换配色 → 整块重建。挂在 ZStack 上而不是 RootView 上，`tab` 等 @State 不会被重置。
         .id(appearance.themeId)
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -129,6 +153,10 @@ struct RootView: View {
             set: { newValue in
                 guard let next = AppTab(rawValue: newValue), next != tab else { return }
                 Haptics.light()
+                // 换页先把光影的进度归零（3.6.0）：新页面挂载后会立刻上报自己的位置，
+                // 但那之前有一帧背景层还挂着**上一页**的进度 —— 表现是"切页瞬间光斑跳一下"。
+                // 放在 `tab = next` 之前：这样"归零"与"新页上报"在同一帧里完成，看不到中间态。
+                scrollLight.reset()
                 // Reduce Motion（设计文档 §7.6）：只影响「选中圆怎么过去」。
                 // 关掉动画时圆硬切到位，用户要的结果（页面已换）完全一样。
                 // 不能反过来把 `withAnimation` 整个删掉 —— 那样正常用户也会看到硬切。

@@ -61,6 +61,7 @@ struct OverviewView: View {
             .pageColumn(Layout.contentMaxWidth)
         }
         .scrollPosition(scrollPosition)
+        .pageScrollLight()
         .scrollIndicators(.hidden)
         // PRD §5.2「离线（有缓存）」：有内容但这次刷新失败 → 顶部细条。
         // 用 `safeAreaInset` 而不是 overlay：细条占据自己的高度，不压住标题、不遮内容。

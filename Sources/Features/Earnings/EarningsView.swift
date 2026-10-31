@@ -114,6 +114,7 @@ struct EarningsView: View {
             )
         }
         .scrollPosition(scrollPosition)
+        .pageScrollLight()
         .scrollIndicators(.hidden)
         .refreshable {
             await store.load(force: true)

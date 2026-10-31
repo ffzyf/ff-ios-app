@@ -4,7 +4,7 @@ SwiftUI 原生客户端：博客文章 + 光遇版本情报 + 每日简报。**�
 
 - 展示名：FF大王
 - Bundle ID：`top.skyzyf.skyapp`
-- 版本：3.5.0 (11)
+- 版本：3.6.0 (12)
 - 最低系统：iOS 18.0 / iPadOS 18.0（**Universal：同一个 App，iPhone 与 iPad 自动识别**；iPhone 锁竖屏，iPad 四向）
 - 设备适配：iPhone / iPad 同一份代码，靠 `horizontalSizeClass` + 容器宽度分三档（`compact` / `regularNarrow` / `regularWide`），**不用 `UIDevice.idiom`** —— 否则 Split View、Slide Over、Stage Manager 下必错。设计：`docs/design/2026-10-31-ipad-ios27-adaptation.md`
 - 构建：Codemagic `ios-unsigned`（Xcode 26 / iOS 26 SDK，免费 M2 额度）+ xcodegen，产出未签名 `SkyApp.ipa`

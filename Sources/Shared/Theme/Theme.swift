@@ -35,6 +35,20 @@ enum Theme {
     static var bgBase: Color { dyn(active.bgBase) }
     /// 页面大面积渐变主段
     static var bgRaise: Color { dyn(active.bgRaise) }
+    /// 页面渐变的**最底段**。
+    ///
+    /// 只给 `PageBackground` 的 `LinearGradient` 当第三个停靠点用（`bgRaise → bgBase → bgDeep`），
+    /// **不是窗口底色、不替代 `bgBase`**：窗口底、Tab 栏外侧、安全区外露出的那块仍然必须是 `bgBase`，
+    /// 因为 `bgBase` 是全工程（含 Widget）对齐过的基线，换掉它等于让"顶部未滚动"那一帧也变。
+    ///
+    /// 它存在的唯一理由：`bgRaise` 与 `bgBase` 只差一档，浅色下（`#F7F9F6` → `#EDF1EC`）
+    /// 整页看起来就是"一片白"，越往下滑越没有沉下去的感觉。压暗 5–6% 的第三段
+    /// 让页脚有一点重量，滚动光影"沉下去"才有承托。
+    ///
+    /// 浅色这一档是"用户说背景太白"的直接回应 —— 底部要比 `bgBase` 明显深一档（约 L\* 差 5–6），
+    /// 不然从顶到底还是一张白纸；但不能压到 8% 以上，否则页脚与白玻璃卡的对比会翻过来
+    /// （卡比底还暗）。
+    static var bgDeep: Color { dyn(active.bgDeep) }
     /// 比页面更前的非玻璃块（视频未加载底、输入框底）
     static var bgElevated: Color { dyn(active.bgElevated) }
     /// 弹层遮罩
@@ -294,6 +308,8 @@ extension Theme {
         let name: String
         let bgBase: (dark: String, light: String)
         let bgRaise: (dark: String, light: String)
+        /// 页面渐变最底段（压暗 5–6%）。**只给页面渐变用**，不做窗口底色 —— 理由见 `Theme.bgDeep`
+        let bgDeep: (dark: String, light: String)
         let bgElevated: (dark: String, light: String)
         let scrim: (dark: (String, Double), light: (String, Double))
         /// 品牌面色
@@ -343,6 +359,8 @@ extension Theme.Palette {
         id: "lime", name: "青柠",
         bgBase: ("#0A0D14", "#EDF1EC"),
         bgRaise: ("#121826", "#F7F9F6"),
+        // 在 bgBase 基础上压暗 5–6%：浅色靠它把白压住、深色靠它给页脚一点重量
+        bgDeep: ("#080B11", "#DFE6DD"),
         bgElevated: ("#171F2E", "#FFFFFF"),
         scrim: (("#000000", 0.45), ("#0F1A26", 0.28)),
         lime: ("#6BDB5C", "#3FA83A"),
@@ -359,6 +377,8 @@ extension Theme.Palette {
         id: "violet", name: "暮紫",
         bgBase: ("#0B0912", "#F3F1F8"),
         bgRaise: ("#14101F", "#FAF9FC"),
+        // 在 bgBase 基础上压暗 5–6%：浅色靠它把白压住、深色靠它给页脚一点重量
+        bgDeep: ("#080611", "#E6E3EF"),
         bgElevated: ("#1A1528", "#FFFFFF"),
         scrim: (("#000000", 0.45), ("#1A1528", 0.28)),
         lime: ("#A78BFA", "#7C5CE0"),
@@ -375,6 +395,8 @@ extension Theme.Palette {
         id: "sand", name: "暖砂",
         bgBase: ("#12100C", "#F6F2EA"),
         bgRaise: ("#1B1813", "#FBF8F2"),
+        // 在 bgBase 基础上压暗 5–6%：浅色靠它把白压住、深色靠它给页脚一点重量
+        bgDeep: ("#0E0C09", "#EBE5D9"),
         bgElevated: ("#221E17", "#FFFFFF"),
         scrim: (("#000000", 0.45), ("#221E17", 0.28)),
         lime: ("#E8B96A", "#B37D2A"),
@@ -391,6 +413,8 @@ extension Theme.Palette {
         id: "ocean", name: "海蓝",
         bgBase: ("#060D14", "#EDF3F7"),
         bgRaise: ("#0D1822", "#F7FAFC"),
+        // 在 bgBase 基础上压暗 5–6%：浅色靠它把白压住、深色靠它给页脚一点重量
+        bgDeep: ("#050A11", "#DCE7EE"),
         bgElevated: ("#13202C", "#FFFFFF"),
         scrim: (("#000000", 0.45), ("#0D1822", 0.28)),
         lime: ("#4FC3F7", "#1E88C7"),
@@ -407,6 +431,8 @@ extension Theme.Palette {
         id: "sakura", name: "樱粉",
         bgBase: ("#100A0E", "#F9EFF3"),
         bgRaise: ("#191016", "#FDF8FA"),
+        // 在 bgBase 基础上压暗 5–6%：浅色靠它把白压住、深色靠它给页脚一点重量
+        bgDeep: ("#0B0709", "#EDE1E9"),
         bgElevated: ("#20141B", "#FFFFFF"),
         scrim: (("#000000", 0.45), ("#20141B", 0.28)),
         lime: ("#F79BB8", "#D9598A"),

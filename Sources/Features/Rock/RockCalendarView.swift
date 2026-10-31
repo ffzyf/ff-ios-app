@@ -51,6 +51,7 @@ struct RockCalendarView: View {
             )
         }
         .scrollPosition(scrollPosition)
+        .pageScrollLight()
         .scrollIndicators(.hidden)
         // 顶部细条占自己的高度，不压标题、不遮内容（与概览页同一手法）
         .safeAreaInset(edge: .top, spacing: 0) {
