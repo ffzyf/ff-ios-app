@@ -19,7 +19,10 @@ struct ThemeMetrics: Equatable {
     /// （= 本值 × 0.2 换算系数 的最终 alpha），避免"每次都要重新推导一遍"。
     var glowOpacity: Double
     /// 滚动光影的基准不透明度。深色 0.07 = 3.5.0 的 0.35 × 0.2（**顶部未滚动时逐像素不变**）；
-    /// 浅色 0.048 ≈ 原来的 1.5 倍 —— 近白底上 0.032 根本看不见，但再高就会「整屏发绿」（PRD §3.3 的教训）。
+    /// 浅色 0.06 ≈ 原来的 1.9 倍 —— 近白底上 0.032 根本看不见（3.5.0 的浅色光斑一直是"画了但没人发现"），
+    /// 0.06 是"左上角能看出一层很淡的薄荷光"的程度：实测同屏最绿处的 G−R 约 +8/255，
+    /// 远低于 PRD §3.3 记的「整屏发绿」事故（那次是 16% 级别的染色）。
+    /// 再往上加就会开始像给页面蒙了层绿玻璃，**这是浅色下唯一该调的一个数**。
     ///
     /// 为什么不能复用 `glowOpacity`：那个是 PRD 的**强度基准**（深 0.35），
     /// 而滚动光影要的是**已经乘完 0.2 换算系数的最终 alpha**。两者混用会让
@@ -27,7 +30,7 @@ struct ThemeMetrics: Equatable {
     var scrollGlowAlpha: Double
 
     static let dark = ThemeMetrics(glowRadius: 220, glowOpacity: 0.35, scrollGlowAlpha: 0.07)
-    static let light = ThemeMetrics(glowRadius: 160, glowOpacity: 0.16, scrollGlowAlpha: 0.048)
+    static let light = ThemeMetrics(glowRadius: 160, glowOpacity: 0.16, scrollGlowAlpha: 0.06)
 
     /// `colorScheme` → 数值。只有 `ThemeScope` 会调用它。
     static func resolve(_ scheme: ColorScheme) -> ThemeMetrics {
