@@ -73,6 +73,8 @@ struct RedstoneCountdownCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("打开红石日历")
+        // 伪 3D 倾斜必须挂在最外层：旋转作用在玻璃外面，玻璃才能继续采样背后的页面背景
+        .cardTilt(cornerRadius: Radius.card)
     }
 
     // MARK: - 有数据

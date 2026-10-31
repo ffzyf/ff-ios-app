@@ -45,6 +45,8 @@ struct TodayBriefTrackCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("打开今日简报全文")
+        // 伪 3D 倾斜挂最外层（§3.4：不能塞进 SkyCard 内部），iPad 生效、iPhone 完全不挂载
+        .cardTilt(cornerRadius: Radius.card)
     }
 
     private func card(now: Date) -> some View {

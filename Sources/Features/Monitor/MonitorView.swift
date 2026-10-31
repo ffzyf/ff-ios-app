@@ -4,7 +4,8 @@ import SwiftUI
 ///
 /// 页面结构（自上而下，不可重排）：
 /// ① 玻璃返回钮 + 标题；② 「立即检查」主按钮（检查中转圈、冷却中按秒提示）；
-/// ③ 两张版本卡（国服 / 国际服）；④ 底部推送时段说明。
+/// ③ 两张版本卡（国服 / 国际服）；④ 这个 App 自己的更新检查；
+/// ⑤ 底部推送时段说明。
 ///
 /// 三条数据纪律：
 /// · **不需要登录**：`/api/app/monitor` 是匿名只读接口，页面没有登录引导；
@@ -35,6 +36,10 @@ struct MonitorView: View {
                     header
                     checkButton
                     cards
+                    // 3.8.0：这个 App 自己的更新检查。**独立于上面那个「立即检查」** ——
+                    // 那个按钮打的是服务端巡检接口、会给所有 Bark 订阅者群发通知，
+                    // 这里只是匿名只读一次 `/api/app/version`（设计文档 §4.7）
+                    AppUpdateSection()
                     windowNote
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -66,6 +71,12 @@ struct MonitorView: View {
             // 先给缓存（观感上"立刻有内容"），再发请求
             await store.loadFromCacheIfNeeded()
             await store.load()
+        }
+        // 进监控页补一次更新检查（6 小时闸门：连着进出不会重复打接口）。
+        // 单独一个 `.task` 而不是塞进上面那个：两者的取消时机不该绑在一起
+        // —— 页面切走时监控请求被取消，不该顺带把更新检查也一起取消掉。
+        .task {
+            await UpdateStore.shared.checkIfNeeded()
         }
     }
 

@@ -59,6 +59,19 @@ enum Endpoint {
     /// · `paid` 由服务端 `buildNewEntry` 决定（新记的恒为待发），请求体里**没有**这个字段；
     /// · 并发写冲突返回 **409 + `retry: true`**（服务端乐观锁），不是普通的参数错误。
     static let earningsEntryPath = "/api/app/earnings/entry"
+    /// 云控更新：最新版本元数据（`GET`，**匿名可读**，`Cache-Control: public, max-age=60`）。
+    ///
+    /// 成功时 `latest` 是一个版本对象；站点**一次都没发布过**时 `latest` 是 `null`
+    /// —— 那是"没有更新"，**不是**错误（App 侧据此不弹任何东西）。
+    /// 失败时是统一信封 `{ok:false, error:{code,message}}`，传输层看不出来，由 `UpdateStore` 判。
+    static let appVersionPath = "/api/app/version"
+    /// 安装引导页（**静态页**，`app.skyzyf335.top/install/`）。
+    ///
+    /// 只有一个用处：唤起全能签失败（设备上没装那个 App）时的回退落点 ——
+    /// 那页讲三件事：没有全能签怎么装、复制 ipa 直链、在「网页打开」里粘贴直链。
+    /// 它是页面不是接口，所以**没有** `/api/` 前缀。
+    static let installGuidePath = "/install/"
+
     /// 新建一个活动（`POST`，同样**需要 `ce_auth`**）。
     ///
     /// 为什么需要它：服务端的账本是两层结构（活动 → 条目），entry 的 `activityId` 必填。

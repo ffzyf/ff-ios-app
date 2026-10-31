@@ -27,6 +27,8 @@ struct SettingsView: View {
                     group("天气") { WeatherLocationSection() }
                     // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
                     group("红石") { LiveActivitySection() }
+                    // 3.8.0：天光实时活动开关（第二个实时活动，与红石互斥、红石优先）
+                    group("天光") { DaylightActivitySection() }
                     // 批次 3：问卷管理（登录 / 退出）。单例观察，不依赖环境对象注入
                     group("问卷管理") { AccountSection() }
                     group("版本") { versionRow }

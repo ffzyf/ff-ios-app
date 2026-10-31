@@ -201,6 +201,10 @@ final class LiveActivityCoordinator {
             )
             lastErrorDescription = nil
             reloadWidgets()
+            // 天光让位（设计文档 §1.2）：红石一开始跑，天光立刻收，不留 60 秒重叠。
+            // **不能用 await**：这是红石启动的成功路径，等一次跨进程的 end 走完只会把
+            // 主路径拖慢，而它失败与否都不该回头影响这一场活动已经起来了这件事。
+            Task { @MainActor in DaylightActivityCoordinator.shared.suspendForRock() }
         } catch {
             // 启动失败（系统限制 / 用户在设置里关了实时活动）不该影响 App 的任何功能
             lastErrorDescription = error.localizedDescription

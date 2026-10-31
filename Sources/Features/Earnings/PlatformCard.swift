@@ -98,6 +98,8 @@ struct PlatformCard: View {
         // 把子元素忽略掉会连按钮特征一起丢掉，变成一段点了没反应的文字
         .accessibilityLabel(accessibilityText)
         .accessibilityHint("查看该平台的活动明细")
+        // 2×2 网格里一次只会歪"拖的那一张"，静止时全平，不会变成一堆歪纸（§3.3）
+        .cardTilt(cornerRadius: Radius.smallCard)
     }
 
     // MARK: - 行 1：圆点 + 平台名

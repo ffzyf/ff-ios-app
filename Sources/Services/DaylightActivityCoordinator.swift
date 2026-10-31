@@ -1,0 +1,313 @@
+import ActivityKit
+import Foundation
+import WidgetKit
+
+/// 天光实时活动的生命周期（设计文档 §1.2 / §1.3，**只在主 App**）。
+///
+/// 它是全工程第二个实时活动。与红石的关系是**互斥、红石优先**：
+/// 红石是"20 分钟后有个限时场次"，天光是"现在天色如何"——前者等不起，后者等得起。
+///
+/// 五条硬规则，逐条对应 `evaluate(now:)` 里的守卫：
+/// 1. **仅前台**：ActivityKit 不允许后台自行拉起活动，循环由 `.task(id: scenePhase)` 驱动；
+/// 2. **默认关闭 + 系统能力**：任一不满足就收掉已有的活动并原地返回；
+/// 3. **红石占用 → 立刻收**（`.immediate`）：两个活动同屏会被系统折叠成一组，
+///    用户点开看到的是一团乱；也正因为如此，红石那里（见 `LiveActivityCoordinator.start`）
+///    成功后会回调 `suspendForRock()`，不等下一个 tick；
+/// 4. **窗口上界 = min(日落, 创建 + 8h)**，在**创建那一刻**定死。
+///    不能每次按 `now + 8h` 算 —— 那永远到不了点，卡片就变常驻了；
+/// 5. **同一时刻只允许 1 个**：已有自己的活动就只做心跳 update，不再开第二个。
+///
+/// 为什么查红石活动用 `activityState` 过滤而不是"列表非空"：红石退后台时用的是
+/// `.after(endAt)` 的收尾策略，那之后活动**仍留在 `Activity.activities` 里**直到系统真的
+/// 把它从锁屏撤下。只判 `isEmpty` 会让天光被一个"已经结束但还没被撤下"的活动**永久阻塞**。
+/// （同理适用于自己：只处理 `.active` / `.stale`。）
+@MainActor
+final class DaylightActivityCoordinator {
+
+    /// 全 App 唯一实例（`FFWangApp` 的 `.task` 与设置页直接读同一个）
+    static let shared = DaylightActivityCoordinator()
+
+    /// 开关的存储键（定义在 Shared 的 `DaylightSettings` 里，见那里的注释：
+    /// `@MainActor` 类的 `static let` 不能直接喂给 `@AppStorage`）
+    static let storageKey: String = DaylightSettings.storageKey
+
+    /// 前台循环的 tick（秒）：活动窗口是数小时量级，1 分钟粒度足够，也不费电
+    static let tickSeconds: TimeInterval = 60
+    /// 单次窗口上限（秒）：8 小时 —— 系统允许的最长活跃时长。
+    /// 北京夏天日出到日落 15 小时，任何一种"日出到日落"的活动都必然超时，
+    ///    写死 8h 是为了让"卡片消失的时刻"永远可预测（创建时刻 + 8h），
+    ///    而不是"有时候 8 小时、有时候 15 小时"
+    static let maxWindowSeconds: TimeInterval = 8 * 3600
+    /// 距日落不足这么多秒就不启动（§1.3）：日落前 8 分钟开一张锁屏卡，
+    /// 用户扣下手机它就消失了 —— 开了等于没开，还多耗一次 request
+    static let minimumRemainSeconds: TimeInterval = 10 * 60
+    /// 心跳间隔（秒）：间隔到了、或天气值变了才 `update`，其余 tick 一个字节都不多推
+    static let heartbeatSeconds: TimeInterval = 600
+
+    // MARK: - 状态
+
+    /// 是否在前台。由 `monitorForeground` 自己维护
+    private(set) var isForeground: Bool = false
+    /// 最近一次启动 / 更新失败的原因（只用于内部诊断，不上屏）
+    private(set) var lastErrorDescription: String?
+
+    /// 最近一次成功启动活动的时刻（诊断用：它决定下一次 start 的 8 小时预算起点）
+    private var lastStartAt: Date?
+    /// 最近一次 `update` 的时刻。App 被杀重启后会是 nil —— 那时第一次 tick 一定补一次 update
+    private var lastUpdateAt: Date?
+    /// 上一次写进活动的天气指纹（值变了才值得推一次 update）
+    private var lastWeatherSignature: String = ""
+
+    /// `init` 必须 `nonisolated`：整类被 `@MainActor` 隔离后，合成的 init 也是默认的
+    /// 隔离成员，而 `static let shared` 的惰性初始化发生在**非隔离上下文**里
+    /// （`Swift` 的全局 / 静态属性惰性求值带 `@MainActor` 时会在调用点 hop，
+    /// 显式标 `nonisolated` 才能避免 Xcode 报 "cannot be constructed because ..."）。
+    nonisolated init() {}
+
+    /// 设置里的「天光实时活动」开关。
+    ///
+    /// **没设置过默认关闭**：天光是新增的**常驻型**活动（白天一直占着灵动岛 / 锁屏），
+    /// 不替用户做主。`bool(forKey:)` 对没写过的键天然返回 `false`，
+    /// 所以这里不需要 `object(forKey:) == nil` 那种分支（红石那边需要，因为它的默认相反）。
+    var isEnabled: Bool {
+        return UserDefaults.standard.bool(forKey: Self.storageKey)
+    }
+
+    // MARK: - 前台循环
+
+    /// 前台期间每 60 秒评估一次：该启动就启动、该收就收、该心跳就心跳。
+    ///
+    /// 循环放在这里而**不用 `Timer`**（与 `LiveActivityCoordinator` 同一条理由）：
+    /// `Timer` 在 App 退后台之后仍然"存在"，而 ActivityKit 的活动只允许前台请求 ——
+    /// 留着它只会造成"看起来在跑但其实什么都做不了"。
+    /// 由视图的 `.task(id: scenePhase)` 驱动：scenePhase 变化 → 旧任务取消 → 循环退出。
+    ///
+    /// 天光**不需要任何外部数据**（不像红石要排期），所以这里刻意没有 `daysProvider`
+    /// 那类闭包参数：日出日落在 `SunClock` 里现算，太阳算法是纯函数。
+    func monitorForeground() async {
+        isForeground = true
+        defer {
+            // 退后台：**什么都不做**（§1.3）。既不 end 也不 update —— 不像红石那样排
+            // `dismissalPolicy`，因为天光的收尾已经由 `windowEnd` 的 staleDate +
+            // 系统 12 小时上限兜住了，而用户下次回前台它自己会接回来。
+            isForeground = false
+        }
+
+        while !Task.isCancelled {
+            // 每个 tick 重读开关：用户在设置页关掉开关要能在 ≤60 秒内生效
+            // （关那一瞬间由设置页直接 `endAll()`，这里只是兜住"别处改了值"的情况）
+            if isEnabled {
+                evaluate(now: Date())
+            }
+            // `try?` 而不是 `do/catch`：睡眠被取消是**正常退出路径**，下一次循环条件
+            // `Task.isCancelled` 会拦住它，不值得为它写一个 catch 分支
+            try? await Task.sleep(nanoseconds: Self.tickNanoseconds)
+        }
+    }
+
+    /// 一个 tick 的纳秒数。**由 `tickSeconds` 派生**，不另写一份 `60 * 1_000_000_000` ——
+    /// 两份就一定会漂成"改了秒忘了纳秒"
+    private static let tickNanoseconds: UInt64 = UInt64(Self.tickSeconds) * 1_000_000_000
+
+    // MARK: - 评估
+
+    /// 评估一次「现在该不该有天光活动」。纯前台同步动作，可被循环反复调用。
+    func evaluate(now: Date = Date()) {
+        // 规则 1：仅前台
+        guard isForeground else { return }
+
+        // 规则 2：开关 / 系统能力。任一不满足 → 收掉已有的，然后什么都不做
+        guard isEnabled, ActivityAuthorizationInfo().areActivitiesEnabled else {
+            endAll()
+            return
+        }
+
+        // 规则 3：红石在跑 → 立刻收（红石优先，见文件头）
+        guard !Self.isRockOccupying() else {
+            endAll()
+            return
+        }
+
+        // 先把过了窗口上界的收掉（可能是 App 被杀之后残留的活动）
+        endExpired(now: now)
+
+        // 规则 5：已经有自己在跑的活动 → 只做心跳 update，绝不开第二个
+        if let existing = Self.runningActivities().first {
+            heartbeat(existing, now: now)
+            return
+        }
+
+        // 规则 4 的第一个前提：算不出日出日落（极昼 / 极夜）就不启动 —— 不假装有太阳
+        guard let today = SunClock.times(on: now) else { return }
+
+        // 夜里不启动（§6 待明确事项 ① 的推荐项）：夜里没有太阳可画，
+        // 卡片只剩一片近黑 + 一个"距日出 7 小时"的倒计时，而灵动岛是稀缺资源
+        guard SunClock.phase(at: now) != .night else { return }
+
+        // 已日落、或距日落不足 10 分钟 → 这次不启动
+        guard today.sunset > now,
+              today.sunset.timeIntervalSince(now) >= Self.minimumRemainSeconds else { return }
+
+        start(sunrise: today.sunrise, sunset: today.sunset, now: now)
+    }
+
+    // MARK: - 红石占用
+
+    /// 红石是否正在占用灵动岛 / 锁屏。
+    ///
+    /// 天光自己查红石的活动列表，而不是与 `LiveActivityCoordinator` 共享一个 busy 标志：
+    /// 跨类型查活动是 ActivityKit 的公开能力，一个静态查询就够；引入共享标志就有了两份
+    /// 真相（"App 被杀之后那个标志会不会残留？"是一个不需要问的问题）。
+    static func isRockOccupying() -> Bool {
+        // `.active` / `.stale` 算占用：它们都还显示在屏幕上。
+        // `.ended` / `.dismissed` 不算 —— 见文件头"为什么不用 isEmpty"
+        return Activity<SunEventActivityAttributes>.activities.contains {
+            $0.activityState == .active || $0.activityState == .stale
+        }
+    }
+
+    /// 自己仍在屏幕上的活动（同样按 `.active` / `.stale` 过滤）
+    private static func runningActivities() -> [Activity<DaylightActivityAttributes>] {
+        return Activity<DaylightActivityAttributes>.activities.filter {
+            $0.activityState == .active || $0.activityState == .stale
+        }
+    }
+
+    // MARK: - 对外动作
+
+    /// 红石开跑 → 天光立刻收（`LiveActivityCoordinator.start(_:)` 成功后调用）。
+    ///
+    /// 行为上与 `endAll()` 完全一致，单独命名是为了让调用点读得出"为什么"
+    /// （调用方那里写的是红石的代码，不写这句语义不明）。
+    func suspendForRock() {
+        endAll()
+    }
+
+    /// 关掉全部活动（关开关 / 到点 / 让位给红石，都走这里）。
+    ///
+    /// 一律 `.immediate`：卡片直接消失，不留"已结束"的残影 ——
+    /// 天光不是一条通知，没有需要用户回看的收尾信息。
+    func endAll() {
+        let running = Activity<DaylightActivityAttributes>.activities
+        for activity in running {
+            let state = activity.content.state
+            let content = ActivityContent(state: state, staleDate: state.windowEnd)
+            Task { await activity.end(content, dismissalPolicy: .immediate) }
+        }
+        // 内部记录一并清干净：下一次 tick 要按"从零开始"判定，
+        // 否则残留的 `lastWeatherSignature` 会让重启后的第一次 update 被"值没变"挡掉
+        lastStartAt = nil
+        lastUpdateAt = nil
+        lastWeatherSignature = ""
+        if !running.isEmpty {
+            reloadWidgets()
+        }
+    }
+
+    // MARK: - 启动
+
+    /// 启动一次活动。`windowEnd` 在这里定死，之后永不改变。
+    private func start(sunrise: Date, sunset: Date, now: Date) {
+        // min(日落, 创建 + 8h)：见文件头规则 4
+        let windowEnd = min(sunset, now.addingTimeInterval(Self.maxWindowSeconds))
+        let weather = Self.currentWeather()
+
+        let state = DaylightActivityAttributes.ContentState(
+            sunrise: sunrise,
+            sunset: sunset,
+            windowEnd: windowEnd,
+            weatherCode: weather?.code,
+            weatherText: weather?.text,
+            tempC: weather?.temp
+        )
+        // 日期文案放 attributes：创建后不变，不参与 update 的 diff
+        let attributes = DaylightActivityAttributes(dayText: Formatters.todayHeader(now))
+        // staleDate = 窗口上界：到点之后系统把它标记为过期（视觉上提示"数据不再更新"）
+        let content = ActivityContent(state: state, staleDate: windowEnd)
+
+        do {
+            // pushType: nil —— 本版没有服务端 push-to-start，走本地 request
+            _ = try Activity<DaylightActivityAttributes>.request(
+                attributes: attributes,
+                content: content,
+                pushType: nil
+            )
+            lastErrorDescription = nil
+            lastStartAt = now
+            lastUpdateAt = now
+            lastWeatherSignature = Self.signature(of: weather)
+            reloadWidgets()
+        } catch {
+            // 启动失败（系统限制 / 用户在设置里关了实时活动）不该影响 App 任何功能
+            lastErrorDescription = error.localizedDescription
+        }
+    }
+
+    // MARK: - 心跳
+
+    /// 保活更新（§1.3）：只有「距上次 update ≥ 10 分钟」或「天气值变了」才推。
+    ///
+    /// 为什么不是每 tick 都推：update 是带唤醒成本的推送帧。太阳位置与天色由视图按
+    /// `Date()` **现算**，update 唯一要送的是**本进程之外拿不到的东西** —— 天气。
+    private func heartbeat(_ activity: Activity<DaylightActivityAttributes>, now: Date) {
+        let weather = Self.currentWeather()
+        let signature = Self.signature(of: weather)
+        let due = lastUpdateAt.map { now.timeIntervalSince($0) >= Self.heartbeatSeconds } ?? true
+        guard due || signature != lastWeatherSignature else { return }
+
+        var state = activity.content.state
+        state.weatherCode = weather?.code
+        state.weatherText = weather?.text
+        state.tempC = weather?.temp
+
+        let content = ActivityContent(state: state, staleDate: state.windowEnd)
+        Task { await activity.update(content) }
+
+        lastUpdateAt = now
+        lastWeatherSignature = signature
+    }
+
+    // MARK: - 收尾
+
+    /// 收掉已经过了窗口上界的活动（`windowEnd` 在创建时已定死）。
+    private func endExpired(now: Date) {
+        let expired = Activity<DaylightActivityAttributes>.activities.filter {
+            now >= $0.content.state.windowEnd
+        }
+        guard !expired.isEmpty else { return }
+        for activity in expired {
+            let state = activity.content.state
+            let content = ActivityContent(state: state, staleDate: state.windowEnd)
+            Task { await activity.end(content, dismissalPolicy: .immediate) }
+        }
+        reloadWidgets()
+    }
+
+    // MARK: - 天气
+
+    /// 此刻的天气。
+    ///
+    /// **只读 `WeatherStore.shared.current`，不在这里发请求**：协调器由 60 秒一次的前台循环
+    /// 驱动，让它触碰网络等于把一次网络往返绑到 UI 心跳上；而 `WeatherStore` 自己在首页
+    /// 进也就拉了、内部有 10 分钟缓存 —— 这里的数据本来就在。
+    /// 拉不到（首次安装还没拉 / 一直断网）就返回 nil，卡片不画天气元素（缺数据不猜）。
+    private static func currentWeather() -> WeatherNow? {
+        guard let current = WeatherStore.shared.current, current.ok else { return nil }
+        return current
+    }
+
+    /// 天气指纹：三个值拼成一个字符串，比逐个比 Optional 简单，也天然可 diff。
+    private static func signature(of weather: WeatherNow?) -> String {
+        guard let weather else { return "nil" }
+        let code = weather.code.map { String($0) } ?? "-"
+        let temp = weather.temp.map { String(format: "%.1f", $0) } ?? "-"
+        return "\(code)|\(weather.text ?? "-")|\(temp)"
+    }
+
+    // MARK: - 小组件
+
+    /// 活动增删之后推一次 Timeline（让桌面组件上的天光与实时活动口径一致）
+    private func reloadWidgets() {
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+}

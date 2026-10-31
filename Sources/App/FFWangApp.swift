@@ -30,6 +30,10 @@ struct FFWangApp: App {
     @StateObject private var rockGuide: RockGuideStore
     /// 推送监控（批次 4）。放在 App 层：监控页、简报页底部那一行、「更多」行的状态字都要读它
     @StateObject private var monitor: MonitorStore
+    /// 云控更新（3.8.0）。放在 App 层只有一个理由：**更新弹层要挂在 `RootView()` 外面**
+    /// （见 `body` 里的注释），而它跟 `RootView` 一样由 App 持有最自然 ——
+    /// 监控页那一行与冷启动检查读的是同一个单例，不需要走环境对象。
+    @StateObject private var update: UpdateStore
     /// 场景阶段：实时活动**只在 `.active` 期间**评估（PRD §5.4 硬规则 + 决策 3）
     @Environment(\.scenePhase) private var scenePhase
 
@@ -41,6 +45,7 @@ struct FFWangApp: App {
         _rock = StateObject(wrappedValue: RockStore())
         _rockGuide = StateObject(wrappedValue: RockGuideStore())
         _monitor = StateObject(wrappedValue: MonitorStore.shared)
+        _update = StateObject(wrappedValue: UpdateStore.shared)
     }
 
     var body: some Scene {
@@ -52,6 +57,18 @@ struct FFWangApp: App {
             ThemeScope {
                 LayoutMetricsScope {
                     RootView()
+                        // 更新弹层挂在 `LayoutMetricsScope` **内部**、`RootView()` **外面**
+                        // （设计文档 §5 T7 的 iPhone 回归风险点）：
+                        // · 不进 `RootView` 的 body → 不动它那两条 `.transaction { $0.animation = nil }`，
+                        //   也不动 B3 的条件渲染；
+                        // · 在 `LayoutMetricsScope` 内部 → 弹层里读得到 `@Environment(\.layoutMetrics)`，
+                        //   与页面里同一套宽/窄判定。
+                        //
+                        // 用 `.sheet(item:)` 而不是 `.sheet(isPresented:)`：内容闭包拿到的是
+                        // **非可选**的 `AppRelease`，弹层里不需要再判空，也就没有"空弹层"这种中间态。
+                        .sheet(item: $update.presentedRelease) { release in
+                            UpdateSheet(release: release)
+                        }
                 }
             }
             .environmentObject(model)
@@ -72,6 +89,24 @@ struct FFWangApp: App {
                 await LiveActivityCoordinator.shared.monitorForeground {
                     rock.allLoadedDays
                 }
+            }
+            // 天光实时活动（第二个实时活动）：同样挂在 scenePhase 上。
+            // 两个 `.task(id: scenePhase)` 是允许的 —— 同一个 id 的两个 task 各自独立
+            // 启动、各自独立取消，这正是 SwiftUI 给"一个信号多个消费者"的写法；
+            // 天光不吃排期数据（日出日落在 `SunClock` 里现算），所以连闭包参数都没有。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await DaylightActivityCoordinator.shared.monitorForeground()
+            }
+            // 云控更新（3.8.0）：同样挂在 scenePhase 上，第三个同 id 的 task
+            // （与上面两个各自独立启动、独立取消，这是 SwiftUI 给"一个信号多个消费者"的写法）。
+            //
+            // **不要**每次回前台都真发请求 —— `checkIfNeeded()` 内部有 6 小时闸门，
+            // 一天最多 4 次；它同时保证"有新版本"的弹层不会反复弹出来烦人。
+            // 冷启动这一次会在里面延后 3 秒，避开首屏那批并发请求。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await UpdateStore.shared.checkIfNeeded()
             }
         }
     }

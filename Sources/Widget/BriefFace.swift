@@ -128,9 +128,9 @@ enum BriefMetrics {
     static let particleClearBand: CGFloat = 20
     /// 粒子层底部留白。
     ///
-    /// 只有 6pt —— 不为"轨迹 + 注脚"整块让位，理由见 `BriefWeatherLayer.precipitationBand`：
+    /// 只有 6pt —— 不为"轨迹 + 注脚"整块让位，理由见 `BriefWeatherLayer.precipitationBands`：
     /// 那一块是**画在粒子之上**的（轨迹与注脚在 `content` 里，天气层是 `content` 的背景），
-    /// 所以雨丝从它们背后落过不会盖住任何读数，反而正是"雨落满整卡"的观感。
+    /// 所以雨丝从它们背后落过不会盖住任何读数，反而正是"雨落满整卡（正文净空带除外）"的观感。
     static let particleBottomInset: CGFloat = 6
     /// 云的位置每过一天推进多少个卡宽（**预排帧实现"飘"**，理由见 `BriefWeatherLayer.drift`）
     static let cloudDriftPerDay: CGFloat = 0.35
@@ -166,6 +166,42 @@ enum BriefMetrics {
     static let lightningSegments: Int = 3
     /// 闪电线宽
     static let lightningWidth: CGFloat = 2
+
+    /// 雨丝倾斜后的包围盒相对"未倾斜半长"的最大外溢（pt）。
+    ///
+    /// 12° / 长度 8…12 的实测上界是 0.016pt（旋转后包围盒半高 `= 0.489L + 0.104`，
+    /// 与未旋转的 `L/2` 相比在 `L = 8` 时多出 0.016、在 `L = 12` 时反而少 0.028）。
+    /// 取 1 是为了留 **60 倍余量**：净空带是硬约束，不能靠"算出来刚好不超"。
+    static let particleTiltGuard: CGFloat = 1
+
+    /// 一段太矮就整段放弃（把粒子全给另一段）：低于 16pt 画不出雨丝，只能画一条线。
+    static let minFilledBand: CGFloat = 16
+
+    /// 把 `count` 条粒子按**两段的高度比例**分配，两段各保底 1 条。
+    ///
+    /// 为什么按比例而不是"固定对半分"：小号卡的地面段 56pt、天空段 37.6pt，
+    /// 五五分会把一半的雨丝塞进更矮的天空段，一段的条间距从 19.8pt 掉到 15.8pt ——
+    /// 12° 倾斜后一条雨丝的横向包围盒约 3.5pt、抖动最大 ±1.45pt，余量就被吃掉了。
+    /// 按比例分出来是：中号 10/10、小号 8/12、iPad 中号 9/11，两段的条间距都 ≥ 13pt。
+    ///
+    /// `minFilledBand` 那条分支是"宁可一段空着"：一段矮到 16pt 以下时，
+    /// 12pt 长的雨丝在里面只能停在一个位置上，画出来是一条横线，比不画更假。
+    static func split(count: Int,
+                      skyHeight: CGFloat,
+                      groundHeight: CGFloat) -> (sky: Int, ground: Int) {
+        guard count > 0 else { return (sky: 0, ground: 0) }
+        // 任一段太矮 → 该段 0 条，另一段全收
+        if skyHeight < minFilledBand { return (sky: 0, ground: count) }
+        if groundHeight < minFilledBand { return (sky: count, ground: 0) }
+
+        let total = skyHeight + groundHeight
+        guard total > 0 else { return (sky: count, ground: 0) }
+
+        let raw = CGFloat(count) * skyHeight / total
+        // clamp 到 [1, count − 1]：两段都保底 1 条，谁也不会被算成 0 条
+        let sky = min(max(Int(raw.rounded()), 1), max(count - 1, 1))
+        return (sky: sky, ground: count - sky)
+    }
 
     // MARK: 按尺寸取档
 
@@ -798,19 +834,40 @@ private struct BriefWeatherLayer: View {
         return CGRect(x: 0, y: top, width: size.width, height: height)
     }
 
-    /// 降水带：正文块底边往下整个净空带 → 卡底上方 6pt。
+    /// 降水区：**天空段 + 地面段**两条带。为什么是两段，见下。
     ///
-    /// 这条带的上下沿用两件事定：
-    /// · 上沿 = 正文底边 + 净空带。正文是**唯一**必须保护的东西（两行中文被斜雨穿过去就废了）；
-    /// · 下沿 = 卡底。中号卡只有 158pt 高，"正文 → 轨迹 → 注脚"之间只剩 ~23pt 的弹性留白，
-    ///   如果为了避让轨迹再切一刀，降水带会只剩十几 pt —— 那就画不出"下雨"，只能画一条线。
-    ///   所以雨是**落满整卡下半部**的：轨迹与注脚画在粒子之上（`content` 在天气层前面），
-    ///   读数一个都没被盖住，而视觉上正是"雨落满整张卡"的样子。
-    private func precipitationBand(in size: CGSize) -> CGRect {
-        let top = BriefMetrics.bodyBottom(family) + BriefMetrics.particleClearBand
-        let bottom = size.height - BriefMetrics.particleBottomInset
-        let height = max(bottom - top, 1)
-        return CGRect(x: 0, y: top, width: size.width, height: height)
+    /// 用户原话是「雨滴太往下了」。旧版只有一条带 = `[正文底边 + 净空带, 卡底 − 6]`，
+    /// 中号卡上就是 y∈[114,152] —— 卡高 72%–96% 那一窄条。正文上方那 60pt 的天空里
+    /// 一颗粒子都没有，雨只从卡片最下面那条缝里落，所以"往下"说的就是这个。
+    ///
+    /// 拆成两段之后**净空带的规则一个字没改**（正文块 `[bodyTop, bodyBottom]` 上下各
+    /// `particleClearBand` 之内仍然一颗粒子都没有，见 `BriefMetrics.particleClearBand`），
+    /// 只是把正文上方的天空也还给雨：
+    ///
+    /// · 天空段上沿 = `verticalPadding(family) × 0.2` —— **刻意与 `cloudBand` 用同一个式子**，
+    ///   于是"云带"和"天空段的雨"是同一个框：将来云要挪，雨跟着挪，不会出现
+    ///   "云在 2.4 起步、雨在 0 起步"的两套边距；
+    /// · 天空段下沿 = `bodyTop − particleClearBand`（中号 40），上边界就是这条净空带；
+    /// · 地面段上沿 = `bodyBottom + particleClearBand`（中号 114 / 小号 96），
+    ///   下沿 = 卡底 − `particleBottomInset` → **与改版前逐点一致**：那一段本来就没毛病。
+    ///
+    /// 下沿仍然不避让轨迹与注脚（理由同旧注释）：那一块画在粒子之上，雨从它们背后落过
+    /// 不盖任何读数，而视觉上正是"雨落满整卡"。
+    private func precipitationBands(in size: CGSize) -> (sky: CGRect, ground: CGRect) {
+        let skyTop = BriefMetrics.verticalPadding(family) * 0.2
+        let skyBottom = BriefMetrics.bodyTop(family) - BriefMetrics.particleClearBand
+        let groundTop = BriefMetrics.bodyBottom(family) + BriefMetrics.particleClearBand
+        let groundBottom = size.height - BriefMetrics.particleBottomInset
+
+        let sky = CGRect(x: 0,
+                         y: skyTop,
+                         width: size.width,
+                         height: max(skyBottom - skyTop, 1))
+        let ground = CGRect(x: 0,
+                            y: groundTop,
+                            width: size.width,
+                            height: max(groundBottom - groundTop, 1))
+        return (sky: sky, ground: ground)
     }
 
     // MARK: 云（partly / overcast）
@@ -894,22 +951,23 @@ private struct BriefWeatherLayer: View {
 
     @ViewBuilder
     private func precipitation(in size: CGSize) -> some View {
-        let band = precipitationBand(in: size)
+        let bands = precipitationBands(in: size)
         switch kind {
         case .clear, .partly, .overcast:
             // 这三档天上不掉东西。晴更是一颗粒子都没有
             EmptyView()
         case .fog:
-            fogBand(in: size, band: band)
+            // 雾是"能见度"，贴着地面才有意义 → 只用地面段
+            fogBand(in: size, band: bands.ground)
         case .drizzle:
-            streaks(in: band,
+            streaks(in: bands,
                     count: BriefMetrics.drizzleCount,
                     lengthMin: BriefMetrics.drizzleLengthMin,
                     lengthMax: BriefMetrics.drizzleLengthMax,
                     alpha: 0.18,
                     tilt: 0)
         case .rain:
-            streaks(in: band,
+            streaks(in: bands,
                     count: BriefMetrics.rainCount,
                     lengthMin: BriefMetrics.rainLengthMin,
                     lengthMax: BriefMetrics.rainLengthMax,
@@ -919,36 +977,78 @@ private struct BriefWeatherLayer: View {
             snowDots(in: size)
         case .thunder:
             ZStack(alignment: .topLeading) {
-                streaks(in: band,
+                streaks(in: bands,
                         count: BriefMetrics.thunderRainCount,
                         lengthMin: BriefMetrics.rainLengthMin,
                         lengthMax: BriefMetrics.rainLengthMax,
                         alpha: 0.22,
                         tilt: BriefMetrics.rainTilt)
-                lightning(in: band)
+                // 闪电起点仍在地面段上沿（正文下方）→ 不划过字
+                lightning(in: bands.ground)
             }
         }
     }
 
-    /// 雨丝 / 毛毛雨：一排极细的 `Capsule`，按 `tilt` 倾斜
+    /// 雨丝 / 毛毛雨：一排极细的 `Capsule`，按 `tilt` 倾斜。
     ///
-    /// 位置用"一半网格 + 一点抖动"：纯等距能看出排队，纯随机会结块，
-    /// 混合之后才像真的雨。抖动值来自 `scattered`，**同一个 index 永远同一个值** ——
-    /// Widget 每帧都重画，用 `random()` 会让整片雨每小时重排一次，看起来像闪。
-    private func streaks(in band: CGRect,
+    /// 条数按两段的高度比例分（`BriefMetrics.split`），然后**两段各画一遍**：
+    /// 这样"雨落满整卡"才是字面意思 —— 天空段落一段、正文下方的地面段落一段，
+    /// 中间隔着净空带（正文块上下各 20pt，见 `precipitationBands`）。
+    ///
+    /// 为什么两段共用同一个 `ForEach` 之外不共用一个 `ForEach`：段不同、坐标就不同，
+    /// 分两个 `ForEach` 之后每段的 `column` 都以**本段的条数**为分母（`(i + 0.5) / n`），
+    /// 每段自己就是等距排布；塞进一个 `ForEach` 就只能按总条数算列，天空段的雨会挤在左半边。
+    private func streaks(in bands: (sky: CGRect, ground: CGRect),
                          count: Int,
                          lengthMin: CGFloat,
                          lengthMax: CGFloat,
                          alpha: Double,
                          tilt: Double) -> some View {
-        ForEach(0..<count, id: \.self) { index in
+        let parts = BriefMetrics.split(count: count,
+                                       skyHeight: bands.sky.height,
+                                       groundHeight: bands.ground.height)
+        return Group {
+            // `base` 是全局 index 的起点：散列种子用全局 index，两段才不会出现
+            // "上下镜像的同一组抖动"（同一个 index 永远同一个值，见 `scattered`）
+            streakSection(in: bands.sky,
+                          base: 0,
+                          count: parts.sky,
+                          lengthMin: lengthMin,
+                          lengthMax: lengthMax,
+                          alpha: alpha,
+                          tilt: tilt)
+            streakSection(in: bands.ground,
+                          base: parts.sky,
+                          count: parts.ground,
+                          lengthMin: lengthMin,
+                          lengthMax: lengthMax,
+                          alpha: alpha,
+                          tilt: tilt)
+        }
+    }
+
+    /// 一段雨丝。位置用"一半网格 + 一点抖动"：纯等距能看出排队，纯随机会结块，
+    /// 混合之后才像真的雨。抖动值来自 `scattered`，**同一个 index 永远同一个值** ——
+    /// Widget 每帧都重画，用 `random()` 会让整片雨每小时重排一次，看起来像闪。
+    private func streakSection(in band: CGRect,
+                               base: Int,
+                               count: Int,
+                               lengthMin: CGFloat,
+                               lengthMax: CGFloat,
+                               alpha: Double,
+                               tilt: Double) -> some View {
+        ForEach(0..<count, id: \.self) { slot in
+            let index = base + slot
             let seed = scattered(index, 1.7)
             let length = lengthMin + (lengthMax - lengthMin) * CGFloat(scattered(index, 3.1))
-            let column = (Double(index) + 0.5) / Double(count)
+            let column = (Double(slot) + 0.5) / Double(max(count, 1))
             let x = band.minX + band.width * CGFloat(column + 0.22 * (seed - 0.5))
-            // 纵向只落在降水带内部：先抬半个长度，再在剩余空间里取一段
-            let slack = max(band.height - length, 0)
-            let y = band.minY + length / 2 + slack * CGFloat(scattered(index, 5.3))
+            // 纵向：先上下各让出 particleTiltGuard，再在剩余空间里取一段。
+            // 那 1pt 是给"倾斜后的包围盒"的（12° 时最多外溢 0.016pt，余量 60 倍）——
+            // 没有它，"净空带里一颗粒子都没有"就只是"算出来差不多"。
+            let slack = max(band.height - length - BriefMetrics.particleTiltGuard * 2, 0)
+            let y = band.minY + BriefMetrics.particleTiltGuard + length / 2
+                + slack * CGFloat(scattered(index, 5.3))
 
             Capsule()
                 .fill(particle(alpha))
@@ -960,8 +1060,9 @@ private struct BriefWeatherLayer: View {
 
     /// 雾带：一条上下淡出的横向带子（**不用 blur**，柔边靠渐变两端透明）
     ///
-    /// 位置在正文下方的降水带里，高约卡高 18% —— 雾是"能见度"，不是"粒子"，
-    /// 所以它是唯一一个成品形状（一条带），而不是一堆点。
+    /// 位置在**地面段**里，高约卡高 18% —— 雾是"能见度"，不是"粒子"，
+    /// 所以它是唯一一个成品形状（一条带），而不是一堆点；也正因为是"贴地"的，
+    /// 它只认地面段，天空段再空也不往那儿放。
     private func fogBand(in size: CGSize, band: CGRect) -> some View {
         let height = min(size.height * BriefMetrics.fogBandRatio, band.height)
         let centerY = band.maxY - height / 2
@@ -975,16 +1076,18 @@ private struct BriefWeatherLayer: View {
         .position(x: size.width / 2, y: centerY)
     }
 
-    /// 雪点：1.5pt 的小白点，约 1/3 散在上半张（"散布全卡"），其余落在降水带
+    /// 雪点：1.5pt 的小点，约 1/3 散在**天空段**（"散布全卡"），其余落**地面段**。
     ///
-    /// 上下两块区域都用净空带隔开正文 —— 雪点虽小，落在字上同样是脏点。
+    /// 上 1/3 落天空段而不是 `cloudBand`：两段的上沿取同一个式子
+    /// （`verticalPadding × 0.2`，见 `precipitationBands`），所以几何与改版前逐点一致，
+    /// 只是语义上它现在属于"降水"。两段各自用净空带隔开正文 ——
+    /// 雪点虽小，落在字上同样是脏点。
     private func snowDots(in size: CGSize) -> some View {
-        let lower = precipitationBand(in: size)
-        let upper = cloudBand(in: size)
+        let bands = precipitationBands(in: size)
 
         return ForEach(0..<BriefMetrics.snowCount, id: \.self) { index in
-            let inUpper = index % 3 == 0
-            let area = inUpper ? upper : lower
+            let inSky = index % 3 == 0
+            let area = inSky ? bands.sky : bands.ground
             let x = area.minX + area.width * CGFloat(0.04 + 0.92 * scattered(index, 7.9))
             let y = area.minY + area.height * CGFloat(0.10 + 0.80 * scattered(index, 9.4))
 
@@ -996,10 +1099,10 @@ private struct BriefWeatherLayer: View {
         }
     }
 
-    /// 闪电：**一道**折线，2pt，从降水带顶端斜向下 3 段，色 `glow` α0.5
+    /// 闪电：**一道**折线，2pt，从地面段顶端斜向下 3 段，色 `glow` α0.5
     ///
     /// 只画一道是有意的：真雷暴的照片里闪电也是一条，画成三道就变成漫画符号了。
-    /// 起点取降水带上沿（而不是卡顶）是为了不划过正文 —— 见硬约束 3。
+    /// 起点取**地面段**上沿（正文下方，而不是卡顶）是为了不划过正文 —— 见硬约束 3。
     private func lightning(in band: CGRect) -> some View {
         let segment = band.height / CGFloat(BriefMetrics.lightningSegments)
         let middleX = band.midX

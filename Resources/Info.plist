@@ -95,5 +95,20 @@
 			</array>
 		</dict>
 	</array>
+	<!--
+	  3.8.0：云控更新要唤起全能签（nsk-sign://web?url=<ipa 直链>）。
+
+	  这一条**必须加**：iOS 9 起，`UIApplication.canOpenURL(_:)` 对未在本键里声明的
+	  scheme **恒返回 false**（而且不报错、不打印任何日志）。少了它，`UpdateInstaller`
+	  会在所有设备上都走"没检测到全能签"的兜底分支 —— 明明装了也提示没装，
+	  是那种只能靠真机试才发现问题的一类遗漏。
+
+	  只声明 `nsk-sign` 一个：全能签另外两个 scheme（addsource / bookmark）本轮用不到，
+	  多声明一个就多一条"这个 App 会去探测哪些 App"的隐私面。
+	-->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>nsk-sign</string>
+	</array>
 </dict>
 </plist>
