@@ -480,3 +480,76 @@ extension Theme {
         }
     }
 }
+
+// MARK: - 平台品牌色（收益页「平台」网格，A+B 混合方案）
+
+extension Theme {
+
+    /// 平台品牌色：**固定色相，不参与主题换肤**。
+    ///
+    /// 为什么不放进 `Palette`（和其他品牌色一起换）：
+    /// 换肤改的是「面」—— 背景 / 玻璃 / 强调色，那是**界面自己的情绪**；
+    /// 而平台身份是**数据自带的属性**，必须稳定。五套主题（青柠 / 暮紫 / 暖砂 / 海蓝 / 樱粉）
+    /// 里如果平台色也跟着走，切到樱粉主题时抖音、快手、小红书、网易全变成一片粉，
+    /// 用户就认不出哪张卡是哪个平台了 —— 那正是这五个颜色存在的唯一理由。
+    ///
+    /// 所以这里走固定 hex（不经 `dyn` / `dyna`）：深色与浅色下同一个平台永远是同一种红。
+    /// 代价是浅色底上的对比度不如中性 token 稳，因此**颜色只做圆点与小细条**（面），
+    /// 平台名与金额一律用 `textPrimary` —— 文字不依赖品牌色也能读，
+    /// 这同时也是「抖音 / 快手 / 小红书 三张红卡并排」不糊掉的办法。
+    enum Platform {
+
+        /// 抖音（品牌红）
+        static let douyin = Color(hex: "FE2C55")
+        /// 快手（品牌橙红）
+        static let kuaishou = Color(hex: "FF5000")
+        /// 小红书（品牌红）
+        static let xiaohongshu = Color(hex: "FF2442")
+        /// 网易创作酱（品牌红）
+        static let netease = Color(hex: "E60026")
+        /// 网易光遇追光计划（品牌蓝）
+        static let neteaseSky = Color(hex: "2E9BFF")
+        /// 兜底：自定义平台（用户能自己填平台名，见 `EarningsPlatformPreset`）。
+        ///
+        /// 刻意选一档中性灰蓝而不是随手一个亮色：五个固定平台里有四个是红/橙，
+        /// 兜底如果也偏红，"自定义平台"就会被误读成某个大平台。灰蓝的意思是"这个平台没有品牌色"。
+        static let fallback = Color(hex: "8A94A6")
+
+        /// 平台名 → 品牌色（含模糊匹配）。
+        ///
+        /// 为什么必须容错：平台名是**用户/服务端自由填的字符串**，不是枚举 ——
+        /// 同一次响应里既可能出现预设的「网易光遇追光计划」，也可能出现用户自己建的「光遇」，
+        /// 甚至「抖音星图」。精确相等会让一半平台掉到兜底灰，所以这里用 `contains`。
+        ///
+        /// 判定顺序有讲究：**长名先于短名** —— 「网易光遇追光计划」同时含「网易」与「光遇」，
+        /// 若先判「网易」它会拿到创作酱的红色，和短名「光遇」的蓝色对不上，同一个平台两种色。
+        /// - Parameter name: 服务端返回的平台名（可为空 / 带空格）
+        /// - Returns: 品牌色；认不出的平台返回 `fallback`
+        static func of(_ name: String) -> Color {
+            let text = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard text.isEmpty == false else { return fallback }
+
+            // 1. 光遇系列（长名先判：覆盖「网易光遇追光计划」「光遇」「追光计划」）
+            if text.contains("光遇") || text.contains("追光") || text.contains("sky") {
+                return neteaseSky
+            }
+            // 2. 抖音 / TikTok
+            if text.contains("抖音") || text.contains("douyin") || text.contains("tiktok") {
+                return douyin
+            }
+            // 3. 快手
+            if text.contains("快手") || text.contains("kuaishou") {
+                return kuaishou
+            }
+            // 4. 小红书
+            if text.contains("小红书") || text.contains("xiaohongshu") || text.contains("redbook") {
+                return xiaohongshu
+            }
+            // 5. 网易系（创作酱是网易的另一个计划，放在光遇之后判）
+            if text.contains("网易") || text.contains("创作酱") || text.contains("netease") {
+                return netease
+            }
+            return fallback
+        }
+    }
+}

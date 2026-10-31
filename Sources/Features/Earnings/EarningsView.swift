@@ -19,8 +19,11 @@ import SwiftUI
 /// 1. **hero 216pt**：眉题（总计 · 本月新增）+ 40pt `metricL` 总额 + 10pt 三态堆叠条 + 图例
 ///    + 右下「记一笔」入口 —— 一屏唯一的锚点；
 /// 2. **「本月」+ 三张 96pt tile**：本月新增（28pt `metricM`，涨红跌绿）/ 待结算 / 活动 · 平台；
-/// 3. **「平台占比」+ 明细**：占比条 6→12pt、名称 12→15pt、金额 12→17pt；
-///    「明细」把原来那张独立的「平台明细」卡收进同一组（不必再为大区块付一次组距）；
+/// 3. **「平台」+ 两列小卡（A+B 混合方案）**：默认是两列概览（品牌色圆点 + 平台名 13pt +
+///    金额 20pt + 3pt 占比细条），点任一卡弹出该平台的完整活动墙（`PlatformDetailSheet`）——
+///    概览回答"谁占多少"，点进去才回答"这个平台具体是哪些活动"。
+///    为什么不再是一条条横向占比条：平台一多，条形图变成七八条同宽的横线，眼睛扫不到"最大的是谁"；
+///    两列卡片用面积 + 金额双重编码，一屏 4 张，谁最大一眼就看出来；
 /// 4. **「最近活动」+ 全部**：行高 72，名称 15pt、金额 17pt；
 /// 5. 页脚 11pt 说明。
 ///
@@ -36,9 +39,16 @@ struct EarningsView: View {
     @State private var isSubmitting: Bool = false
     /// 「记一笔」表单
     @State private var showsRecord: Bool = false
-    /// 平台「明细」展开态：占比条回答"谁占多少"，明细补"待发 / 已收 / 场次"。
-    /// 两件事同源（都来自 `platformBreakdown` / `platforms`），放一张卡里就不必各占一个区块。
+    /// 平台详情弹页的呈现开关（`PlatformDetailSheet`）。
+    ///
+    /// 与上一版的区别：以前这个开关控制"占比卡里内联展开一张平台明细表"，
+    /// 现在平台区块改成了两列卡片墙 —— 内联展开会让区块高度随活动数暴涨，
+    /// 所以同一个开关改成"弹出单平台弹页"，语义从"展开"变成"进入"，状态名沿用不改
+    /// （改名不会让行为更对，只会让 diff 更大）。
     @State private var showsPlatformDetail: Bool = false
+    /// 当前选中的平台名。与 `showsPlatformDetail` 成对：先写名字再置 true，
+    /// 弹页读到的永远是刚点的那一张卡（而不是上一张留下的名字）。
+    @State private var selectedPlatformName: String = ""
     /// 「最近活动」是否已展开到全部（默认 12 条，与服务端一次返回的量级匹配）
     @State private var showsAllActivities: Bool = false
     @FocusState private var isPasswordFocused: Bool
@@ -49,9 +59,15 @@ struct EarningsView: View {
     /// 与"三场并列"行）；收益 hero 里只有一个数字 + 一条构成条 + 一行图例，216 才是它的内容高度。
     /// 用 `minHeight` 而不是固定 `height`：数字换行或大字号时卡可以长高，不会裁字。
     private let heroMinHeight: CGFloat = 216.0
-    /// 平台占比条厚度（报告 §4.4：6 → 12）。`Layout` 里只有构成条 10 与轨道 4，没有这一档，
-    /// 就近声明成常量，避免在 `GeometryReader` 里再写一遍魔法数字。
-    private let ratioBarHeight: CGFloat = 12.0
+    /// 平台网格列定义。两列等宽、列间距 `Spacing.cardGap`（12）：
+    ///
+    /// 为什么不是 `.adaptive` —— 屏幕更宽时（iPad / 横屏）adaptive 会自己变成 3~4 列，
+    /// 而收益页的金额字号是按"单卡约 150pt 宽"定的，列数一变就得再判宽度换字号。
+    /// 固定两列让版式在所有设备上一致：平台再多，也只会往下排。
+    private let platformGridColumns: [GridItem] = [
+        GridItem(.flexible(), spacing: Spacing.cardGap),
+        GridItem(.flexible(), spacing: Spacing.cardGap)
+    ]
     /// 活动行高度（报告 §4.4：72pt）。名称 15 + 元信息 12 两行文字需要的最小呼吸量。
     private let activityRowHeight: CGFloat = 72.0
     /// 默认展示的活动条数（超过才给「全部」动作）
@@ -302,134 +318,75 @@ struct EarningsView: View {
         }
     }
 
-    // MARK: - 平台占比（含平台明细）
+    // MARK: - 平台（两列小卡墙 → 点卡进弹页）
 
+    /// 平台区块：`SectionHeader("平台")` + 两列网格。
+    ///
+    /// 右侧动作**删掉了**（上一版是「明细 / 收起」）。理由：动作原来控制"在卡里内联展开一张
+    /// 平台明细表"，现在每张卡自己就是入口 —— 卡可点、点开是完整弹页，
+    /// 再留一个「明细」按钮就有两个入口通向同一件事，而且那个按钮点开的是`store.platforms`
+    /// 全量列表，与"我想看这个平台"的意图并不一致。
     @ViewBuilder
     private func platformSection(summary: EarningsSummary) -> some View {
         if summary.platformBreakdown.isEmpty == false {
+            // `SectionHeader` 自带 12pt 下距，所以这里 spacing 用 0（与「本月」同一写法）
             VStack(alignment: .leading, spacing: 0) {
-                // 动作显式写在 `action:` 上（不用尾随闭包）：`SectionHeader` 还有"右侧插槽"
-                // 那个泛型构造，两处都用尾随闭包会让重载解析含糊
-                SectionHeader(
-                    title: "平台占比",
-                    actionTitle: showsPlatformDetail ? "收起" : "明细",
-                    action: {
-                        withAnimation(Motion.expand) {
-                            showsPlatformDetail.toggle()
+                SectionHeader(title: "平台")
+
+                LazyVGrid(columns: platformGridColumns, spacing: Spacing.cardGap) {
+                    ForEach(summary.platformBreakdown) { item in
+                        PlatformCard(
+                            item: item,
+                            totalAmount: platformAmountTotal(summary.platformBreakdown),
+                            activityCount: activityCounts[item.name] ?? 0
+                        ) {
+                            // 触觉不在这里发：`PressableGlassCard` 已经在按钮按下时给了一次
+                            // `Haptics.light()`，再加一次就是双击感
+                            openPlatformDetail(item.name)
                         }
                     }
-                )
-
-                GlassCard {
-                    VStack(alignment: .leading, spacing: Spacing.cardGap) {
-                        ForEach(summary.platformBreakdown) { item in
-                            breakdownRow(item: item, total: summary.total)
-                        }
-
-                        if showsPlatformDetail {
-                            Rectangle()
-                                .fill(Theme.divider)
-                                .frame(height: 1)
-
-                            if store.platforms.isEmpty {
-                                // 明细来自响应顶层 `platforms`，与占比同源但不同字段；
-                                // 只有占比、没有明细时给一句实话，不编造平台行
-                                Text("平台明细要等下次总览刷新才带得回来。")
-                                    .font(Typography.footnote)
-                                    .foregroundStyle(Theme.textTertiary)
-                                    .lineSpacing(Typography.lineSpacing(fontSize: 13, multiple: 1.5))
-                            } else {
-                                ForEach(store.platforms) { platform in
-                                    platformDetailRow(platform)
-                                }
-                            }
-                        }
-                    }
-                    .padding(Spacing.cardPadding)
+                }
+                // 弹页挂在平台区块自己身上，不挂在页面根视图：同一个视图上挂两个 `.sheet`
+                // （「记一笔」+ 平台详情）在 SwiftUI 里会互相遮蔽，只有后挂的那个能弹出来。
+                // 挂在子视图上两者各归各的宿主，谁点弹谁。
+                .sheet(isPresented: $showsPlatformDetail) {
+                    // 过滤用 `EarningsPlatformPreset.activities(_:in:)`（与服务端同序、不重排），
+                    // 不在弹页里再写一遍 filter —— 平台名匹配的规则只留一处
+                    PlatformDetailSheet(
+                        platformName: selectedPlatformName,
+                        aggregate: store.platforms.first { $0.name == selectedPlatformName },
+                        activities: EarningsPlatformPreset.activities(store.activities, in: selectedPlatformName)
+                    )
                 }
             }
         }
     }
 
-    private func breakdownRow(item: EarningsPlatformBreakdown, total: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                // 15pt：平台名要能被"读到"，改版前 12pt 与金额同级，撑不起"平台占比"这四个字
-                Text(item.name)
-                    .font(Typography.callout)
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 6)
-                // 17pt：金额是这一行的读数
-                Text(EarningsMoney.formatCents(item.amount))
-                    .font(Typography.titleS)
-                    .foregroundStyle(Theme.textPrimary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                Text(percentText(amount: item.amount, total: total))
-                    .font(Typography.caption)
-                    .foregroundStyle(Theme.textTertiary)
-                    .monospacedDigit()
-                    .frame(width: 36, alignment: .trailing)
-            }
+    /// 各平台金额之和 —— 细条的分母（只此一处，卡片按参数吃，不各自求和）
+    private func platformAmountTotal(_ items: [EarningsPlatformBreakdown]) -> Int {
+        return items.reduce(0) { $0 + $1.amount }
+    }
 
-            // 占比条：分母用 total，不依赖 `ratio` 字段的口径（服务端给百分数还是小数，
-            // 这里不猜；金额是确定的，自己算最稳）。条高 6 → 12（报告 §4.4）
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Theme.glassFill)
-                        .frame(height: ratioBarHeight)
-                    Capsule()
-                        .fill(Theme.chartBar)
-                        .frame(
-                            width: barWidth(total: total, amount: item.amount, full: geo.size.width),
-                            height: ratioBarHeight
-                        )
-                }
-            }
-            .frame(height: ratioBarHeight)
+    /// 平台名 → 该平台的活动数。
+    ///
+    /// 卡片要显示「N 个活动」，但 `EarningsActivity` 只在 `store.activities` 里；
+    /// 每张卡各自 filter 一遍是 O(平台数 × 活动数)，活动多时会在滚动里反复扫同一个数组，
+    /// 所以在这里一次数完，卡片只吃一个 `Int`。
+    private var activityCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for activity in store.activities {
+            counts[activity.platform, default: 0] += 1
         }
+        return counts
     }
 
-    /// 单条占比宽度。最小 3pt：占比极小（0.1%）时也要留一条可见的痕，
-    /// 否则用户会以为这个平台没数据。
-    private func barWidth(total: Int, amount: Int, full: CGFloat) -> CGFloat {
-        guard total > 0, amount > 0 else { return 0 }
-        let ratio = min(1, Double(amount) / Double(total))
-        return max(3, full * CGFloat(ratio))
-    }
-
-    /// 百分比文案。同样从金额算，不读 `ratio`（口径只保留一处）
-    private func percentText(amount: Int, total: Int) -> String {
-        guard total > 0, amount > 0 else { return "0%" }
-        let percent = Int((Double(amount) / Double(total) * 100).rounded())
-        return "\(percent)%"
-    }
-
-    private func platformDetailRow(_ platform: EarningsPlatform) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(platform.name)
-                .font(Typography.callout)
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1)
-            Text("\(platform.acts) 场")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.textTertiary)
-                .monospacedDigit()
-            Spacer(minLength: 6)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("待发 " + EarningsMoney.formatCents(platform.pendingCents))
-                    .font(Typography.footnote)
-                    .foregroundStyle(Theme.statusWarn)
-                    .monospacedDigit()
-                Text("已收 " + EarningsMoney.formatCents(platform.receivedCents))
-                    .font(Typography.footnote)
-                    .foregroundStyle(Theme.textSecondary)
-                    .monospacedDigit()
-            }
-            .lineLimit(1)
-        }
+    /// 打开某个平台的详情弹页。
+    ///
+    /// 先写名字、再置 true：`.sheet(isPresented:)` 的内容闭包在呈现那一刻求值，
+    /// 顺序反过来会让弹页有一帧读到上一个平台的名字（能看到标题闪一下）。
+    private func openPlatformDetail(_ name: String) {
+        selectedPlatformName = name
+        showsPlatformDetail = true
     }
 
     // MARK: - 最近活动

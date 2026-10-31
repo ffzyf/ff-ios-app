@@ -22,6 +22,15 @@ import SwiftUI
 /// 2. **进度轨**回答"今天第几场"这个原来没说的话 —— 只有数字没有刻度，读者记不住自己在哪；
 /// 3. 大数字走 `Typography.metricL`（原 inline 36pt 已删除），与收益页总额同一个 token。
 ///
+/// **三态**（判定在 `Shared/Domain/RedstoneWindow.swift`，与桌面小组件共用同一份）：
+/// ```
+/// 排期还没拉到              → 「排期还没生成」（原有逻辑，一个字都不改）
+/// 本月有场次且全部已过       → 「本月红石已收官」+ 一条静态弧 + 月份文案
+/// 还有进行中 / 未来场次      → 正常倒计时（原有逻辑，一个字都不改）
+/// ```
+/// 第二种状态是本次修的 bug：用户 10 月 31 日晚上看到「排期还没生成」，
+/// 语义上完全不对 —— 排期生成过，只是这个月的都过完了。
+///
 /// 刷新粒度 1 秒：`39:27` 是 mm:ss，按分钟刷会僵住。只重建内容子树，
 /// 卡片底盘（渐变 / 云海 / 描边）在 `TimelineView` 之外常驻。
 struct RedstoneCountdownCard: View {
@@ -64,7 +73,22 @@ struct RedstoneCountdownCard: View {
 
     // MARK: - 有数据
 
+    /// 按「本月窗口」三态分流。判定本身在 Shared（`RedstoneWindow`），这里只负责画。
+    ///
+    /// `.pending` 与 `.live` 共用同一套内容：`.pending` 时 `phase` 必然是 `.notGenerated`，
+    /// `bigValue` 会写「排期还没生成」—— 那正是这边要保留的原有文案。
+    @ViewBuilder
     private func cardContent(now: Date) -> some View {
+        switch RedstoneWindow.state(days: rock.allLoadedDays, now: now) {
+        case .closed(let month, let next):
+            closedContent(month: month, next: next, now: now)
+        case .pending, .live:
+            liveContent(now: now)
+        }
+    }
+
+    /// 有场次可等：完全沿用改版前的版式（大字 + 倒计时 + 三场并列 + 进度轨）
+    private func liveContent(now: Date) -> some View {
         let days = rock.allLoadedDays
         let phase = RedstoneTimeline.phase(in: days, now: now)
         let today = RedstoneTimeline.occurrences(in: days)
@@ -95,6 +119,66 @@ struct RedstoneCountdownCard: View {
                 .padding(.bottom, 12)
 
                 sessionRow(today: today, now: now)
+            }
+        }
+    }
+
+    // MARK: - 本月已收官
+
+    /// 收官态：**没有目标了**，所以不画倒计时、也不画"今日第 N/M 场"那条进度轨 ——
+    /// 一条走到头却还在原地的轨只会让人以为卡住了。
+    ///
+    /// 取而代之的是一条静态弧：它画的是**这个月真实走过的场次**（首场 → 末场），
+    /// 两端各一个暗节点、弧线整体压暗。比只剩一行字更不空，也一个假数据都没有。
+    private func closedContent(month: Int, next: Int, now: Date) -> some View {
+        let sessions = RedstoneWindow.monthOccurrences(days: rock.allLoadedDays, now: now)
+        let state = RedstoneWindowState.closed(month: month, next: next)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "红石 · 本月", color: Theme.trackTextDim)
+
+            Spacer(minLength: 12)
+
+            Text(state.closedTitle ?? "")
+                .font(Typography.titleL)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 8)
+
+            Text(state.closedNote ?? "")
+                .font(Typography.footnote)
+                .foregroundStyle(Theme.trackTextDim)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 16)
+
+            if sessions.count >= 2 {
+                RedstoneMonthSpentArc()
+                    .frame(height: 26)
+
+                HStack(spacing: 0) {
+                    Text(sessions.first?.time ?? "")
+                        .font(Typography.footnoteMedium)
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.trackTextDim)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(sessions.last?.time ?? "")
+                        .font(Typography.footnoteMedium)
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.trackTextDim)
+                        .lineLimit(1)
+                }
+                .padding(.top, 2)
+
+                Spacer(minLength: 10)
+
+                Text("本月 " + String(sessions.count) + " 场 · 全部已过")
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.trackTextDim)
             }
         }
     }
@@ -318,5 +402,51 @@ private struct RedstoneProgressTrack: View {
         .frame(height: 10)
         .accessibilityElement()
         .accessibilityLabel("今日第 " + String(index) + "/" + String(total) + " 场")
+    }
+}
+
+// MARK: - 本月已走的静态弧
+
+/// 收官态那条弧：**一条走完的弧**，没有光点、没有动画、没有已过未过的区别。
+///
+/// 为什么复用 `HorizonEdge`：它已经和简报卡、桌面组件是同一条二次贝塞尔曲线。
+/// 为了一张"静态弧"再写一遍 `Path`，两条曲线迟早会在某次改版里对不上 ——
+/// 一条曲线只该有一个实现。
+///
+/// 两端各一颗暗节点 = 本月首场 / 末场落在弧上的位置（节点本身就是"到过这里"的记号）。
+/// 颜色只有 `Theme.trackArc` 一支，透明度降下来表示"已经过去了"，不引入任何新色。
+private struct RedstoneMonthSpentArc: View {
+
+    /// 弧顶（占弧带高度）
+    private let crestY: CGFloat = 0.22
+    /// 弧两端（占弧带高度）
+    private let edgeY: CGFloat = 0.92
+    /// 端点节点直径
+    private let nodeDiameter: CGFloat = 3
+    /// 弧本体不透明度（比"进行中"那条暗一档）
+    private let arcAlpha: Double = 0.28
+    /// 端点节点不透明度
+    private let nodeAlpha: Double = 0.30
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            ZStack(alignment: .topLeading) {
+                HorizonEdge(crestY: crestY, edgeY: edgeY)
+                    .stroke(Theme.trackArc.opacity(arcAlpha), lineWidth: 1.2)
+
+                Circle()
+                    .fill(Theme.trackArc.opacity(nodeAlpha))
+                    .frame(width: nodeDiameter, height: nodeDiameter)
+                    .position(x: nodeDiameter, y: size.height * edgeY)
+
+                Circle()
+                    .fill(Theme.trackArc.opacity(nodeAlpha))
+                    .frame(width: nodeDiameter, height: nodeDiameter)
+                    .position(x: size.width - nodeDiameter, y: size.height * edgeY)
+            }
+            .frame(width: size.width, height: size.height)
+        }
+        .accessibilityHidden(true)
     }
 }
