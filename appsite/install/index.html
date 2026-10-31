@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b16">
+<meta name="robots" content="noindex,nofollow">
+<title>安装引导 · FF大王</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2338bdf8'/%3E%3Cstop offset='.55' stop-color='%23818cf8'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Cpath d='M32 14l4.6 12.4L49 31l-12.4 4.6L32 48l-4.6-12.4L15 31l12.4-4.6z' fill='%23fff' opacity='.95'/%3E%3C/svg%3E">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  color-scheme:dark;
+  --bg:#070b16;--card:rgba(19,26,46,.66);
+  --line:rgba(148,175,255,.14);--line-2:rgba(148,175,255,.26);
+  --text:#eef2ff;--text-2:#c3cde6;--muted:#7f8cb0;--meta:#5d688a;
+  --accent:#7dd3fc;--accent-2:#a78bfa;
+  --ok:#34d399;--warn:#fbbf24;--err:#fb7185;
+  --radius:20px;--radius-sm:12px;
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+html{-webkit-text-size-adjust:100%}
+body{
+  font-family:var(--font-ui);background:var(--bg);color:var(--text);min-height:100dvh;
+  line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 64px;
+  background-image:radial-gradient(700px 380px at 18% -6%,rgba(99,102,241,.22),transparent 70%),radial-gradient(620px 340px at 92% 4%,rgba(56,189,248,.14),transparent 70%);
+}
+.wrap{max-width:640px;margin:0 auto;padding:28px 16px 0}
+header{display:flex;align-items:center;gap:12px;padding:6px 2px 20px}
+.logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(140deg,#38bdf8,#818cf8 55%,#c084fc);display:flex;align-items:center;justify-content:center;font-size:18px;flex:none;box-shadow:0 8px 22px rgba(99,102,241,.4)}
+h1{font-size:18px;font-weight:700;letter-spacing:.02em}
+header .sub{font-size:12px;color:var(--muted)}
+
+section{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:18px;margin-bottom:16px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)
+}
+h2{font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+h2 .num{
+  font-size:11px;font-weight:700;width:20px;height:20px;border-radius:50%;
+  background:linear-gradient(120deg,#38bdf8,#818cf8);color:#08101f;
+  display:inline-flex;align-items:center;justify-content:center
+}
+
+p{font-size:13.5px;color:var(--text-2);margin:8px 0;line-height:1.75}
+b{color:var(--text)}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:11.5px;background:rgba(255,255,255,.07);padding:1px 6px;border-radius:5px;color:var(--text-2)}
+
+.step-1 .dl{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.step-1 .dl a{
+  display:inline-block;padding:10px 18px;border-radius:11px;
+  background:linear-gradient(120deg,#38bdf8,#818cf8);color:#08101f;
+  font-weight:700;font-size:13.5px;text-decoration:none
+}
+.step-1 .dl a:hover{filter:brightness(1.05)}
+
+.link-box{
+  margin-top:12px;display:flex;gap:8px;align-items:stretch
+}
+.link-box input{
+  flex:1;padding:10px 13px;border:1px solid var(--line);border-radius:10px;
+  background:rgba(8,12,24,.66);color:var(--text);font-family:var(--mono);font-size:12px;outline:none;
+  word-break:break-all
+}
+.link-box button{
+  font-family:var(--font-ui);font-size:12.5px;font-weight:700;border:0;border-radius:10px;
+  padding:0 16px;cursor:pointer;background:rgba(255,255,255,.08);color:var(--text-2);
+  border:1px solid var(--line);white-space:nowrap
+}
+.link-box button:active{transform:scale(.98)}
+
+ol.install{margin:8px 0 4px 20px;font-size:13.5px;color:var(--text-2);line-height:2}
+ol.install li{margin:4px 0}
+ol.install code{font-size:11.5px}
+
+.notice{
+  border:1px solid rgba(251,191,36,.34);background:rgba(251,191,36,.09);
+  border-radius:var(--radius-sm);padding:13px 15px;font-size:12.5px;color:#f6dfae;margin-top:14px;line-height:1.7
+}
+.notice b{color:#ffe6b0}
+
+footer{font-size:11.5px;color:var(--meta);text-align:center;padding:10px 0 0;line-height:1.9}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">✦</div>
+  <div>
+    <h1>FF大王 · 安装引导</h1>
+    <div class="sub">通过全能签安装未签名 ipa</div>
+  </div>
+</header>
+
+<!-- 第 1 步：装全能签 -->
+<section class="step-1">
+  <h2><span class="num">1</span>先装「全能签」</h2>
+  <p>没有全能签的话，先去 App Store 或全能签官网安装。</p>
+  <p>全能签是一个独立的 App，负责证书、重签和信任描述文件 —— <b>我们不做这些</b>。</p>
+</section>
+
+<!-- 第 2 步：复制 ipa 直链 -->
+<section>
+  <h2><span class="num">2</span>复制 ipa 直链</h2>
+  <p>把下面的链接复制到剪贴板（这是我们托管的未签名 ipa 文件，匿名可读）。</p>
+  <div class="link-box">
+    <input type="text" id="ipaLink" readonly value="">
+    <button type="button" id="copyBtn">复制</button>
+  </div>
+  <p style="margin-top:10px;font-size:12px;color:var(--meta)">
+    提示：如果你的 ipa 文件名不同，把链接末尾的文件名换成你要安装的那个即可。
+  </p>
+</section>
+
+<!-- 第 3 步：全能签里打开 -->
+<section>
+  <h2><span class="num">3</span>在全能签里粘贴并安装</h2>
+  <ol class="install">
+    <li>打开 <b>全能签</b> App</li>
+    <li>底部标签切到「<b>网页</b>」（或叫「网页安装」）</li>
+    <li>在地址栏粘贴刚才复制的 ipa 直链，回车访问</li>
+    <li>页面加载后点「<b>安装</b>」→ 选证书 → 开始签名安装</li>
+  </ol>
+  <p style="margin-top:8px">
+    也可以直接用 URL Scheme 打开：
+  </p>
+  <div class="link-box">
+    <input type="text" id="nskLink" readonly value="">
+    <button type="button" id="nskBtn">用全能签打开</button>
+  </div>
+</section>
+
+<!-- 免责 -->
+<section>
+  <div class="notice">
+    <b>关于签名与信任</b><br>
+    我们只负责把 ipa 文件递到全能签手里。<b>证书、重签、信任描述文件、设备管理授权，都是全能签那边的事</b>——
+    具体步骤和常见问题请参考全能签的官方文档。<br>
+    如果安装后打不开、提示「未受信任的企业级开发者」，请在「设置 → 通用 → VPN 与设备管理」里信任对应的描述文件。
+  </div>
+</section>
+
+<footer>
+  FF大王 · 云控更新系统<br>
+  <a href="/" target="_blank" rel="noopener">回站点首页</a> ·
+  <a href="/admin/release/" target="_blank" rel="noopener">管理台</a>
+</footer>
+
+</div>
+<script>
+(function () {
+  'use strict';
+
+  // 从 URL 参数里读 ipa 路径，支持 ?f=xxx.ipa 或 ?file=xxx.ipa
+  function getIpaFile() {
+    var params = new URLSearchParams(location.search);
+    return params.get('f') || params.get('file') || '';
+  }
+
+  var file = getIpaFile();
+  var ipaUrl = file ? (location.origin + '/api/app/download/' + encodeURIComponent(file)) : '';
+  var nskUrl = ipaUrl ? ('nsk-sign://web?url=' + encodeURIComponent(ipaUrl)) : '';
+
+  var $ipa = document.getElementById('ipaLink');
+  var $nsk = document.getElementById('nskLink');
+  if (ipaUrl) {
+    $ipa.value = ipaUrl;
+    $nsk.value = nskUrl;
+  } else {
+    $ipa.value = '（未指定 ipa 文件名，请在链接末尾加 ?f=文件名.ipa）';
+    $nsk.value = '（请先指定 ipa 文件）';
+  }
+
+  function copy(text, okMsg) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        alert(okMsg || '已复制');
+      }, function () {
+        window.prompt('手动复制：', text);
+      });
+    } else {
+      window.prompt('手动复制：', text);
+    }
+  }
+
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    if (!ipaUrl) return;
+    copy(ipaUrl, 'ipa 直链已复制');
+  });
+
+  document.getElementById('nskBtn').addEventListener('click', function () {
+    if (!nskUrl) return;
+    location.href = nskUrl;
+  });
+})();
+</script>
+</body>
+</html>

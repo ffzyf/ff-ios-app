@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070b16">
+<meta name="robots" content="noindex,nofollow">
+<title>云控更新 · 管理台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2338bdf8'/%3E%3Cstop offset='.55' stop-color='%23818cf8'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Cpath d='M32 14l4.6 12.4L49 31l-12.4 4.6L32 48l-4.6-12.4L15 31l12.4-4.6z' fill='%23fff' opacity='.95'/%3E%3C/svg%3E">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  color-scheme:dark;
+  --bg:#070b16;--card:rgba(19,26,46,.66);--card-2:rgba(23,31,54,.9);
+  --line:rgba(148,175,255,.14);--line-2:rgba(148,175,255,.26);
+  --text:#eef2ff;--text-2:#c3cde6;--muted:#7f8cb0;--meta:#5d688a;
+  --accent:#7dd3fc;--accent-2:#a78bfa;
+  --ok:#34d399;--warn:#fbbf24;--err:#fb7185;
+  --radius:20px;--radius-sm:12px;
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+html{-webkit-text-size-adjust:100%}
+body{
+  font-family:var(--font-ui);background:var(--bg);color:var(--text);min-height:100dvh;
+  line-height:1.65;-webkit-font-smoothing:antialiased;padding:0 0 64px;
+  background-image:radial-gradient(700px 380px at 18% -6%,rgba(99,102,241,.22),transparent 70%),radial-gradient(620px 340px at 92% 4%,rgba(56,189,248,.14),transparent 70%);
+}
+.wrap{max-width:760px;margin:0 auto;padding:22px 16px 0}
+header{display:flex;align-items:center;gap:12px;padding:6px 2px 18px}
+.logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(140deg,#38bdf8,#818cf8 55%,#c084fc);display:flex;align-items:center;justify-content:center;font-size:18px;flex:none;box-shadow:0 8px 22px rgba(99,102,241,.4)}
+h1{font-size:17px;font-weight:700;letter-spacing:.02em}
+header .sub{font-size:12px;color:var(--muted)}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* §4.8 固定说明：不可折叠、置顶 */
+.notice{
+  border:1px solid rgba(251,191,36,.34);background:rgba(251,191,36,.09);
+  border-radius:var(--radius-sm);padding:13px 15px;font-size:12.5px;color:#f6dfae;margin-bottom:18px
+}
+.notice b{color:#ffe6b0}
+.notice ul{margin:8px 0 0 18px}
+.notice li{margin:4px 0}
+
+section{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:18px;margin-bottom:16px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)
+}
+h2{font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+h2 .tag{font-size:10.5px;font-weight:600;color:var(--accent);background:rgba(125,211,252,.12);border:1px solid rgba(125,211,252,.24);padding:1px 7px;border-radius:99px;letter-spacing:.04em}
+
+label{display:block;font-size:12px;color:var(--muted);margin:12px 0 6px}
+input[type=text],input[type=password],input[type=number],textarea{
+  width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:rgba(8,12,24,.66);
+  color:var(--text);font-size:14px;font-family:var(--font-ui);outline:none;transition:border-color .18s,box-shadow .18s
+}
+textarea{min-height:110px;resize:vertical;line-height:1.6}
+input:focus,textarea:focus{border-color:rgba(125,211,252,.55);box-shadow:0 0 0 3px rgba(125,211,252,.1)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:560px){.row{grid-template-columns:1fr}}
+.hint{font-size:11.5px;color:var(--meta);margin-top:6px;line-height:1.6}
+.hint code,code{font-family:var(--mono);font-size:11px;background:rgba(255,255,255,.07);padding:1px 5px;border-radius:5px;color:var(--text-2);word-break:break-all}
+
+.drop{
+  border:1.5px dashed var(--line-2);border-radius:14px;padding:22px 16px;text-align:center;
+  cursor:pointer;transition:border-color .18s,background .18s;background:rgba(8,12,24,.4)
+}
+.drop:hover,.drop.over{border-color:rgba(125,211,252,.6);background:rgba(125,211,252,.07)}
+.drop .ic{font-size:22px;opacity:.75}
+.drop .t{font-size:13px;margin-top:6px}
+.drop .s{font-size:11.5px;color:var(--meta);margin-top:4px}
+.drop.has{border-style:solid;border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.07)}
+
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+button{
+  font-family:var(--font-ui);font-size:14px;font-weight:700;border:0;border-radius:11px;padding:12px 20px;
+  cursor:pointer;transition:transform .14s,filter .18s,opacity .18s
+}
+button:active{transform:scale(.985)}
+button:disabled{opacity:.55;cursor:not-allowed}
+.primary{background:linear-gradient(120deg,#38bdf8,#818cf8);color:#08101f}
+.ghost{background:rgba(255,255,255,.06);color:var(--text-2);border:1px solid var(--line)}
+.mini{font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:8px;background:rgba(255,255,255,.06);color:var(--text-2);border:1px solid var(--line)}
+.mini.danger{background:rgba(251,113,133,.12);color:#ffb1bc;border-color:rgba(251,113,133,.3)}
+
+.prog{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:14px;display:none}
+.prog.on{display:block}
+.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#818cf8);transition:width .2s}
+
+.status{margin-top:14px;font-size:12.5px;line-height:1.7;border-radius:10px;padding:10px 13px;display:none;white-space:pre-wrap;word-break:break-word}
+.status.on{display:block}
+.status.ok{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.28);color:#b6f3da}
+.status.err{background:rgba(251,113,133,.1);border:1px solid rgba(251,113,133,.28);color:#ffc2ca}
+.status.info{background:rgba(125,211,252,.09);border:1px solid rgba(125,211,252,.24);color:#c8ecff}
+
+/* 当前版本卡 */
+.cur{display:none}
+.cur.on{display:block}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:8px 12px;font-size:12.5px;margin-top:4px}
+.kv .k{color:var(--meta)}
+.kv .v{color:var(--text-2);word-break:break-all}
+.notes-box{margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(8,12,24,.55);border:1px solid var(--line);font-size:12.5px;color:var(--text-2);white-space:pre-wrap;max-height:180px;overflow:auto}
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:99px;background:rgba(52,211,153,.14);color:#7ff0c0;border:1px solid rgba(52,211,153,.3)}
+.empty{font-size:12.5px;color:var(--meta);padding:10px 0}
+
+/* 历史 */
+.hist{list-style:none}
+.hist li{border-top:1px solid var(--line);padding:12px 0;font-size:12.5px}
+.hist li:first-child{border-top:0}
+.hist .line1{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.hist .b{font-family:var(--mono);font-size:12px;color:var(--text)}
+.hist .ver{color:var(--muted)}
+.hist .when{color:var(--meta);font-size:11.5px}
+.hist .acts{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.hist .nt{color:var(--muted);margin-top:6px;white-space:pre-wrap;max-height:70px;overflow:hidden}
+
+/* 流程 */
+pre.flow{
+  font-family:var(--mono);font-size:11.5px;line-height:1.9;color:var(--text-2);
+  background:rgba(8,12,24,.6);border:1px solid var(--line);border-radius:12px;
+  padding:14px;overflow:auto;white-space:pre
+}
+footer{font-size:11.5px;color:var(--meta);text-align:center;padding:6px 0 0;line-height:1.9}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">✦</div>
+  <div>
+    <h1>云控更新 · 管理台</h1>
+    <div class="sub">光遇简报 · iOS 未签名包分发（app.skyzyf335.top）</div>
+  </div>
+</header>
+
+<!-- §4.8：这段话必须钉在页面顶部，不可折叠 -->
+<div class="notice">
+  <b>v1 只支持手动上传。</b>
+  不会自动从 Codemagic 拉产物 —— 那需要 <code>CM_API_TOKEN</code>（团队级凭据，泄露等于别人能烧你的构建分钟），
+  而且 Codemagic 的 Artifact 下载链接有有效期，写进 KV 几天后就是 404，
+  「看起来有更新但点不动」比「没有更新」糟得多。每次发版的完整流程见本页底部四步。
+  <ul>
+    <li><b>不做</b>强制更新（不拦启动、不当启动门）：自己的 App，用户点「稍后」就该能继续用。</li>
+    <li><b>不做</b>静默下载 / 后台安装（iOS 上非 App Store 渠道做不到）。</li>
+    <li><b>不做</b> beta / 多渠道：<code>channel</code> 参数留在契约里但 v1 只认 <code>ios</code>，不做灰度。</li>
+    <li><b>不做</b>「从 GitHub Release 拉 ipa」（链接会过期，同 Codemagic 的理由）。</li>
+  </ul>
+</div>
+
+<!-- 发布口令 -->
+<section>
+  <h2>发布口令 <span class="tag">可选</span></h2>
+  <label for="token">x-release-token</label>
+  <input type="password" id="token" placeholder="留空即可（已登录本站时直接用会话发布）" autocomplete="off">
+  <div class="hint">
+    你已经通过了站点登录，所以<b>留空也能发布</b>（服务端认 <code>ce_auth</code> 会话）。
+    只有想在浏览器之外发版（curl / CI）时才需要在 Cloudflare 配 <code>RELEASE_TOKEN</code> 并填在这里。
+    口令只存在本页内存 + localStorage，不会写进任何日志。
+  </div>
+  <div class="btns">
+    <button class="ghost" id="saveToken" type="button">记住口令</button>
+    <button class="ghost" id="clearToken" type="button">清除</button>
+  </div>
+</section>
+
+<!-- 发布表单 -->
+<section>
+  <h2>① 上传 ipa → ② 发布 <span class="tag">手动</span></h2>
+
+  <div class="drop" id="drop">
+    <div class="ic">⇩</div>
+    <div class="t" id="dropTitle">拖拽 .ipa 到这里，或点击选择文件</div>
+    <div class="s" id="dropSub">未签名包即可，签名在全能签里做 · 上限 20MB · 实测 2.1MB</div>
+  </div>
+  <input type="file" id="file" accept=".ipa,application/octet-stream" hidden>
+
+  <div class="row">
+    <div>
+      <label for="version">版本号（MARKETING_VERSION，只做展示）</label>
+      <input type="text" id="version" placeholder="3.8.0" autocomplete="off">
+    </div>
+    <div>
+      <label for="build">build（CFBundleVersion，整数，单调递增）</label>
+      <input type="number" id="build" placeholder="14" min="1" step="1" inputmode="numeric">
+    </div>
+  </div>
+
+  <label for="notes">更新说明（多行，App 的 sheet 里原样展示换行）</label>
+  <textarea id="notes" placeholder="· 修复简报雨滴落点偏低&#10;· 新增 iPad 立体卡&#10;· 天光实时活动支持夜间关闭"></textarea>
+
+  <div class="hint" id="keyHint">KV 键：上传时按「版本号-build.ipa」自动生成，如 <code>3.8.0-14.ipa</code>。</div>
+
+  <div class="prog" id="prog"><i id="progBar"></i></div>
+  <div class="status" id="status"></div>
+
+  <div class="btns">
+    <button class="primary" id="publish" type="button">上传并发布</button>
+    <button class="ghost" id="uploadOnly" type="button">仅上传（不发布）</button>
+  </div>
+  <div class="hint">
+    发布成功后 KV 是全球最终一致的：边缘缓存与全球同步最长 60 秒，期间个别机房可能仍读到旧版本。
+  </div>
+</section>
+
+<!-- 当前版本 -->
+<section>
+  <h2>当前线上版本 <span class="tag">GET /api/app/version</span></h2>
+  <div id="curEmpty" class="empty">还没有发布过任何版本（<code>latest: null</code>）。App 侧会显示「已是最新」。</div>
+  <div class="cur" id="cur">
+    <div><span class="badge" id="curBadge">build —</span></div>
+    <div class="kv" id="curKv"></div>
+    <div class="notes-box" id="curNotes"></div>
+    <div class="btns">
+      <button class="mini" id="curCopy" type="button">复制 ipa 直链</button>
+      <button class="mini" id="curNsk" type="button">用全能签打开</button>
+      <button class="mini danger" id="curDelete" type="button">撤回此版本</button>
+    </div>
+  </div>
+  <div class="btns"><button class="ghost" id="refresh" type="button">刷新</button></div>
+</section>
+
+<!-- 历史 -->
+<section>
+  <h2>历史（最近 5 版）<span class="tag">release:ios:history</span></h2>
+  <ul class="hist" id="hist"></ul>
+  <div class="empty" id="histEmpty">暂无历史。</div>
+</section>
+
+<!-- §5.2 四步 -->
+<section>
+  <h2>每次发版的完整流程 <span class="tag">四步，第 1 步不能跳</span></h2>
+  <pre class="flow">1. bash scripts/bump.sh patch          # MARKETING_VERSION 末位 +1，CURRENT_PROJECT_VERSION +1（两处都改，脚本保证）
+2. 推到 GitHub → Codemagic 手动跑 ios-unsigned → 下 SkyApp.ipa
+3. 打开 app.skyzyf335.top/admin/release/  → 过站点登录 → 输发布口令
+   上传 ipa → 填版本号 3.8.1 / 更新说明 → 点发布
+4. 用户下次启动或 6 小时内回前台 → 弹 sheet → 点「用全能签安装」</pre>
+  <div class="hint">
+    第 1 步不能跳过：App 的 <code>localBuild</code> 直接读 <code>CFBundleVersion</code>，
+    忘了 bump 就会「发了新版但用户永远不提示」。服务端会拒收回退的 build（<code>400 build_regression</code>），
+    但拦不住「版本号变了、build 没变」这种情形。
+  </div>
+</section>
+
+<footer>
+  只负责把 ipa 递到全能签手里 · 证书 / 重签 / 信任描述文件是全能签那边的事<br>
+  <a href="/install/" target="_blank" rel="noopener">/install/ 安装引导页</a> ·
+  <a href="/" target="_blank" rel="noopener">回站点首页</a>
+</footer>
+
+</div>
+<script>
+(function () {
+  'use strict';
+
+  var API_VERSION = '/api/app/version';
+  var API_UPLOAD = '/api/app/version/upload';
+  var API_DOWNLOAD = '/api/app/download/';
+  var TOKEN_KEY = 'release_admin_token';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { token: '', file: null, latest: null, uploadedKey: '', busy: false };
+
+  /* ---------- 小工具 ---------- */
+  function fmtSize(n) {
+    var v = Number(n);
+    if (!isFinite(v) || v <= 0) return '—';
+    if (v < 1024) return v + ' B';
+    if (v < 1048576) return (v / 1024).toFixed(1) + ' KB';
+    return (v / 1048576).toFixed(2) + ' MB';
+  }
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    function p(x) { return (x < 10 ? '0' : '') + x; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+      p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  function absUrl(path) { return location.origin + path; }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function setStatus(kind, text) {
+    var el = $('status');
+    el.className = 'status on ' + kind;
+    el.textContent = text;
+  }
+  function clearStatus() { $('status').className = 'status'; $('status').textContent = ''; }
+  function headers(extra) {
+    var h = extra || {};
+    if (state.token) h['x-release-token'] = state.token;
+    return h;
+  }
+  function errText(data, fallback) {
+    if (data && data.error && data.error.message) {
+      return data.error.message + (data.error.code ? '（' + data.error.code + '）' : '');
+    }
+    return fallback;
+  }
+  function copyText(text, okMsg) {
+    var done = function () { setStatus('ok', okMsg || ('已复制：' + text)); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { window.prompt('手动复制这个链接：', text); });
+    } else {
+      window.prompt('手动复制这个链接：', text);
+    }
+  }
+  /** 由「版本号 + build」推出 KV 键，与 §4.2 示例 `3.8.0-14.ipa` 一致。 */
+  function deriveKey() {
+    var ver = ($('version').value || '').trim().replace(/[^0-9A-Za-z._-]/g, '');
+    var build = ($('build').value || '').trim();
+    if (!build) return '';
+    var name = (ver ? ver : 'app') + '-' + build + '.ipa';
+    return name.replace(/[^0-9A-Za-z._-]/g, '');
+  }
+
+  /* ---------- 公布口令（可选） ---------- */
+  try { state.token = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { state.token = ''; }
+  if (state.token) $('token').value = state.token;
+  $('token').addEventListener('input', function () { state.token = $('token').value.trim(); });
+  $('saveToken').addEventListener('click', function () {
+    state.token = $('token').value.trim();
+    try { localStorage.setItem(TOKEN_KEY, state.token); } catch (e) {}
+    setStatus('info', state.token ? '口令已记住（仅存本机 localStorage）。' : '口令已清空，将用站点会话发布。');
+  });
+  $('clearToken').addEventListener('click', function () {
+    state.token = '';
+    $('token').value = '';
+    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    setStatus('info', '口令已清除，之后一律用站点会话发布。');
+  });
+
+  /* ---------- 选择文件 ---------- */
+  var drop = $('drop'), fileInput = $('file');
+  drop.addEventListener('click', function () { fileInput.click(); });
+  drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+  drop.addEventListener('drop', function (e) {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) takeFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', function () {
+    if (fileInput.files && fileInput.files.length) takeFile(fileInput.files[0]);
+  });
+  function takeFile(f) {
+    if (!/\.ipa$/i.test(f.name)) { setStatus('err', '只接受 .ipa 文件（当前：' + f.name + '）。'); return; }
+    state.file = f;
+    drop.classList.add('has');
+    $('dropTitle').textContent = f.name;
+    $('dropSub').textContent = fmtSize(f.size) + ' · 点击可换文件';
+    clearStatus();
+    // 自动填 build：从文件名里捞最后一个 "-<数字>"，捞不到就留空让人填
+    var m = f.name.match(/-\s*(\d{1,9})\.ipa$/i);
+    if (m && !$('build').value) $('build').value = m[1];
+  }
+
+  /* ---------- 上传（XHR 才能拿到进度） ---------- */
+  function upload(onDone, onFail) {
+    if (!state.file) { onFail('还没选 ipa 文件。'); return; }
+    var key = deriveKey();
+    if (!key) { onFail('请先填 build（KV 键由「版本号-build.ipa」生成）。'); return; }
+    if (state.file.size > 20 * 1024 * 1024) { onFail('这个 ipa 是 ' + fmtSize(state.file.size) + '，超过 20MB 上限。'); return; }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', API_UPLOAD, true);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('x-file-name', key);
+    if (state.token) xhr.setRequestHeader('x-release-token', state.token);
+    xhr.responseType = 'text';
+
+    $('prog').classList.add('on');
+    $('progBar').style.width = '0%';
+
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) $('progBar').style.width = Math.round((e.loaded / e.total) * 100) + '%';
+    };
+    xhr.onload = function () {
+      $('progBar').style.width = '100%';
+      var data = null;
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e2) { data = null; }
+      if (xhr.status === 200 && data && data.ok) {
+        state.uploadedKey = data.key;
+        $('keyHint').innerHTML = '已上传：<code>' + esc(data.key) + '</code> · ' + fmtSize(data.size) +
+          ' · sha256 <code>' + esc(data.sha256 || '') + '</code>';
+        onDone(data);
+        return;
+      }
+      var map = {
+        401: '鉴权失败：请先通过站点登录，或在上方填写发布口令。',
+        413: '文件超过 20MB 上限（HTTP 413）。',
+        400: '请求被拒（HTTP 400）。'
+      };
+      onFail(errText(data, map[xhr.status] || ('上传失败（HTTP ' + xhr.status + '）')));
+    };
+    xhr.onerror = function () { onFail('网络异常，上传中断。'); };
+    xhr.send(state.file);
+  }
+
+  /* ---------- 发布 ---------- */
+  function publishVia(key, onDone, onFail) {
+    var build = Number(($('build').value || '').trim());
+    if (!isFinite(build) || build <= 0 || Math.floor(build) !== build) {
+      onFail('build 必须是正整数（App 的 CFBundleVersion）。'); return;
+    }
+    if (!key) { onFail('还没有 ipa 的 KV 键，请先上传。'); return; }
+    var payload = {
+      build: build,
+      version: ($('version').value || '').trim(),
+      notes: ($('notes').value || ''),
+      ipaKey: key
+    };
+    fetch(API_VERSION, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (d) { return { s: r.status, d: d }; });
+    }).then(function (res) {
+      if (res.s === 200 && res.d && res.d.ok) { onDone(res.d); return; }
+      var map = {
+        401: '鉴权失败：请先通过站点登录，或在上方填写发布口令。',
+        503: '服务端没配 RELEASE_TOKEN 且站点登录已关闭，写接口已关闭（请去 Cloudflare 配环境变量）。',
+        400: '参数被拒（400），常见原因：build 比线上小（build_regression）、或 ipaKey 在 KV 里不存在（ipa_key_missing）。'
+      };
+      onFail(errText(res.d, map[res.s] || ('发布失败（HTTP ' + res.s + '）')));
+    }).catch(function () { onFail('网络异常，发布未完成。'); });
+  }
+
+  function lock(on) {
+    state.busy = on;
+    $('publish').disabled = on;
+    $('uploadOnly').disabled = on;
+    $('refresh').disabled = on;
+  }
+
+  $('publish').addEventListener('click', function () {
+    if (state.busy) return;
+    lock(true); clearStatus();
+    if (!state.file && state.uploadedKey) {
+      // 已经上传过、只想改说明重发（同 build 允许覆盖）
+      setStatus('info', '没有新文件，直接用已上传的 ' + state.uploadedKey + ' 重发…');
+      publishVia(state.uploadedKey, afterPublish, function (msg) { lock(false); setStatus('err', msg); });
+      return;
+    }
+    setStatus('info', '正在上传 ' + (state.file ? state.file.name : '') + ' …');
+    upload(function (data) {
+      setStatus('info', '上传完成（' + fmtSize(data.size) + '），正在发布 build ' + $('build').value + ' …');
+      publishVia(data.key, afterPublish, function (msg) { lock(false); setStatus('err', msg); });
+    }, function (msg) { lock(false); setStatus('err', msg); });
+  });
+
+  $('uploadOnly').addEventListener('click', function () {
+    if (state.busy) return;
+    lock(true); clearStatus();
+    upload(function (data) {
+      lock(false);
+      setStatus('ok', '已上传（未发布）：' + data.key + ' · ' + fmtSize(data.size) + '\nsha256 ' + (data.sha256 || ''));
+    }, function (msg) { lock(false); setStatus('err', msg); });
+  });
+
+  function afterPublish(d) {
+    lock(false);
+    var l = d.latest || {};
+    setStatus('ok', '已发布 build ' + l.build + '（' + (l.version || '无版本号') + '）· ' + fmtSize(l.size) +
+      '\n边缘缓存与全球同步最长 60 秒，之后 App 端才会读到。');
+    $('prog').classList.remove('on');
+    state.file = null;
+    fileInput.value = '';
+    drop.classList.remove('has');
+    $('dropTitle').textContent = '拖拽 .ipa 到这里，或点击选择文件';
+    $('dropSub').textContent = '未签名包即可，签名在全能签里做 · 上限 20MB · 实测 2.1MB';
+    refresh();
+  }
+
+  /* ---------- 当前版本 / 历史 ---------- */
+  function renderLatest(latest) {
+    state.latest = latest;
+    if (!latest) {
+      $('cur').classList.remove('on');
+      $('curEmpty').style.display = 'block';
+      return;
+    }
+    $('curEmpty').style.display = 'none';
+    $('cur').classList.add('on');
+    $('curBadge').textContent = 'build ' + latest.build + ' · ' + (latest.version || '无版本号');
+    var rows = [
+      ['publishedAt', fmtTime(latest.publishedAt)],
+      ['size', fmtSize(latest.size)],
+      ['sha256', '<code>' + esc(latest.sha256 || '—') + '</code>'],
+      ['ipaPath', '<code>' + esc(latest.ipaPath || '—') + '</code>']
+    ];
+    $('curKv').innerHTML = rows.map(function (r) {
+      return '<div class="k">' + r[0] + '</div><div class="v">' + r[1] + '</div>';
+    }).join('');
+    $('curNotes').textContent = latest.notes || '（无更新说明）';
+    $('curNotes').style.display = latest.notes ? 'block' : 'none';
+  }
+
+  function renderHistory(list) {
+    var ul = $('hist');
+    ul.innerHTML = '';
+    if (!list || !list.length) { $('histEmpty').style.display = 'block'; return; }
+    $('histEmpty').style.display = 'none';
+    list.forEach(function (h) {
+      var li = document.createElement('li');
+      li.innerHTML =
+        '<div class="line1">' +
+          '<span class="b">build ' + esc(h.build) + '</span>' +
+          '<span class="ver">' + esc(h.version || '无版本号') + '</span>' +
+          '<span class="when">' + fmtTime(h.publishedAt) + ' · ' + fmtSize(h.size) + '</span>' +
+        '</div>' +
+        (h.notes ? '<div class="nt">' + esc(h.notes) + '</div>' : '');
+      var acts = document.createElement('div');
+      acts.className = 'acts';
+
+      var bCopy = document.createElement('button');
+      bCopy.type = 'button'; bCopy.className = 'mini'; bCopy.textContent = '复制直链';
+      bCopy.addEventListener('click', function () { copyText(absUrl(h.ipaPath || (API_DOWNLOAD + h.ipaKey)), '直链已复制，可粘进全能签。'); });
+
+      var bNsk = document.createElement('button');
+      bNsk.type = 'button'; bNsk.className = 'mini'; bNsk.textContent = '全能签打开';
+      bNsk.addEventListener('click', function () {
+        location.href = 'nsk-sign://web?url=' + encodeURIComponent(absUrl(h.ipaPath || (API_DOWNLOAD + h.ipaKey)));
+      });
+
+      var bDel = document.createElement('button');
+      bDel.type = 'button'; bDel.className = 'mini danger'; bDel.textContent = '撤回 build ' + h.build;
+      bDel.addEventListener('click', function () { withdraw(h.build); });
+
+      acts.appendChild(bCopy); acts.appendChild(bNsk); acts.appendChild(bDel);
+      li.appendChild(acts);
+      ul.appendChild(li);
+    });
+  }
+
+  function refresh() {
+    return fetch(API_VERSION, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) { setStatus('err', errText(d, '读取当前版本失败。')); return; }
+        renderLatest(d.latest);
+        return fetch(API_VERSION + '?_=' + Date.now(), { credentials: 'same-origin' })
+          .then(function () { /* 历史走本地渲染：history 只在磁盘的 KV 列表接口里，见下方说明 */ })
+          .catch(function () {});
+      })
+      .catch(function () { setStatus('err', '网络异常，读不到当前版本。'); });
+  }
+
+  /**
+   * 历史怎么来：契约里没有「读历史」的公开接口（§4.2 只定义了 5 个），
+   * 所以管理页把发布过的版本自己记在 localStorage 里做展示，
+   * 服务端 KV 里的 `release:ios:history` 才是权威数据（GET 只暴露 latest）。
+   * 这样不会为了「管理页好看」去加一个公开读历史的口子。
+   */
+  var LOCAL_HIST = 'release_admin_history';
+  function readLocalHist() {
+    try { var raw = localStorage.getItem(LOCAL_HIST); var arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; }
+    catch (e) { return []; }
+  }
+  function writeLocalHist(arr) {
+    try { localStorage.setItem(LOCAL_HIST, JSON.stringify(arr.slice(0, 5))); } catch (e) {}
+  }
+  function rememberLocal(meta) {
+    var arr = readLocalHist().filter(function (h) { return Number(h.build) !== Number(meta.build); });
+    arr.unshift({ build: meta.build, version: meta.version, notes: meta.notes, publishedAt: meta.publishedAt,
+      size: meta.size, ipaKey: meta.ipaKey, ipaPath: meta.ipaPath });
+    writeLocalHist(arr);
+    renderHistory(arr);
+  }
+
+  function withdraw(build) {
+    if (!confirm('确认撤回 build ' + build + '？\n撤回后若没有更旧的版本被重新发布，App 端将不再收到更新提示。')) return;
+    setStatus('info', '正在撤回 build ' + build + ' …');
+    fetch(API_VERSION + '?build=' + encodeURIComponent(build), {
+      method: 'DELETE', credentials: 'same-origin', headers: headers({})
+    }).then(function (r) {
+      return r.json().then(function (d) { return { s: r.status, d: d }; });
+    }).then(function (res) {
+      if (res.s === 200 && res.d && res.d.ok) {
+        setStatus('ok', '已撤回 build ' + build + '。');
+        writeLocalHist(readLocalHist().filter(function (h) { return Number(h.build) !== Number(build); }));
+        renderHistory(readLocalHist());
+        refresh();
+        return;
+      }
+      var map = { 401: '鉴权失败：请先通过站点登录，或填写发布口令。', 404: '这个 build 不存在（可能已撤回）。' };
+      setStatus('err', errText(res.d, map[res.s] || ('撤回失败（HTTP ' + res.s + '）')));
+    }).catch(function () { setStatus('err', '网络异常，撤回未完成。'); });
+  }
+
+  $('curCopy').addEventListener('click', function () {
+    var l = state.latest; if (!l) return;
+    copyText(absUrl(l.ipaPath), 'ipa 直链已复制（匿名可读，可直接粘进全能签）。');
+  });
+  $('curNsk').addEventListener('click', function () {
+    var l = state.latest; if (!l) return;
+    location.href = 'nsk-sign://web?url=' + encodeURIComponent(absUrl(l.ipaPath));
+  });
+  $('curDelete').addEventListener('click', function () {
+    var l = state.latest; if (l) withdraw(l.build);
+  });
+  $('refresh').addEventListener('click', function () { clearStatus(); refresh(); });
+
+  /* ---------- 启动 ---------- */
+  renderHistory(readLocalHist());
+  refresh();
+
+  // 本页由站点中间件保护（/admin/* 不在白名单），未登录会在进入本页前就被锁屏页挡下
+})();
+</script>
+</body>
+</html>
