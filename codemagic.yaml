@@ -88,7 +88,6 @@ workflows:
     artifacts:
       - SkyApp.ipa
 
-    publishing:
-      # 不发邮件、不传商店：只要一个能下载的文件
-      email:
-        disable: true
+    # 不需要 publishing 段：不写就不会发邮件、不传商店。
+    # 注意别写 `email: {disable: true}` —— Codemagic 已废弃这个字段，
+    # 现在 email 只接受 `recipients`（必填），写了 disable 会直接报 schema 校验失败。
