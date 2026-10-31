@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """批次 1 推送：全量同步 Sources/Resources/scripts，跳过 .github（令牌无 workflow scope）。"""
-import base64, json, os, re, subprocess, sys, urllib.request, urllib.error
+import base64, json, os, re, subprocess, sys, time, urllib.request, urllib.error
 
 REPO = 'ffzyf/ff-ios-app'
 ROOT = '/workspace/ios-app'
@@ -57,12 +57,28 @@ for rel, full in sorted(local.items()):
         continue
     with open(full, 'rb') as fh:
         content = base64.b64encode(fh.read()).decode()
-    st, blob = api('/repos/%s/git/blobs' % REPO, 'POST', {'content': content, 'encoding': 'base64'})
-    if st not in (200, 201):
-        sys.exit('blob 失败 %s: %s %s' % (rel, st, blob))
+
+    # 逐个上传 blob，带退避重试。
+    #
+    # 为什么需要重试：一次推 30+ 个文件时，GitHub 会在第 10~20 个 blob 上返回
+    # 400 "malformed request"（每次挂的文件都不一样，不是文件本身有问题）——
+    # 这是 per-second 的次级限流，换个时间重发就过。之前没有重试，整批推送直接失败，
+    # 已经上传的 blob 全部作废（没建 commit，无副作用，但白跑一遍）。
+    for attempt in range(5):
+        st, blob = api('/repos/%s/git/blobs' % REPO, 'POST', {'content': content, 'encoding': 'base64'})
+        if st in (200, 201):
+            break
+        # 400 / 422 / 403 / 5xx 一律退避重试；4xx 里只有 404 是真错（仓库权限），不重试
+        if st == 404 or attempt == 4:
+            sys.exit('blob 失败 %s: %s %s' % (rel, st, blob))
+        print('  … %s 返回 %s，%.1fs 后重试' % (rel, st, 0.8 * (attempt + 1)))
+        time.sleep(0.8 * (attempt + 1))
+
     entries.append({'path': rel, 'mode': '100755' if rel.endswith('.sh') else '100644',
                     'type': 'blob', 'sha': blob['sha']})
     changed_count += 1
+    # 限速：约 3 个 blob / 秒，低于 GitHub 的次级限流阈值
+    time.sleep(0.35)
 
 deleted = [p for p in remote if p not in local]
 for p in deleted:

@@ -125,6 +125,18 @@ enum Theme {
     /// 接口失败。浅色 5.0:1
     static let statusError = dyn(dark: "#FF8F7A", light: "#C43B22")
 
+    // MARK: - 涨跌（设计报告 §5 第 5 项）
+
+    /// 涨（中国习惯：涨红）。
+    ///
+    /// 为什么不能直接借 `statusError`：那是"出错了"的红，`+12%` 用它会读成报错。
+    /// 像素值与现有红色家族**刻意相同**（深 `#FF6B5A` / 浅 `#C43B22`），所以本 token 落地时
+    /// 不产生任何视觉漂移，只是把正确的语义名补上；Widget target 也编译本文件，故与其它 token
+    /// 一样走 `dyn`，不引入任何只在 App 可用的类型。
+    static let riseRed = dyn(dark: "#FF6B5A", light: "#C43B22")
+    /// 跌（跌绿）。同理不借 `statusNew` —— 那是"有新版本"的绿
+    static let fallGreen = dyn(dark: "#6BDB5C", light: "#1F6B22")
+
     // MARK: - 其他
 
     /// 分割线

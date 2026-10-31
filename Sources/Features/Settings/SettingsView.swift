@@ -143,8 +143,10 @@ struct SettingsView: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "3.0.0"
-        let build = info["CFBundleVersion"] as? String ?? "3"
+        // 读不到就给「—」而不是写死一个版本号：写死的话每次升版都要记得回来改这一行，
+        // 漏一次就会在设置页显示一个过期的旧版本，比显示「—」更容易误导。
+        let short = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
         return "\(short) (\(build))"
     }
 

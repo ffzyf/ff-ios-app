@@ -32,46 +32,78 @@ struct MoreView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.sectionGap) {
+            // 组间 32（`sectionGapLoose`）/ 组内 8（`gridUnit`）：改版前 4 行全是 48pt 等高 + 8pt 等距，
+            // 问卷 / 监控 / 设置 / 关于混在一列里，谁跟谁都读不出关系（设计报告 §4.5）
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 header
 
-                VStack(spacing: 8) {
-                    MoreRow(
-                        icon: "list.bullet.rectangle.portrait",
-                        title: "问卷工作台",
-                        detail: auth.isLoggedIn ? "已连接" : "未连接",
-                        isMuted: !auth.isLoggedIn
+                // 顶部两张 96pt tile：把"连接状态"从行内 13pt 的一小串字，
+                // 提成一组 20pt 的状态卡 —— 这一页最先该被看到的就是"连上了没有"
+                HStack(spacing: Spacing.cardGap) {
+                    statusTile(
+                        title: "问卷",
+                        value: auth.isLoggedIn ? "已连接" : "未连接",
+                        valueColor: auth.isLoggedIn ? Theme.limeInk : Theme.textTertiary,
+                        detail: auth.isLoggedIn ? "可进工作台" : "要管理密码"
                     ) {
                         openWorkspace()
                     }
 
-                    MoreRow(
-                        icon: "antenna.radiowaves.left.and.right",
+                    statusTile(
                         title: "推送监控",
-                        // 取不到就显示 nil（右侧留白）；绝不写「未知」——
-                        // 这行要么说事实（有新版本 / 已是最新 + 时间），要么什么都不说
-                        detail: monitor.summaryText,
-                        isMuted: monitor.summaryText == nil
+                        value: monitorTimeText,
+                        valueColor: Theme.textPrimary,
+                        detail: monitor.summaryText ?? "点开看明细"
                     ) {
                         showsMonitor = true
                     }
+                }
 
-                    MoreRow(
-                        icon: "gearshape",
-                        title: "设置",
-                        detail: nil,
-                        isMuted: false
-                    ) {
-                        showsSettings = true
+                VStack(alignment: .leading, spacing: 0) {
+                    SectionHeader(title: "工具")
+                    VStack(spacing: Spacing.gridUnit) {
+                        MoreRow(
+                            icon: "list.bullet.rectangle.portrait",
+                            title: "问卷工作台",
+                            detail: auth.isLoggedIn ? "已连接" : "未连接",
+                            isMuted: !auth.isLoggedIn
+                        ) {
+                            openWorkspace()
+                        }
+
+                        MoreRow(
+                            icon: "antenna.radiowaves.left.and.right",
+                            title: "推送监控",
+                            // 取不到就显示 nil（右侧留白）；绝不写「未知」——
+                            // 这行要么说事实（有新版本 / 已是最新 + 时间），要么什么都不说
+                            detail: monitor.summaryText,
+                            isMuted: monitor.summaryText == nil
+                        ) {
+                            showsMonitor = true
+                        }
                     }
+                }
 
-                    MoreRow(
-                        icon: "info.circle",
-                        title: "关于",
-                        detail: appVersion,
-                        isMuted: false
-                    ) {
-                        showsAbout = true
+                VStack(alignment: .leading, spacing: 0) {
+                    SectionHeader(title: "其他")
+                    VStack(spacing: Spacing.gridUnit) {
+                        MoreRow(
+                            icon: "gearshape",
+                            title: "设置",
+                            detail: nil,
+                            isMuted: false
+                        ) {
+                            showsSettings = true
+                        }
+
+                        MoreRow(
+                            icon: "info.circle",
+                            title: "关于",
+                            detail: appVersion,
+                            isMuted: false
+                        ) {
+                            showsAbout = true
+                        }
                     }
                 }
 
@@ -132,6 +164,59 @@ struct MoreView: View {
         }
     }
 
+    // MARK: - 顶部状态 tile
+
+    /// 96pt 状态 tile：眉题在上、状态在下，整块可点。
+    ///
+    /// 为什么单开一个组件而不是复用 `MoreRow`：行的信息量是"一行字 + 一个状态字"，
+    /// 而这一页第一眼要回答的是"连上了没有" —— 那需要一个 ≥20pt 的字（R6：每张卡都要有一个"大东西"）。
+    private func statusTile(
+        title: String,
+        value: String,
+        valueColor: Color,
+        detail: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: {
+            Haptics.light()
+            action()
+        }) {
+            GlassCard {
+                // 96 − 24（上下内距）= 72pt 可用：眉题 13 + 状态 24 + 说明 16 + 3 条 4pt 间距 = 65，
+                // 剩下的 7pt 由 `Spacer` 吃掉 —— 状态字因此被压到卡的下半部，两张 tile 底线对齐
+                VStack(alignment: .leading, spacing: 4) {
+                    Eyebrow(text: title)
+                    Spacer(minLength: 0)
+                    Text(value)
+                        // 20pt：连接状态从行内 13pt 提上来，这一页的"大东西"
+                        .font(Typography.titleM)
+                        .foregroundStyle(valueColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Text(detail)
+                        .font(Typography.footnote)
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .padding(Spacing.smallCardPadding)
+                .frame(height: CardTier.tile.height, alignment: .leading)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    /// 推送监控 tile 的大字：最近一次推送的时刻。
+    ///
+    /// 取不到就给「—」（与 `MonitorAppVersion.displayVersion` 同一套"没有就说没有"的做法），
+    /// 不写「未知」也不编一个时间；状态字仍由 `MonitorStore.summaryText` 提供，
+    /// 与「工具」组里那一行的口径完全同源。
+    private var monitorTimeText: String {
+        guard let last = monitor.response?.lastPushAt else { return "—" }
+        return Formatters.timeHHmm(last)
+    }
+
     // MARK: - 动作
 
     private func openWorkspace() {
@@ -142,7 +227,7 @@ struct MoreView: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        let short = info["CFBundleShortVersionString"] as? String ?? "3.0.0"
+        let short = info["CFBundleShortVersionString"] as? String ?? "—"
         return short
     }
 
@@ -299,12 +384,12 @@ struct MoreAboutSheet: View {
 
     private var appVersion: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        return info["CFBundleShortVersionString"] as? String ?? "3.0.0"
+        return info["CFBundleShortVersionString"] as? String ?? "—"
     }
 
     private var buildNumber: String {
         let info = Bundle.main.infoDictionary ?? [:]
-        return info["CFBundleVersion"] as? String ?? "3"
+        return info["CFBundleVersion"] as? String ?? "—"
     }
 
     /// 只显示域名：协议前缀对用户没有信息量

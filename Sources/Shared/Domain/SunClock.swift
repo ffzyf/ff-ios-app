@@ -214,7 +214,13 @@ extension SkyPhase {
         guard let today = SunClock.times(on: now) else { return nil }
         switch self {
         case .night:
-            // 夜里数到明天日出
+            // 夜里数到「下一次日出」。
+            //
+            // 不能一律取 `now + 24h` 的日出：`.night` 这一段横跨午夜，
+            // 凌晨 2 点仍属于 night，但那时"下一次日出"就是**今天** 06:05（4 小时后），
+            // 取明天会显示成 28 小时 —— 用户在「天光」组件上会看到"距日出 28 小时"，明显是错的。
+            // 判据：今天日出还没到 → 就是今天；已经过了（前半夜）→ 才跨到明天。
+            if now < today.sunrise { return today.sunrise }
             let tomorrow = now.addingTimeInterval(86_400)
             return SunClock.times(on: tomorrow)?.sunrise
         case .blueDawn:

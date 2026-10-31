@@ -166,6 +166,47 @@ struct EarningsActivity: Codable, Identifiable, Sendable {
     var entryCount: Int { liveEntries.count }
 }
 
+/// 平台预设与排序（与网页端的 `FIXED` 逐字一致）。
+///
+/// 平台**不是独立实体**：服务端没有任何"平台表"，平台名只是活动的一个字段，
+/// 平台列表由 `computeSummary` 从活动聚合出来。所以 App 侧也不需要存平台，
+/// 只保留两件事：
+/// 1. 建活动时给用户 5 个固定平台可以直接点（网页端 `var FIXED=[…]`）；
+/// 2. 展示时按「固定 5 个在前、自定义按首次出现」排序 —— 顺序与服务端一致，
+///    否则同一个账号在 App 与网页端看到的平台顺序会不一样。
+enum EarningsPlatformPreset {
+
+    /// 固定平台（顺序 = 网页端 `FIXED` 的顺序，不要重排）
+    static let fixed: [String] = ["抖音", "快手", "小红书", "网易创作酱", "网易光遇追光计划"]
+
+    /// 平台名上限（服务端 `MAX_PLATFORM_NAME`，与网页端 `slice(0,12)` 同口径）
+    static let maxNameLength: Int = 12
+
+    /// 活动名上限（服务端 `MAX_ACTIVITY_NAME`，与网页端 `slice(0,30)` 同口径）
+    static let maxActivityNameLength: Int = 30
+
+    /// 按「固定 5 个在前，自定义按首次出现」排好的平台列表。
+    ///
+    /// - Parameter activities: 服务端返回的活动（顺序即服务端数组顺序，最新的在最前）
+    /// - Returns: 去重后的平台名；固定平台始终存在（即便当前一个活动都没有）
+    static func ordered(from activities: [EarningsActivity]) -> [String] {
+        var custom: [String] = []
+        var seen = Set(fixed)
+        for activity in activities {
+            let name = activity.platform
+            guard name.isEmpty == false, seen.contains(name) == false else { continue }
+            seen.insert(name)
+            custom.append(name)
+        }
+        return fixed + custom
+    }
+
+    /// 某个平台下的活动（保持服务端顺序，不重排）
+    static func activities(_ activities: [EarningsActivity], in platform: String) -> [EarningsActivity] {
+        return activities.filter { $0.platform == platform }
+    }
+}
+
 /// 一笔收益条目（如「广告分成 +120」）。
 ///
 /// 字段对齐 `GET` 的 `activities[].entries[]` 与 `POST` 返回的 `entry`。
@@ -289,6 +330,36 @@ struct EarningsAddResponse: Codable, Sendable {
         ok = (try? c.decode(Bool.self, forKey: .ok)) ?? false
         entry = (try? c.decode(EarningsEntry.self, forKey: .entry))
             ?? EarningsEntry(id: "", type: "", amountCents: 0, amount: nil, currency: nil, note: nil, time: 0, date: nil, createdAt: 0, paid: false, paidAt: nil, deletedAt: nil)
+        summary = (try? c.decode(EarningsSummary.self, forKey: .summary))
+            ?? EarningsSummary(pending: 0, receivedUnclosed: 0, closed: 0, total: 0, monthAdded: 0, activityCount: 0, pendingActivityCount: 0, platformCount: 0, platformBreakdown: [])
+    }
+}
+
+/// 新建活动的请求体（仅出，不用解码）：`{name, platform}`。
+///
+/// 平台在这里只是活动的一个字段，不是独立实体 —— 服务端的平台列表是从活动的
+/// `platform` 聚合出来的（`computeSummary` 里的 `platMap`），所以新建活动只需要这两个字符串。
+struct EarningsActivityInput: Encodable, Sendable {
+    let name: String
+    let platform: String
+}
+
+/// `POST /api/app/earnings/activity` 的成功响应（`{ok, activity, summary, t, rev}`）。
+///
+/// 与 `EarningsAddResponse` 同一套"缺字段不崩"的写法：服务端少给 `summary` 时给 0 结构，
+/// 少给 `activity` 时给空活动（调用方仍能拿到 `ok` 与 `summary`，不至于因为有字段对不上就整条失败）。
+struct EarningsActivityAddResponse: Codable, Sendable {
+    let ok: Bool
+    let activity: EarningsActivity
+    let summary: EarningsSummary
+
+    private enum CodingKeys: String, CodingKey { case ok, activity, summary }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = (try? c.decode(Bool.self, forKey: .ok)) ?? false
+        activity = (try? c.decode(EarningsActivity.self, forKey: .activity))
+            ?? EarningsActivity(id: "", name: "", platform: "", time: 0, closedAt: nil, entries: [])
         summary = (try? c.decode(EarningsSummary.self, forKey: .summary))
             ?? EarningsSummary(pending: 0, receivedUnclosed: 0, closed: 0, total: 0, monthAdded: 0, activityCount: 0, pendingActivityCount: 0, platformCount: 0, platformBreakdown: [])
     }

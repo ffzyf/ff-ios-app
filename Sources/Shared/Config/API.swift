@@ -151,6 +151,15 @@ enum API {
         return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsEntryPath)
     }
 
+    /// 新建一个活动（`POST /api/app/earnings/activity`）。
+    ///
+    /// base 与 `earningsEntry()` 完全相同（`rockBase`）：建活动和记账写的是同一份 KV，
+    /// 所以 App 建的活动在网页端立刻可见，反之亦然。
+    /// Cookie / 请求体 / 错误映射都由 `EarningsStore.addActivity` 负责 —— 本层只拼地址。
+    static func earningsActivity() -> URL? {
+        return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsActivityPath)
+    }
+
     // MARK: - 收益站鉴权（与问卷站同一套路径，但域名不同）
 
     /// 收益站登录。**路径与问卷站完全一致**（`/api/auth/login`），只有域名不同

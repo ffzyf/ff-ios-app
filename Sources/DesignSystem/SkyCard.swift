@@ -28,6 +28,10 @@ struct SkyCard<Content: View>: View {
     /// 亮边切开。宜忌属于"地面上的注脚"，放在地平线**以下**才不会被弧线穿过。
     var note: String? = nil
     var cornerRadius: CGFloat = Radius.card
+    /// 卡片最小高度（设计报告 §4.3：同一份简报数据在首页是 168 摘要卡、在简报页是 260 hero）。
+    ///
+    /// 默认值 196 就是改版前的写死值 —— **默认参数下视觉零变化**，简报页等现有调用点不用改。
+    var minHeight: CGFloat = 196
     private let content: Content
 
     init(phase: SkyPhase,
@@ -36,6 +40,7 @@ struct SkyCard<Content: View>: View {
          sunsetText: String,
          note: String? = nil,
          cornerRadius: CGFloat = Radius.card,
+         minHeight: CGFloat = 196,
          @ViewBuilder content: () -> Content) {
         self.phase = phase
         self.now = now
@@ -43,6 +48,7 @@ struct SkyCard<Content: View>: View {
         self.sunsetText = sunsetText
         self.note = note
         self.cornerRadius = cornerRadius
+        self.minHeight = minHeight
         self.content = content()
     }
 
@@ -68,7 +74,7 @@ struct SkyCard<Content: View>: View {
             }
             .padding(Spacing.cardPadding)
         }
-        .frame(minHeight: 196)
+        .frame(minHeight: minHeight)
         .clipShape(shape)
         .overlay {
             shape.strokeBorder(Theme.glassStrokeTop.opacity(0.55), lineWidth: 1)
@@ -162,11 +168,14 @@ struct SkyCardBody: View {
     let lines: [String]
     let ink: Color
     let inkDim: Color
+    /// 标题字号。默认 17pt 保持改版前观感；首页摘要卡传 `Typography.titleM` 20pt，
+    /// 让"卡内最大字号 ≥20pt"这条（设计报告 R6）在小卡上也成立
+    var titleFont: Font = Typography.titleS
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(Typography.titleS)
+                .font(titleFont)
                 .foregroundStyle(ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)

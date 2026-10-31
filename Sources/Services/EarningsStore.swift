@@ -165,6 +165,93 @@ final class EarningsStore: ObservableObject {
         }
     }
 
+    // MARK: - 建活动（写接口）
+
+    /// 新建一个活动（`POST /api/app/earnings/activity`）。
+    ///
+    /// 与 `addEntry` 完全同一套规矩（同一个真相源，不允许另起一套）：
+    /// 1. 凭证只从 `auth.cookieHeader` 取，与 `load()` 同一来源；
+    /// 2. 401 → `handleExpired()`（清凭证 + 清内存 + 清快照），与 `load()` 的失效路径一字不差；
+    /// 3. 防连点：`isWriting` 在飞时直接拒（否则双击会建出两个同名活动 —— 第二个会被服务端 409 挡下，
+    ///    但没必要多打一次接口）。
+    ///
+    /// 错误策略（与 `addEntry` 一致的"服务端说了人话就照原样转给用户"）：
+    /// · **409**（同平台重名 / 乐观锁耗尽）→ 抛 `APIError.server(code: 409, message: 服务端原话)`。
+    ///   注意这里**不自动重试**：`entry` 的 409 是"数据变了，原样再发一次"，而建活动的 409
+    ///   是业务结论（该平台下已有同名活动），重发一百次也是同一个结果；
+    /// · 其他 4xx/5xx → 服务端原话（抽不到就让 `APIError` 的兜底文案接管）；
+    /// · 传输入错 → `APIError.network`，由 `userMessage` 给一句人话。
+    ///
+    /// 成功后**不本地拼接**，而是 `await load(force: true)` 重拉一遍：
+    /// 新建活动会改 `summary.activityCount` / `platformCount` / `platforms[]` 三处口径，
+    /// 本地拼一条活动出来容易和服务端算法漂移（尤其平台聚合是按金额排序的），
+    /// 直接读服务端那份最省心 —— 一次活动创建对网络往返不敏感，慢一点没关系。
+    /// - Parameters:
+    ///   - name: 活动名（调用方已 trim；服务端还会再校验 ≤ 30 字）
+    ///   - platform: 归属平台（固定 5 个之一，或用户自定义；服务端校验 ≤ 12 字）
+    /// - Returns: 服务端返回的新活动（id 由服务端生成，App 不能自己造）
+    @discardableResult
+    func addActivity(name: String, platform: String) async throws -> EarningsActivity {
+        guard let cookie = auth.cookieHeader else {
+            throw APIError.server(code: 401, message: "登录已过期，重新登录一下。")
+        }
+        guard !isWriting else {
+            throw APIError.server(code: 429, message: "上一步还在保存，稍等一下。")
+        }
+        isWriting = true
+        defer { isWriting = false }
+
+        let raw = try await client.send(makeActivityRequest(name: name, platform: platform, cookie: cookie))
+        switch raw.statusCode {
+        case 200..<300:
+            guard let decoded = try? APIJSON.decoder.decode(EarningsActivityAddResponse.self, from: raw.data),
+                  decoded.ok else {
+                throw APIError.decoding
+            }
+            // 写成功 → 让缓存失效 → 重拉（活动数与平台数都变了，交给服务端算）
+            await SnapshotCache.shared.remove(for: Self.cacheKey)
+            await load(force: true)
+            // 兜底：上一次 `load` 若正好有请求在飞会被它的 `guard !isLoading` 跳过，
+            // 此时列表里还没有这条新活动。用服务端返回的对象补一条到头部（与 web 端 unshift 一致），
+            // 保证弹页能立刻选中它记账；`summary` 一个数都不动，等下一次 `load` 自然对齐。
+            if activities.contains(where: { $0.id == decoded.activity.id }) == false,
+               decoded.activity.id.isEmpty == false {
+                activities.insert(decoded.activity, at: 0)
+            }
+            return decoded.activity
+        case 401:
+            errorText = "登录已过期，重新登录一下。"
+            await handleExpired()
+            throw APIError.server(code: 401, message: "登录已过期，重新登录一下。")
+        case 409:
+            // 业务型冲突（同平台重名）：服务端原话最准确，抽不到才用兜底文案。**不重试**。
+            let message = APIErrorEnvelope.anyMessage(from: raw.data)
+            throw APIError.server(code: 409, message: message.isEmpty ? "该平台下已有同名活动" : message)
+        default:
+            throw APIError.server(code: raw.statusCode, message: APIErrorEnvelope.anyMessage(from: raw.data))
+        }
+    }
+
+    /// 构造建活动请求：POST + `{name, platform}` + `Cookie: ce_auth=…`。
+    private func makeActivityRequest(name: String, platform: String, cookie: String) throws -> URLRequest {
+        guard let url = API.earningsActivity() else {
+            throw APIError.server(code: 0, message: "地址拼错了。")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        do {
+            request.httpBody = try JSONEncoder().encode(EarningsActivityInput(name: name, platform: platform))
+        } catch {
+            throw APIError.decoding
+        }
+        return request
+    }
+
     // MARK: - 内部
 
     /// 构造写请求：POST + JSON body + `Cookie: ce_auth=…`（凭证来源与 `load()` 相同）。

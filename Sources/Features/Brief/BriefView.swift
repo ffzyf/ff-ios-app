@@ -25,7 +25,8 @@ struct BriefView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.sectionGap) {
+            // 组间 32：改版前 4 个块统一 24 且没有分区标题，一页读下来是"一列卡"（设计报告 §3.3）
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 header
                 content
             }
@@ -89,12 +90,39 @@ struct BriefView: View {
     }
 
     private var loadedBlocks: some View {
-        VStack(alignment: .leading, spacing: Spacing.sectionGap) {
-            SkyVersionPanel(status: model.skyStatus)
-            TodayBriefCard(snapshot: model.todayBrief)
-            VersionRecordCard(status: model.skyStatus)
-            // 批次 4：推送状态只读行。取不到时组件自己渲染 EmptyView（整行隐藏，不写"未知"）
-            PushStatusRow(snapshot: model.todayBrief, monitor: monitor.response)
+        VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+            // 三个分组各给一个 22pt 分区标题：版本 / 简报详情 / 版本记录是这页的三件事，
+            // 改版前它们都是"同宽同圆角的玻璃卡"，只能靠读内容猜边界（报告 §3.3）
+            section("两服版本") {
+                SkyVersionPanel(status: model.skyStatus)
+            }
+            section("今日详情") {
+                TodayBriefCard(snapshot: model.todayBrief)
+            }
+            section("版本与推送") {
+                // `VersionRecordCard` 卡内自带「版本记录」这行 17pt 标题，
+                // 所以分区标题不同名（同一句话上下重复会被读成 bug）；
+                // 顺带把「推送状态」这一行收进同一个组 —— 改版前它是 11pt 单行收尾，页面止于最轻元素
+                VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                    VersionRecordCard(status: model.skyStatus)
+                    // 批次 4：推送状态只读行。取不到时组件自己渲染 EmptyView（整行隐藏，不写"未知"）
+                    PushStatusRow(snapshot: model.todayBrief, monitor: monitor.response)
+                }
+            }
+        }
+    }
+
+    /// 「分区标题 + 内容」的统一拼法。
+    ///
+    /// 用 `spacing: 0` 的 `VStack` 而不是再叠一层间距：`SectionHeader` 已经自带 12pt 下距，
+    /// 外层再加 12 就变成 24 —— 标题与它自己的内容会被读成两组（报告 §2 R3）。
+    private func section<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: title)
+            content()
         }
     }
 

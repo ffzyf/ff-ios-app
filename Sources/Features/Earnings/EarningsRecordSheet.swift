@@ -59,24 +59,31 @@ enum EarningsRecordDraft {
     }
 }
 
-// MARK: - 记账表单
+// MARK: - 记账弹页
 
-/// 「记一笔」表单 —— 对齐**网站版**的记账模型，不是记账 App 的通用模型。
+/// 「记一笔」弹页 —— 对齐**网站版**的记账模型，不是记账 App 的通用模型。
 ///
-/// 与网站版的四条一致性（这就是"把网站版的记账功能拿过来"的字面意思）：
-/// 1. **两层结构**：先选活动（`activity`），再往里挂 entry。没有活动就记不了账；
-/// 2. **只记收入**：没有"收入 / 支出"开关 —— 网站文档明确「本产品只记收入」；
-/// 3. **待发 / 已发是服务端字段**：新记的恒为待发，这里只做展示说明，不伪造可写字段；
-/// 4. **写服务端**：`POST /api/app/earnings/entry`，App 本地不存账本。
-///    存本地就成了第二个真相源，网页端与 App 必然对不上账。
+/// 与网站版的一致性（这就是"把网站版的收益板块拿过来"的字面意思）：
+/// 1. **两层结构**：先有活动，再把 entry 挂到活动下面。没有活动就记不了账；
+/// 2. **建活动 + 选平台**：`POST /api/app/earnings/activity` 建活动，
+///    平台跟活动一起填（平台不是独立实体，是从活动的 `platform` 聚合出来的）；
+/// 3. **只记收入**：没有"收入 / 支出"开关 —— 网站文档明确「本产品只记收入」；
+/// 4. **待发 / 已发是服务端字段**：新记的恒为待发，这里只做展示说明，不伪造可写字段；
+/// 5. **写服务端**：App 本地不存账本。存本地就成了第二个真相源，网页端与 App 必然对不上账。
 ///
-/// 汇总也不在这里算：顶部与 `EarningsView.heroCard` 用的是同一份服务端 `EarningsSummary`。
+/// 页面分成三块（`ScrollView` + 分组卡片，键盘弹出时不遮挡输入框）：
+///   ① 活动：按平台分组的活动胶囊 + 「＋ 新建活动」内联表单；
+///   ② 记一笔：金额 / 类型 / 日期 / 备注（没有活动时整块不出现）；
+///   ③ 页脚：只展示服务端给的数，不做本地汇总。
 struct EarningsRecordSheet: View {
 
     @ObservedObject private var store = EarningsStore.shared
     @Environment(\.dismiss) private var dismiss
 
+    // 活动选择
     @State private var activityId: String?
+
+    // 记一笔
     @State private var amountText: String = ""
     @State private var typeText: String = ""
     @State private var date: Date = EarningsRecordDraft.initialDate()
@@ -87,6 +94,17 @@ struct EarningsRecordSheet: View {
     /// 可直接上屏的错误（409 / 401 / 离线）
     @State private var errorText: String?
 
+    // 新建活动（内联表单，不跳第二个 sheet）
+    @State private var showsCreateForm: Bool = false
+    @State private var createName: String = ""
+    @State private var createPlatform: String = EarningsPlatformPreset.fixed.first ?? ""
+    @State private var createCustomPlatform: String = ""
+    @State private var isCreating: Bool = false
+    /// 建活动失败的错误文案（409 的服务端原话就显示在表单下方，不弹 alert）
+    @State private var createError: String?
+    /// 建成功后的提示（「已创建，接着记账」）
+    @State private var createHint: String?
+
     @FocusState private var isAmountFocused: Bool
 
     /// 显式 init：本 View 的存储属性全是私有 `@State` / `@ObservedObject`，
@@ -96,28 +114,18 @@ struct EarningsRecordSheet: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
                 titleRow
-
-                if store.activities.isEmpty {
-                    // 没有活动 = 没有记账入口（entry 必须挂在活动下）
-                    EarningsRecordNoActivityHint()
-                    footerNote
-                } else {
-                    EarningsRecordActivityPicker(activities: store.activities, selectedId: $activityId)
-                    EarningsRecordAmountField(text: $amountText, isFocused: $isAmountFocused, cents: amountCents)
-                    EarningsRecordTypeField(text: $typeText, recent: recentTypes)
-                    EarningsRecordPaidRow()
-                    EarningsRecordDateRow(date: $date)
-                    EarningsRecordNoteField(text: $note)
-                    saveBlock
-                    footerNote
+                activityCard
+                if hasActivities {
+                    recordCard
                 }
+                footerNote
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
             .padding(.top, 18)
-            .padding(.bottom, 28)
+            .padding(.bottom, Spacing.sectionGap)
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
@@ -135,16 +143,17 @@ struct EarningsRecordSheet: View {
     // MARK: - 头部
 
     private var titleRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.gridUnit) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("记一笔")
                     .font(Typography.titleL)
                     .foregroundStyle(Theme.textPrimary)
-                Text("写进服务端，网页端立刻是同一笔。")
+                Text("先选活动（没有就先建一个），再写进服务端 —— 网页端立刻是同一笔。")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
+                    .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: Spacing.gridUnit)
             Button {
                 Haptics.light()
                 dismiss()
@@ -160,10 +169,97 @@ struct EarningsRecordSheet: View {
         }
     }
 
+    // MARK: - 区块一：活动
+
+    private var activityCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                sectionHeader(
+                    title: "活动",
+                    icon: "square.stack.3d.up",
+                    accessory: hasActivities ? "\(store.activities.count) 个" : nil
+                )
+
+                EarningsRecordActivityPicker(activities: store.activities, selectedId: $activityId)
+
+                if showsCreateForm {
+                    EarningsRecordActivityCreateForm(
+                        name: $createName,
+                        platform: $createPlatform,
+                        customPlatform: $createCustomPlatform,
+                        platformOptions: platformOptions,
+                        isSubmitting: isCreating,
+                        errorText: createError,
+                        canSubmit: canCreate,
+                        onSubmit: createActivity,
+                        onCancel: cancelCreate
+                    )
+                } else {
+                    newActivityButton
+                }
+
+                if let createHint {
+                    Text(createHint)
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.limeInk)
+                }
+            }
+            .padding(Spacing.cardPadding)
+        }
+    }
+
+    /// 「＋ 新建活动」入口（点开才出现内联表单，少一次 sheet 往返）
+    private var newActivityButton: some View {
+        Button {
+            toggleCreateForm()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.limeInk)
+                Text("新建活动")
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.limeInk)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background {
+                RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous)
+                    .fill(Theme.glassTintLime)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous)
+                    .strokeBorder(Theme.divider, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("新建活动")
+    }
+
+    // MARK: - 区块二：记一笔
+
+    private var recordCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                sectionHeader(title: "记一笔", icon: "pencil.line", accessory: selectedActivity?.platform)
+
+                EarningsRecordAmountField(text: $amountText, isFocused: $isAmountFocused, cents: amountCents)
+                EarningsRecordTypeField(text: $typeText, recent: recentTypes)
+                EarningsRecordPaidRow()
+                EarningsRecordDateRow(date: $date)
+                EarningsRecordNoteField(text: $note)
+                saveBlock
+            }
+            .padding(Spacing.cardPadding)
+        }
+    }
+
     // MARK: - 保存
 
     private var saveBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Spacing.gridUnit) {
             Button {
                 save()
             } label: {
@@ -186,7 +282,7 @@ struct EarningsRecordSheet: View {
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.limeInk)
             } else if canSave == false {
-                Text("金额大于 0、填了类型才能保存。")
+                Text("选中活动、金额大于 0、填了类型才能保存。")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
             }
@@ -205,15 +301,67 @@ struct EarningsRecordSheet: View {
                     .foregroundStyle(Theme.textSecondary)
                     .monospacedDigit()
             }
-            Text("只记收入：金额、类型、日期写进服务端后，汇总由服务端算，App 与网页端读的是同一份账。")
+            Text("只记收入：活动与金额都写进服务端，汇总由服务端算，App 与网页端读的是同一份账。")
                 .font(Typography.captionXS)
                 .foregroundStyle(Theme.textTertiary)
                 .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+    }
+
+    /// 区块标题（与 `EarningsView.sectionTitle` 同一套观感）
+    private func sectionHeader(title: String, icon: String, accessory: String? = nil) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(Typography.caption)
+                .foregroundStyle(Theme.textTertiary)
+            Text(title)
+                .font(Typography.caption)
+                .foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: 4)
+            if let accessory, accessory.isEmpty == false {
+                Text(accessory)
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     // MARK: - 计算
+
+    private var hasActivities: Bool {
+        return store.activities.isEmpty == false
+    }
+
+    /// 当前选中的活动（用于显示平台、决定新建表单的默认平台）
+    private var selectedActivity: EarningsActivity? {
+        guard let activityId else { return nil }
+        return store.activities.first { $0.id == activityId }
+    }
+
+    /// 建活动时可选平台：固定 5 个在前，自定义按首次出现（与服务端聚合同序）
+    private var platformOptions: [String] {
+        return EarningsPlatformPreset.ordered(from: store.activities)
+    }
+
+    /// 建活动时最终要提交的平台名（选了「新平台」就取输入框里的）
+    private var createPlatformName: String {
+        if createPlatform == EarningsRecordPlatformPicker.newPlatformToken {
+            return createCustomPlatform.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return createPlatform.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 名称非空 + 平台非空且不超长 → 才能点「创建」
+    private var canCreate: Bool {
+        guard isCreating == false else { return false }
+        guard createName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return false }
+        let platform = createPlatformName
+        guard platform.isEmpty == false else { return false }
+        return platform.count <= EarningsPlatformPreset.maxNameLength
+    }
 
     /// 金额（整数分）；`nil` = 空 / 中间态（`"."`），`0` = 还没输到钱
     private var amountCents: Int? {
@@ -259,9 +407,67 @@ struct EarningsRecordSheet: View {
             // 预填最近用过的类型：连续录入同一活动的同类奖励时，少打一次字
             typeText = first
         }
-        if store.activities.isEmpty == false {
-            // 记一笔的第一步永远是输金额
+        if hasActivities {
+            // 有活动时，记一笔的第一步永远是输金额。
+            // 没活动时不抢焦点：那时该做的是先建活动（表单展开时自己会聚焦名称框）。
             isAmountFocused = true
+        }
+    }
+
+    private func toggleCreateForm() {
+        Haptics.light()
+        showsCreateForm.toggle()
+        createError = nil
+        createHint = nil
+        guard showsCreateForm else { return }
+        // 默认平台跟着当前选中的活动走；没选过就落到第一个固定平台（与网页端默认一致）
+        createPlatform = selectedActivity?.platform ?? (EarningsPlatformPreset.fixed.first ?? "")
+        createCustomPlatform = ""
+    }
+
+    private func cancelCreate() {
+        Haptics.light()
+        showsCreateForm = false
+        createError = nil
+        createName = ""
+        createCustomPlatform = ""
+    }
+
+    /// 建活动：成功后**自动选中新活动**并收起表单，接着就能记一笔。
+    ///
+    /// 为什么失败只把文案贴在表单下方：重名（409）不是"出错了"，而是"这个平台下已经有同名的了"，
+    /// 用户要做的是改个名字再点一次 —— 弹 alert 会打断这条唯一的最短路径。
+    private func createActivity() {
+        let name = createName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let platform = createPlatformName
+        guard name.isEmpty == false, platform.isEmpty == false, isCreating == false else {
+            Haptics.error()
+            return
+        }
+
+        isCreating = true
+        createError = nil
+        createHint = nil
+
+        Task {
+            do {
+                let activity = try await store.addActivity(name: name, platform: platform)
+                Haptics.success()
+                activityId = activity.id          // 自动选中刚建的活动
+                showsCreateForm = false           // 收起表单，视线回到「记一笔」
+                createName = ""
+                createCustomPlatform = ""
+                createPlatform = platform         // 下次建同平台活动不用重点
+                createHint = "已创建，接着记账"
+                errorText = nil
+            } catch let error as APIError {
+                Haptics.error()
+                createError = error.userMessage
+            } catch {
+                Haptics.error()
+                createError = "没建成，稍后再试。"
+            }
+            isCreating = false
         }
     }
 

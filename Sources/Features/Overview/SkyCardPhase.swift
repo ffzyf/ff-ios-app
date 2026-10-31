@@ -17,7 +17,21 @@ enum SkyCardPhase {
 
     static func resolve(_ status: SkyStatus?) -> SkyCardPhase {
         guard let status = status else { return .unchecked }
-        switch status.status {
+        return phase(for: status.status)
+    }
+
+    /// 单服版本 → 四态（首页「今日一览」两张 tile 用）。
+    ///
+    /// 走同一个私有映射函数而不是再抄一遍 switch：四态表是业务规则，
+    /// 复制一份迟早会出现"整卡说有新版本、tile 说已是最新"。
+    static func resolve(_ app: SkyAppVersion?) -> SkyCardPhase {
+        guard let app = app else { return .unchecked }
+        return phase(for: app.status)
+    }
+
+    /// `SkyState` → 卡面四态。**全工程唯一一张映射表。**
+    private static func phase(for state: SkyState) -> SkyCardPhase {
+        switch state {
         case .newVersion:
             return .newVersion
         case .noChange:

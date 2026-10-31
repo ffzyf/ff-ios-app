@@ -25,13 +25,14 @@ struct RockCalendarView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+            // 组间 32 / 组内 12：改版前 6 个块全部 `cardGap 12` 等距平铺，
+            // 月历（336pt）与 32pt 高的翻月器被同样对待，重块被轻块夹住（设计报告 §3.2）
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 header
                 NextEventBar(days: rock.allLoadedDays)
-                monthSwitcher
-                gridCard
-                MonthDistributionCard(days: rock.visibleDays)
-                rulesRow
+                monthGroup
+                distributionGroup
+                rulesGroup
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
@@ -109,26 +110,65 @@ struct RockCalendarView: View {
         return "月历 · 场次 · 规律"
     }
 
+    // MARK: - 分组
+
+    /// 「本月」组：分区标题 + 翻月器（塞进标题右侧插槽）+ 月历。
+    ///
+    /// 翻月器原来独立占一行 40pt、前后各 12pt，白白吃掉一屏的 64pt；
+    /// 塞进插槽之后，它和"本月"这个标题说的是同一件事，也就该在同一行（报告 §4.2）。
+    private var monthGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // `SectionHeader` 自带 12pt 下距，所以只用 spacing 0 的 VStack 就是"标题 + 12 + 内容"
+            SectionHeader(title: "本月") {
+                monthSwitcher
+            }
+
+            if showsMonthEmptyNote {
+                Text("本月排期尚未生成")
+                    .font(Typography.footnote)
+                    .foregroundStyle(Theme.textTertiary)
+                    .padding(.bottom, Spacing.gridUnit)
+            }
+
+            gridCard
+        }
+    }
+
+    /// 「本月分布」组：折叠图从"和月历同级的一张卡"降级成月历之后的第二层信息。
+    ///
+    /// 分区标题写「场次分布」而不是「本月分布」：卡内那一行本身就是展开开关（写的是「本月分布」），
+    /// 分区标题若与它同名，同一句话上下相距 30pt 出现两次会被读成 bug。
+    /// 「场次」这个词来自本页副标题（月历 · 场次 · 规律），不是新造的区块名。
+    private var distributionGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "场次分布")
+            MonthDistributionCard(days: rock.visibleDays)
+        }
+    }
+
+    /// 「规律」组：原来是一行没有归属的 `GlassListRow`，现在给它一个 22pt 的分区标题。
+    /// 同样不同名重复：行内写的是「为什么是这天？」，分区说清"这是一组规律说明"就够。
+    private var rulesGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "规律")
+            rulesRow
+        }
+    }
+
     // MARK: - 翻月
 
+    /// 翻月器（现在住在「本月」的右侧插槽里，所以去掉了两端 `Spacer` 与整行高度）
     private var monthSwitcher: some View {
         HStack(spacing: 8) {
             monthArrow(icon: "chevron.left", enabled: rock.canShiftBackward, offset: -1, label: "上个月")
-            Spacer(minLength: 0)
-            VStack(spacing: 2) {
-                Text(Formatters.monthTitle(rock.visibleMonth))
-                    .font(Typography.titleM)
-                    .foregroundStyle(Theme.textPrimary)
-                if showsMonthEmptyNote {
-                    Text("本月排期尚未生成")
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
-                }
-            }
-            Spacer(minLength: 0)
+            Text(Formatters.monthTitle(rock.visibleMonth))
+                // 17pt：它紧挨着 22pt 的分区标题，再大就变成"两个标题"
+                .font(Typography.titleS)
+                .foregroundStyle(Theme.textPrimary)
+                .monospacedDigit()
+                .lineLimit(1)
             monthArrow(icon: "chevron.right", enabled: rock.canShiftForward, offset: 1, label: "下个月")
         }
-        .padding(.horizontal, 2)
     }
 
     /// 只有"明确拿到了这个月但一条都没有"时才提示；加载中不提示（否则会闪一下）
@@ -146,13 +186,14 @@ struct RockCalendarView: View {
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
+                // 不可用时只靠颜色区分：`.opacity()` 只允许作用在 `Theme.*` token 上
+                // （PRD §3.4：透明度只能出现在 Theme 的 dyn/dyna 里），所以这里不再叠一层透明度
                 .foregroundStyle(enabled ? Theme.textSecondary : Theme.textTertiary)
                 .frame(width: 32, height: 32)
                 .background { Circle().fill(Theme.surfaceTint2) }
         }
         .buttonStyle(PressableStyle())
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.45)
         .accessibilityLabel(label)
     }
 

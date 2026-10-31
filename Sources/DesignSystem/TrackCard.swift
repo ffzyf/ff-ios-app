@@ -33,6 +33,12 @@ struct TrackCard<Content: View>: View {
     var arcGap: CGFloat = 22
     /// 弧顶横向位置
     var peak: CGFloat = 0.66
+    /// 卡片最小高度。`nil` = 由内容决定（改版前的行为）。
+    ///
+    /// 为什么这里必须给入口：首页要的 hero 240pt 是"卡片高度"，而卡内的内容量是浮动的
+    /// （今日可能是 1 场也可能是 3 场）。在卡片外面套 `.frame(minHeight:)` 只会把底盘撑不出
+    /// （背景是按内容算的），所以最小高度只能加在**底盘内部、背景之前**。
+    var minHeight: CGFloat? = nil
     /// 背景样式：轨迹弧（通用）/ 光遇云海（红石提醒卡用）。
     ///
     /// 为什么做成二选一而不是叠在一起：红线是"文字永远不被装饰压住"，
@@ -46,6 +52,7 @@ struct TrackCard<Content: View>: View {
          arcBand: CGFloat = 52,
          arcGap: CGFloat = 22,
          peak: CGFloat = 0.66,
+         minHeight: CGFloat? = nil,
          backdrop: TrackBackdrop = .arc,
          @ViewBuilder content: () -> Content) {
         self.progress = progress
@@ -54,6 +61,7 @@ struct TrackCard<Content: View>: View {
         self.arcBand = arcBand
         self.arcGap = arcGap
         self.peak = peak
+        self.minHeight = minHeight
         self.backdrop = backdrop
         self.content = content()
     }
@@ -68,6 +76,8 @@ struct TrackCard<Content: View>: View {
             // 先让出「光轨带 + 呼吸」，再铺背景 —— 顺序反了背景就盖不到留白处，弧线会被裁掉。
             // 云海背景是铺满整卡的，不需要额外留白（云本来就画在底部，不压字）。
             .padding(.bottom, backdrop == .arc ? arcBand + arcGap : arcGap * 0.6)
+            // 最小高度必须落在背景之前：这样背景（渐变 / 云海 / 描边）才铺得满那截"撑出来的"高度
+            .frame(minHeight: minHeight)
             .background {
                 ZStack {
                     LinearGradient(

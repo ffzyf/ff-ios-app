@@ -31,6 +31,24 @@ enum Typography {
     /// 11pt Medium —— Caps 分区标签、时间戳
     static let captionXS = Font.system(size: 11, weight: .medium)
 
+    // MARK: - 数字锚点 / 眉题（设计报告 §5 第 2–4 项）
+
+    /// 40pt Bold Rounded —— **大卡里的那一个数字**（首页倒计时、收益总额）。
+    ///
+    /// 之前这两个位置分别 inline 硬写 36 与 40：同一个语义两个值，还没法统一调。
+    /// 走 `.rounded` 是因为数字在圆角卡片上是"读数"不是"正文"，圆体让 0/8/9 更易分辨。
+    static let metricL = Font.system(size: 40, weight: .bold, design: .rounded)
+    /// 28pt Bold Rounded —— tile（96pt）里的数字：比 `titleL` 大、比 `metricL` 小，
+    /// 补的正是现有字阶 22 → 34 之间的空档
+    static let metricM = Font.system(size: 28, weight: .bold, design: .rounded)
+    /// 11pt Semibold —— 眉题（"红石 · 今日"这类"这是什么栏目"）。
+    ///
+    /// 不复用 `captionXS`：那个是 11 medium 无字距，用于时间戳；眉题要"更小更宽"才不会被
+    /// 当成元信息读走（中文不做大写变形，只能靠字距和字重差异）。
+    static let eyebrow = Font.system(size: 11, weight: .semibold)
+    /// 眉题字距（配合 `eyebrow` 使用）
+    static let trackingEyebrow: CGFloat = 0.5
+
     /// 13pt 等宽 —— 代码块（SF Mono）
     static let code = Font.system(size: 13, weight: .regular, design: .monospaced)
     /// 15pt 等宽 —— 版本号

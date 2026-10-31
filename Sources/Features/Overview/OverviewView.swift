@@ -1,22 +1,31 @@
 import SwiftUI
 import Foundation
 
-/// 概览首页（Tab 1，PRD §3.1 / 设计文档 T05）。
+/// 概览首页（Tab 1）。
 ///
-/// 职责边界（这里比 PRD 少一样东西，写清楚免得被当成漏做）：
-/// · 本页负责「日期头 + 光遇状态卡 + 快捷入口」三段；
-/// · PRD §3.1 第 5 条「今日简报摘要卡」的数据域归简报页（T08）。
+/// 版式（设计报告 §4.1）：**1 大 + 1 中 + N 小 + 每组一条横滑**，组间 32 / 组内 12：
+/// ```
+/// 日期头
+/// ─ 32 ─
+/// 红石 hero 240                    ┐ 组内 12
+/// 简报 medium 168                  ┘
+/// ─ 32 ─
+/// 「今日一览」+ 两张 96 tile
+/// ─ 32 ─
+/// 「继续读」+ rail 140×188（无文章时整块不渲染）
+/// ─ 32 ─
+/// 「快捷」+ 3 枚胶囊
+/// ```
 ///
-/// 数据只从 `AppModel` 读（页面绝不自己发请求），Tab 状态由 RootView 通过 `selectedTab` 注入。
+/// 改版动机（报告 §1）：原来一页并存两套组距（12 与 24），三张大卡同宽同高同阴影，
+/// 没有 22pt 分区标题、没有横向滚动、没有一张图 —— 空不是块少，是每块"内容占比"低且块间无差。
 ///
-/// B 批次首页精简（任务 5）：删除「最近写的」区块（连同其整文件、快照属性、变更订阅与同步逻辑、
-/// 以及只为它服务的 `onOpenArticle` 参数一并移除）。
-/// 首页只留：红石倒计时卡 / 光遇状态卡 / 快捷入口，整体更短更清爽。
+/// 职责边界不变：数据只从 `AppModel` / `RockStore` 读（页面绝不自己发请求），
+/// Tab 状态由 `RootView` 通过 `selectedTab` 注入。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
-    /// 红石数据（批次 2 新增）。概览只读它来画置顶倒计时卡，不发任何红石请求
-    /// （请求由 `RootView` 的 task 统一发起，页面绝不自己开请求，§7.3）
-    @EnvironmentObject private var rock: RockStore
+    /// 红石数据不再由本页直读：hero 卡自己从环境取 `RockStore`。
+    /// 请求仍由 `RootView` 的 task 统一发起（页面绝不自己开请求，§7.3）。
     @Binding private var selectedTab: AppTab
     /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入，切 Tab 回来大致回到原位。
     private let scrollPosition: Binding<ScrollPosition>
@@ -30,11 +39,13 @@ struct OverviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.sectionGap) {
+            // 组间 32：`sectionGapLoose`（= 2.67 × 组内 12），层级靠间距差读出来
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 OverviewHeader(lunar: lunarText) {
                     showsSettings = true
                 }
-                bodyContent
+                topPair
+                loadedBlocks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
@@ -55,8 +66,7 @@ struct OverviewView: View {
         .refreshable {
             await model.refresh()
         }
-        // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）：
-        // 刷新失败不清空内容，只弹这一条（2.5s 自动消失）
+        // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）
         .overlay(alignment: .bottom) {
             PageToast()
         }
@@ -65,53 +75,80 @@ struct OverviewView: View {
         }
     }
 
-    // MARK: - 状态分发
+    // MARK: - 首屏两张主卡（同一组）
 
-    /// 有内容就渲染内容；第一次就失败才整页错误态（PRD §7：错误态不清空已有内容）
+    /// hero + medium：它们回答同一件事（"此刻"），所以组内 12、不与下一组等距。
     ///
-    /// 批次 2：红石倒计时卡**恒定置顶**（P01），哪怕 feed 挂了也先让用户看到"下一场还有多久" ——
-    /// 这张卡的数据源与 feed 完全独立（红石站 vs 博客站），没有理由被 feed 的失败连坐。
-    @ViewBuilder
-    private var bodyContent: some View {
+    /// 两张卡**恒定渲染**、与 feed 的加载状态解耦 —— feed 慢或挂了，首页上半屏依然是完整内容，
+    /// 不会出现"整页灰骨架"（红石卡的数据源与 feed 完全不同域，没有理由被连坐）。
+    private var topPair: some View {
         VStack(alignment: .leading, spacing: Spacing.cardGap) {
-            // 两张「轨迹卡」恒定占位：红石（自己的请求）+ 简报（自己的请求）。
-            // 刻意与 feed 的加载状态解耦 —— feed 慢/挂了，首页上半屏依然是完整的一屏内容，
-            // 不会出现"整页灰骨架"（V3.1 返工的核心：骨架只留给还在加载的那一块）。
-            RedstoneCountdownCard(onOpenRock: openRock)
+            RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
 
             TodayBriefTrackCard(snapshot: model.todayBrief) {
                 openBrief()
             }
+        }
+    }
 
-            if model.hasAnyContent {
-                loadedBlocks
-            } else if let error = firstError {
-                ErrorStateView(
-                    icon: error.icon,
-                    title: error.title,
-                    message: error.hint,
-                    onRetry: {
-                        Task { await model.refresh() }
+    // MARK: - 状态分发
+
+    /// 有内容就渲染内容；第一次就失败才整页错误态（PRD §7：错误态不清空已有内容）
+    @ViewBuilder
+    private var loadedBlocks: some View {
+        if model.hasAnyContent {
+            VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+                versionsSection
+                if railArticles.isEmpty == false {
+                    continueReadingSection
+                }
+                quickSection
+            }
+        } else if let error = firstError {
+            ErrorStateView(
+                icon: error.icon,
+                title: error.title,
+                message: error.hint,
+                onRetry: {
+                    Task { await model.refresh() }
+                }
+            )
+        } else {
+            // 轻量骨架：只托住还没到的分区，不再整页铺 6 块灰条
+            VStack(alignment: .leading, spacing: Spacing.cardGap) {
+                SkeletonBlock(height: CardTier.tile.height, cornerRadius: Radius.card)
+                SkeletonBlock(height: CardTier.tile.height, cornerRadius: Radius.card)
+            }
+        }
+    }
+
+    /// 「今日一览」：两张 96 tile（原 `SkyStatusCard` 整卡留给简报页）
+    private var versionsSection: some View {
+        // spacing 0：`SectionHeader` 自带 12pt 下距，这里再加一次会变成 24（等于又造一套组距）
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "今日一览", actionTitle: "全部", action: openBrief)
+            VersionTileRow(status: model.skyStatus, onTap: openBrief)
+        }
+    }
+
+    /// 「继续读」：横向 rail。**没有文章就整块不渲染** —— 宁可少一组，不画空卡
+    private var continueReadingSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "继续读", actionTitle: "更多", action: openArticles)
+            Rail {
+                ForEach(railArticles) { article in
+                    ArticleRailCard(article: article) {
+                        openArticles()
                     }
-                )
-            } else {
-                // 轻量骨架：只为「版本卡 + 快捷入口」这一块占位（不再整页铺 6 块灰条）。
-                // 上半屏两张轨迹卡已经是真实内容，这里只需要把还没到的部分轻轻托住。
-                VStack(alignment: .leading, spacing: Spacing.cardGap) {
-                    SkeletonBlock(height: 132, cornerRadius: Radius.card)
-                    SkeletonBlock(height: 76, cornerRadius: Radius.card)
                 }
             }
         }
     }
 
-    private var loadedBlocks: some View {
-        VStack(alignment: .leading, spacing: Spacing.sectionGap) {
-            SkyStatusCard(status: model.skyStatus) {
-                withAnimation(Motion.tab) {
-                    selectedTab = .brief
-                }
-            }
+    /// 「快捷」：分组标题 + 3 枚胶囊（组件保留不动，只升格进分组）
+    private var quickSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: "快捷")
             QuickEntryRow(entries: quickEntries, onSelect: handleQuickEntry)
         }
     }
@@ -129,19 +166,23 @@ struct OverviewView: View {
     private func handleQuickEntry(_ entry: QuickEntry) {
         switch entry.id {
         case 0:
-            withAnimation(Motion.tab) {
-                selectedTab = .articles
-            }
+            openArticles()
         case 1:
-            withAnimation(Motion.tab) {
-                selectedTab = .brief
-            }
+            openBrief()
         default:
             showsSettings = true
         }
     }
 
     // MARK: - 派生数据
+
+    /// 「继续读」的数据源：已加载文章的前 8 篇。
+    ///
+    /// 只取 8 篇而不是全量：rail 是"看看还有什么"的入口，不是列表页；
+    /// 全量塞进 `LazyHStack` 会让首帧多算几十个 `CoverArt`（每个都带 Canvas 噪点）。
+    private var railArticles: [ArticleSummary] {
+        return Array(model.articles.prefix(8))
+    }
 
     /// 农历 / 节气副行：取不到就返回 nil，整行不占位（PRD §3.1 第 3 条）
     private var lunarText: String? {
@@ -168,18 +209,28 @@ struct OverviewView: View {
 
     /// 倒计时卡点击 → 切到红石 Tab。
     ///
-    /// 走现有的 `selectedTab` binding，**不新建导航栈**：根视图是条件渲染的 5 个页面 + 自绘 Tab 栏，
-    /// 再塞一个 `NavigationStack` 会让 Tab 栏与页面层级打架（也会把当前页面重新包一层容器）。
+    /// 走现有的 `selectedTab` binding，**不新建导航栈**：根视图是条件渲染的 6 个页面 + 自绘 Tab 栏，
+    /// 再塞一个 `NavigationStack` 会让 Tab 栏与页面层级打架。
     private func openRock() {
         withAnimation(Motion.tab) {
             selectedTab = .rock
         }
     }
 
-    /// 简报轨迹卡点击 → 切到简报 Tab
+    /// 简报轨迹卡 / 版本 tile 点击 → 切到简报 Tab
     private func openBrief() {
         withAnimation(Motion.tab) {
             selectedTab = .brief
+        }
+    }
+
+    /// rail 卡 / 「全部文章」→ 切到文章 Tab。
+    ///
+    /// 文章详情是 `RootView` 的全屏覆盖，入口只接受 `ArticleSummary`；
+    /// 首页没有详情入口（B 批次已删掉那套参数），所以这里落到列表页而不是"假装打开详情"。
+    private func openArticles() {
+        withAnimation(Motion.tab) {
+            selectedTab = .articles
         }
     }
 }

@@ -53,7 +53,10 @@ struct TodayBriefTrackCard: View {
             now: now,
             sunriseText: sunText(snapshot?.sunrise, isSunrise: true, now: now),
             sunsetText: sunText(snapshot?.sunset, isSunrise: false, now: now),
-            note: ritualText
+            note: ritualText,
+            // 首页的是**摘要卡**（168），简报页才是 hero —— 同一份数据两页分饰两角，
+            // 不能是"一样高的两张卡"（设计报告 §4.3）
+            minHeight: CardTier.medium.height
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
@@ -73,7 +76,9 @@ struct TodayBriefTrackCard: View {
                     title: bodyParts.headline,
                     lines: bodyParts.lines,
                     ink: sky.ink,
-                    inkDim: sky.inkDim
+                    inkDim: sky.inkDim,
+                    // 卡内最大字号 ≥20pt（设计报告 R6）：17pt 的小卡撑不起"这是今天的正事"
+                    titleFont: Typography.titleM
                 )
             }
         }

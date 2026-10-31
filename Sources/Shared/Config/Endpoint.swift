@@ -54,6 +54,18 @@ enum Endpoint {
     /// · `paid` 由服务端 `buildNewEntry` 决定（新记的恒为待发），请求体里**没有**这个字段；
     /// · 并发写冲突返回 **409 + `retry: true`**（服务端乐观锁），不是普通的参数错误。
     static let earningsEntryPath = "/api/app/earnings/entry"
+    /// 新建一个活动（`POST`，同样**需要 `ce_auth`**）。
+    ///
+    /// 为什么需要它：服务端的账本是两层结构（活动 → 条目），entry 的 `activityId` 必填。
+    /// 没有这个接口时 App 只能在网页端建好活动再回来记账 —— 手机上就断了一环。
+    ///
+    /// 三个只有这个接口才有的行为（`EarningsStore.addActivity` 全部要接住）：
+    /// · 请求体是 `{name, platform}` 两个字符串（平台不是独立实体，跟着活动走）；
+    /// · 服务端用与网页端 `addActivity` 相同的读-改-写 + CAS 乐观锁写回，
+    ///   **同平台重名 → 409 +「该平台下已有同名活动」**（这个 409 不可重试，是业务规则）；
+    /// · 成功后活动列表会因为 `unshift` 而变长，`summary.activityCount / platformCount` 也跟着变
+    ///   —— 所以 App 不本地拼接，直接重拉一次总览。
+    static let earningsActivityPath = "/api/app/earnings/activity"
 
     // MARK: - 构造
 

@@ -12,6 +12,11 @@ enum Spacing {
     static let cardGap: CGFloat = 12
     /// 区块之间
     static let sectionGap: CGFloat = 24
+    /// 分组之间（设计报告 §5 第 1 项）。
+    ///
+    /// 为什么 24 不够：`sectionGap 24 : cardGap 12` 只有 2.0×，卷起来两组读成"一行行"；
+    /// 32 : 12 = 2.67× 才有肉眼可辨的两级 —— 间距差本身就是层级，不是装饰。
+    static let sectionGapLoose: CGFloat = 32
     /// 区块标题下间距
     static let sectionTitleGap: CGFloat = 12
     /// 正文块间距
