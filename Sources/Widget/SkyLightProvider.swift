@@ -10,9 +10,12 @@ import WidgetKit
 /// 如果 View 里现取 `Date()`，系统展示一条旧帧时文字会和真实时间错位
 /// （典型症状：太阳已经偏西，倒计时还停在正午）。
 ///
-/// 这个 entry **不带任何业务数据**：天光只描述"此刻的光"，
-/// 全部信息都能从 `SunClock` 纯函数推出来，所以没有网络请求、没有快照、
-/// 也没有"加载失败"这种状态 —— 时钟算不出来（极昼极夜）时整块不画。
+/// 天光只描述"此刻的光与此刻的天"：天色来自 `SunClock` 的纯函数，
+/// 天气来自一次 `/api/app/weather`。
+///
+/// 两者在 entry 里**汇合而不是互相依赖**：天气拉失败就填 nil，天色照样算得出来 ——
+/// 天光卡的主视觉是"天空 + 地平线 + 太阳"，天气只是叠在它上面的一层，
+/// 所以网络失败绝不会让这张卡变成空白或错误态。
 struct SkyLightEntry: TimelineEntry {
 
     /// 这一帧对应的时刻（= 上一个阶段边界，或 15 分钟网格点）
@@ -25,6 +28,23 @@ struct SkyLightEntry: TimelineEntry {
     let sunrise: Date?
     /// 同上的日落
     let sunset: Date?
+    /// 这一帧要叠加的天气实况。**可空，且 nil 是正常状态**。
+    ///
+    /// 为什么整条 timeline 只拉一次、然后逐帧共用同一个值：
+    /// 天光一轮排 24 小时、约 103 帧（15 分钟网格 96 帧 + 7 个阶段边界），
+    /// 每帧各拉一次就是 103 次请求 —— 刷新预算（每天 40–70 次）会被一轮打穿。
+    /// 而"今天到底有没有云"半小时内不会变，共用一份完全够用。
+    ///
+    /// nil 的三种来源：接口超时 / `ok == false` / 后端没给 `code`。
+    /// 三种都走同一条路：**完全不画叠加层**，天空保持原样。
+    /// 绝不兜底成晴天：把缺数据画成晴天，是这个项目已经踩过一次的坑
+    /// （见 `WeatherKind.from(code:)` 的注释）。
+    let weather: WeatherNow?
+
+    /// 天气类型（8 组视觉类型）。nil = 不知道什么天 → 叠加层整层不画
+    var weatherKind: WeatherKind? {
+        return weather?.kind
+    }
 
     /// 距 `deadline` 还有多少秒（已经过点 / 算不出时返回 0）
     var remaining: TimeInterval {
@@ -49,7 +69,12 @@ struct SkyLightEntry: TimelineEntry {
     }
 
     /// 由时刻造一帧（唯一入口，纯函数 —— 可被预览、可被自检复用）
-    static func make(date: Date) -> SkyLightEntry {
+    ///
+    /// - Parameters:
+    ///   - date: 这一帧代表的时刻
+    ///   - weather: 这一轮拉到的天气。默认 nil：`placeholder` / `getSnapshot` 不发请求，
+    ///     所以它们在组件库里露出的就是"纯天光"那一版（也正是无数据时的退化形态）。
+    static func make(date: Date, weather: WeatherNow? = nil) -> SkyLightEntry {
         let phase = SunClock.phase(at: date)
         let times = sunTimes(for: date, phase: phase)
         return SkyLightEntry(
@@ -57,7 +82,8 @@ struct SkyLightEntry: TimelineEntry {
             phase: phase,
             deadline: deadline(for: date, phase: phase),
             sunrise: times?.sunrise,
-            sunset: times?.sunset
+            sunset: times?.sunset,
+            weather: weather
         )
     }
 
@@ -158,6 +184,9 @@ extension SkyLightEntry {
 /// 但这些都是**预渲染帧**，不消耗刷新预算（预算只算 `getTimeline`）。
 /// `policy: .after(下一个边界 + 1 秒)`：边界后立刻重排一轮，
 /// 保证卡片永远握着"至少 23 小时"的未来帧，且跨日后日出日落自动更新。
+///
+/// 天气是**叠加**进来的，不改变上面这套插帧策略：一轮只发 1 次 `/api/app/weather`
+/// （与插帧并发，最多等 8 秒），拿到的同一个 `WeatherNow` 发给这一轮所有 103 帧。
 struct SkyLightProvider: TimelineProvider {
 
     /// 视野：24 小时（覆盖完整一天，跨过一次日出与日落）
@@ -175,31 +204,49 @@ struct SkyLightProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<SkyLightEntry>) -> Void) {
-        let now = Date()
-        let entries = SkyLightProvider.entries(now: now)
+        Task {
+            let now = Date()
 
-        // 下一个边界 + 1 秒再回来重排：+1 秒是为了让 `SunClock.phase(at:)` 真的跨过阈值，
-        // 否则在边界那一瞬重算，新阶段的第一帧会因为"还差 0.4 秒"被判回上一档。
-        let nextBoundary = SkyLightEntry.nextPhaseBoundary(after: now, on: now)
-            ?? now.addingTimeInterval(3600)
-        let refreshAt = nextBoundary.addingTimeInterval(1)
+            // 天气与插帧**并发**：`async let` 在声明那一刻就把子任务踢出去跑了，
+            // 所以下面算时间戳（纯 CPU）与等天气（最多 8 秒网络）是重叠的，
+            // 而不是"先等 8 秒网络，再算帧" —— 天光卡的刷新不能被天气拖长。
+            async let pendingWeather = SkyLightWeatherFeed.fetch()
+            let stamps = SkyLightProvider.stamps(now: now)
+            let weather = await pendingWeather
 
-        completion(Timeline(entries: entries, policy: .after(refreshAt)))
+            // 每一帧带**同一个**天气（理由见 `SkyLightEntry.weather` 的注释）。
+            // 天气为 nil 时这里什么都不特殊处理：entry 带着 nil 下去，渲染层不画叠加层。
+            let entries = stamps.map { SkyLightEntry.make(date: $0, weather: weather) }
+
+            // 下一个边界 + 1 秒再回来重排：+1 秒是为了让 `SunClock.phase(at:)` 真的跨过阈值，
+            // 否则在边界那一瞬重算，新阶段的第一帧会因为"还差 0.4 秒"被判回上一档。
+            let nextBoundary = SkyLightEntry.nextPhaseBoundary(after: now, on: now)
+                ?? now.addingTimeInterval(3600)
+            let refreshAt = nextBoundary.addingTimeInterval(1)
+
+            completion(Timeline(entries: entries, policy: .after(refreshAt)))
+        }
     }
 
-    /// 生成这一轮的 entry 序列：**第一帧是当前时刻** + 15 分钟网格 + 所有阶段边界。
+    /// 这一轮 entry 的时间戳集合：**第一帧是当前时刻** + 15 分钟网格 + 所有阶段边界。
     ///
     /// 去重（边界常常落在整刻点上）后升序，并过滤掉过去的帧 —— WidgetKit 不接受
     /// 时间早于现在的 entry，出现过去的帧会让系统判定这条 timeline 失效。
     ///
+    /// 单独抽出来是为了配合天气的并发拉取：时间戳是纯计算，可以先把它们排好，
+    /// 等天气回来再套同一份 stamps 上 —— 插帧策略一个字没改。
+    static func stamps(now: Date) -> [Date] {
+        var stamps = WidgetTimeline.stamps(now: now, horizon: horizon, step: gridStep)
+        stamps.append(contentsOf: boundaryStamps(now: now, horizon: horizon))
+        return Array(Set(stamps.filter { $0 >= now })).sorted()
+    }
+
+    /// 生成这一轮的 entry 序列（不需要天气时的直通入口）。
+    ///
     /// 网格复用 `WidgetTimeline.stamps`（Widget target 里已有的等距铺点工具，
     /// 自带防死循环），边界帧由 `boundaryStamps` 单独补。
     static func entries(now: Date) -> [SkyLightEntry] {
-        var stamps = WidgetTimeline.stamps(now: now, horizon: horizon, step: gridStep)
-        stamps.append(contentsOf: boundaryStamps(now: now, horizon: horizon))
-
-        let ordered = Array(Set(stamps.filter { $0 >= now })).sorted()
-        return ordered.map { SkyLightEntry.make(date: $0) }
+        return stamps(now: now).map { SkyLightEntry.make(date: $0) }
     }
 
     /// 未来 `horizon` 里所有阶段边界时刻（严格晚于 `now`）。
@@ -222,3 +269,53 @@ struct SkyLightProvider: TimelineProvider {
         return result
     }
 }
+
+// MARK: - 天气（叠加层的数据源）
+
+/// 天光卡自己的天气请求。
+///
+/// 为什么不复用 `WidgetFetch.get(_:url:)`：那个超时是 12 秒，是给"简报 / 红石"这种
+/// **整张卡的内容都来自网络**的组件定的。天光的天气是叠加层 —— 它迟到 8 秒还好，
+/// 但拖到 12 秒就会把这条 timeline 的交付一起往后拖，系统等不到就可能直接渲染占位帧。
+/// 这里宁可 8 秒就放弃，超时后返回 nil，天空照旧。
+///
+/// 为什么失败只返回 nil、不读本地快照：天光卡的语义是"此刻的天"。
+/// 拿半小时前（甚至昨天）的天气往今天的天空上叠，比不叠更糟 ——
+/// 一个不动的假云会让人以为天气没变，而实物在窗外下着雨。
+enum SkyLightWeatherFeed {
+
+    /// 单次请求的超时（秒）。见类型注释：8 秒是"能给就给、给不到就拉倒"的分界。
+    static let timeout: TimeInterval = 8
+
+    /// 拉一次天气实况。**任何失败都返回 nil**，绝不 throw、绝不兜底成晴天。
+    ///
+    /// 三条失败分支都走同一个出口：
+    /// - 拼不出 URL（配置坏了）/ 网络错误 / 超时；
+    /// - HTTP 非 2xx；
+    /// - 业务失败（HTTP 200 + `ok == false`）—— 它只代表"这次没拿到"，
+    ///   不代表"天气变好了"，所以同样不下任何结论。
+    static func fetch() async -> WeatherNow? {
+        guard let url = API.weather() else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            // 解码器复用 `WidgetJSON.decoder`：`updatedAt` 是带毫秒的 ISO 字符串，
+            // 裸 `JSONDecoder()` 解不开（会把整个响应判成坏数据）。
+            let now = try WidgetJSON.decoder.decode(WeatherNow.self, from: data)
+            guard now.ok else { return nil }
+            return now
+        } catch {
+            return nil
+        }
+    }
+}
+

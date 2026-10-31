@@ -48,16 +48,23 @@ enum WidgetDeepLink {
 /// 所以这里是"多帧、少请求"：一天 40 多帧，但真正发请求的只有 2 次。
 enum WidgetTimeline {
 
-    /// 简报卡的刻度：30 分钟。
+    /// 简报卡的刻度：**60 分钟**。
     ///
-    /// 为什么是 30 分钟而不是更细：天色切换的时刻已经由 `BriefProvider.skyChangeStamps`
-    /// 精确插进来了（那一刻立刻换色），30 分钟的网格只负责兜住"日出前后渐变的推进"。
-    /// 再细就是纯浪费 —— 相邻两帧的差别肉眼根本看不出来。
-    static let briefStep: TimeInterval = 30 * 60
+    /// 为什么从 30 分钟放宽到 60 分钟（V3.7）：这张卡的底色不再随时段变色，而是跟着
+    /// **当天的天气**走（一天只变一次脸），真正还在"走"的只有轨迹上那颗光点。
+    /// WidgetKit 的刷新预算按"每天几十次"算，30 分钟一帧铺 24 小时就是 48 帧 ——
+    /// 预算会被这种"看不出差别"的帧吃光，代价是用户在早上 8 点看不到当天的新简报。
+    /// 而云要"飘"根本不需要更高频的唤醒：位移是靠**预排帧**做的（每帧的云位置由这一帧的
+    /// 时刻算出来，见 `BriefFace` 的 `BriefWeatherLayer.drift`），到点系统自己换画面。
+    static let briefStep: TimeInterval = 60 * 60
 
-    /// 简报卡的视野：12 小时。到点 `.atEnd` 再取一轮（含一次网络请求），
-    /// 一天约 2 次，远低于 iOS 每天 40–70 次的预算上限。
-    static let briefHorizon: TimeInterval = 12 * 3600
+    /// 简报卡的视野：**24 小时**（24 帧）。到点 `.atEnd` 再取一轮（含两次网络请求：
+    /// 简报 + 天气），一天 1 次，离 iOS 每天 40–70 次的预算上限差着两个数量级。
+    ///
+    /// 为什么铺满一整天而不是 12 小时：天气一天只有"白天/夜里"和"变天"这几次变化，
+    /// 视野短于一天就会出现"用户在晚上 11 点看不到明天早上那一帧"的断档，
+    /// 而多出来的帧全是预渲染，不发请求。
+    static let briefHorizon: TimeInterval = 24 * 3600
 
     /// 红石卡的刻度：30 分钟（与简报统一 —— 两张卡并排放在桌面上，刷新节奏不该有两个脾气）
     static let rockStep: TimeInterval = 30 * 60
@@ -228,10 +235,13 @@ struct BriefCachePayload: Codable {
 enum WidgetFetch {
 
     /// 单个 GET + 解码。失败一律返回 nil（Widget 不做错误展示，失败就退回快照）
-    static func get<T: Decodable>(_ type: T.Type, url: URL) async -> T? {
+    ///
+    /// - Parameter timeout: 超时秒数。默认 12 秒（简报这种"主体内容"值得等）；
+    ///   装饰性数据（天气）传更短的值 —— 见 `weather()`。
+    static func get<T: Decodable>(_ type: T.Type, url: URL, timeout: TimeInterval = 12) async -> T? {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 12
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         do {
@@ -243,6 +253,25 @@ enum WidgetFetch {
         } catch {
             return nil
         }
+    }
+
+    /// 拉一次天气实况（`GET /api/app/weather`，匿名只读）。
+    ///
+    /// 三条刻意的选择：
+    /// 1. **8 秒超时**（比简报的 12 秒短）：天气只决定卡片画什么粒子，是装饰；
+    ///    简报才是主体。让装饰多等 4 秒，用户眼里的卡片就晚 4 秒出现，不划算。
+    /// 2. **不进快照**：天气是分钟级数据，落盘只会在第二天早上给用户一张昨天的"晴"——
+    ///    那是最糟的错误（看起来完全正常，没人会怀疑）。拉失败就 nil，卡片退回无天气形态。
+    /// 3. **`ok == false` 也算失败**：服务端业务失败时 HTTP 仍是 200（`{"ok":false}`），
+    ///    传输层判不出来，只能看这个字段 —— 否则会把一份空响应当成"天气是空的"。
+    ///
+    /// 解码用 `WidgetJSON.decoder`（不是 `APIJSON.decoder`）：后者在 `Sources/Services`，
+    /// **Widget target 不编译 Services**。两者的 ISO8601 带毫秒策略完全一致，
+    /// 这里沿用 Widget 侧唯一那份解码器，避免出现第三份日期策略。
+    static func weather() async -> WeatherNow? {
+        guard let url = API.weather() else { return nil }
+        guard let response = await get(WeatherNow.self, url: url, timeout: 8) else { return nil }
+        return response.ok ? response : nil
     }
 
     /// 需要拉哪几个月。
@@ -434,6 +463,17 @@ struct BriefEntry: TimelineEntry {
     let sunrise: String?
     /// 服务端给的日落文案
     let sunset: String?
+    /// 今天的天气实况（`GET /api/app/weather`）。
+    ///
+    /// **拉失败就是 nil** —— 卡片退回无天气形态（不画粒子、底色回到原来那张夜纸），
+    /// 绝不猜一个晴天出来。天气只决定"氛围"，简报正文才是这张卡的主体：
+    /// 一次网络抖动不该让整张卡变成错误态。
+    ///
+    /// 为什么整份 `WeatherNow` 带进 entry 而不是只带一个 `WeatherKind`：
+    /// 除了画什么粒子，卡片迟早要显示温度 / 天气文案（"阴 21°"），
+    /// 而 entry 是**预渲染帧**，View 里现取 `Date()` 或现发请求都会导致帧错位。
+    /// 这是纯追加字段，`BriefEntry` 原有的 12 个字段一个都没动。
+    let weather: WeatherNow?
 
     /// 页脚文案：「今日已推送 07:02」/「今日未推送」。没有简报数据时整条页脚不画
     var footerText: String? {
@@ -483,7 +523,7 @@ struct BriefEntry: TimelineEntry {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func make(date: Date, payload: BriefCachePayload?) -> BriefEntry {
+    static func make(date: Date, payload: BriefCachePayload?, weather: WeatherNow? = nil) -> BriefEntry {
         guard let payload = payload else {
             return BriefEntry(
                 date: date,
@@ -497,7 +537,8 @@ struct BriefEntry: TimelineEntry {
                 yi: [],
                 ji: [],
                 sunrise: nil,
-                sunset: nil
+                sunset: nil,
+                weather: weather
             )
         }
         return BriefEntry(
@@ -512,7 +553,8 @@ struct BriefEntry: TimelineEntry {
             yi: payload.yi,
             ji: payload.ji,
             sunrise: payload.sunrise,
-            sunset: payload.sunset
+            sunset: payload.sunset,
+            weather: weather
         )
     }
 }
@@ -595,18 +637,21 @@ struct RedstoneProvider: TimelineProvider {
 
 // MARK: - 简报 Provider
 
-/// 简报小组件（中号）。
+/// 简报小组件（中号 / 小号）。
 ///
-/// 刷新策略：**每 30 分钟一条 entry，铺 12 小时**。
+/// 刷新策略：**每 60 分钟一条 entry，铺满未来 24 小时**（24 帧），`.atEnd` 再取一轮。
 ///
-/// 为什么不能像以前那样"每 2 小时一条"：V3.3 起这张卡的底色是随当地时间变化的天色
-/// （`SkyPhase` 七档）。两小时一帧的话，日出从 06:44 开始，卡片可能到 08:00 才变色 ——
-/// 用户早上看到的还是夜里的深蓝，"天空会自己变色"这条就废了。
-/// 30 分钟一帧 + 把 `SkyPhase.deadline` 的时刻也插进来，切档那一刻就换色，中间靠网格推进。
+/// 为什么从"30 分钟一帧铺 12 小时"放宽（V3.7）：V3.3 那张卡的底色跟着**时段**变
+/// （`SkyPhase` 七档），必须靠密集的帧去推进日出日落；V3.7 起底色跟着**当天的天气**走，
+/// 一天只变一次脸，真正还在"走"的只有轨迹上那颗光点。60 分钟一帧把它压到 24 帧：
+/// WidgetKit 的刷新预算按"每天几十次"算，30 分钟一帧铺 24 小时是 48 帧，
+/// 会把预算吃光 —— 代价是用户早上 8 点看不到当天的新简报，那才是真问题。
+/// 而云"飘"靠的是**预排帧**（每帧云位置由这一帧时刻算出，见 `BriefWeatherLayer.drift`），
+/// 与唤醒频率无关，所以放宽帧距不会让云停住。
 ///
 /// 会不会被限流：不会。Timeline 里的多条 entry 是**预渲染帧**，系统到点直接换帧，不发请求；
-/// 真正吃预算的是 `getTimeline`（每次都要打一次 `/api/app/brief`）。这里 12 小时一轮
-/// `.atEnd`，一天约 2 次请求，而 iOS 给的是 40–70 次/天 —— 留足了余量给"用户主动刷新 / 推送后 reload"。
+/// 真正吃预算的是 `getTimeline`（一次要打 `/api/app/brief` + `/api/app/weather`）。
+/// 24 小时一轮 `.atEnd`，一天约 1 次，而 iOS 给的是 40–70 次/天。
 struct BriefProvider: TimelineProvider {
 
     func placeholder(in context: Context) -> BriefEntry {
@@ -620,51 +665,42 @@ struct BriefProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<BriefEntry>) -> Void) {
         Task {
             let now = Date()
-            let payload = await WidgetFetch.brief(now: now)
-            let entries = BriefProvider.entries(payload: payload, now: now)
+
+            // 并发而不是串行：两个请求互不依赖，串行会让卡片多等一个 RTT。
+            // `async let` 的 `weather` 分支**永不抛错**（`WidgetFetch.weather()` 内部把
+            // 超时 / 解码失败 / `ok == false` 全部吞成 nil），所以天气挂了不会拖累整条 timeline ——
+            // 主题是简报正文，天气只是氛围。
+            async let briefPayload: BriefCachePayload? = WidgetFetch.brief(now: now)
+            async let currentWeather: WeatherNow? = WidgetFetch.weather()
+
+            let payload = await briefPayload
+            let weather = await currentWeather
+
+            let entries = BriefProvider.entries(payload: payload, weather: weather, now: now)
             completion(Timeline(entries: entries, policy: .atEnd))
         }
     }
 
     /// 生成 entry 序列（导出成 static 便于自检与将来写单测）
     ///
-    /// 时间点 = 30 分钟网格（铺 12 小时）+ 天色切档时刻（精确到分）。去重后升序。
-    static func entries(payload: BriefCachePayload?, now: Date) -> [BriefEntry] {
-        var stamps = WidgetTimeline.stamps(now: now,
+    /// 时间点 = 60 分钟网格，铺满未来 24 小时（含 `now`），去重后升序，约 24 条。
+    ///
+    /// 每一条 entry 都带**同一个** `weather`：一天之内天气不会半小时变一次，
+    /// 而每帧各拉一次意味着 24 次网络请求 —— 那是把"装饰"的成本做到比"主体"还高。
+    /// 新数据靠下一次 `getTimeline`（一小时到一天后）带进来；
+    /// 用户想看最新的，点一下卡片进 App，那边有下拉刷新。
+    ///
+    /// V3.7 起**不再插天色切档时刻**：那张卡的底色已经不跟 `SkyPhase` 走了（跟天气走），
+    /// 切档时刻的帧渲染出来与相邻网格帧一模一样 —— 那是纯粹的浪费帧。
+    static func entries(payload: BriefCachePayload?, weather: WeatherNow?, now: Date) -> [BriefEntry] {
+        let stamps = WidgetTimeline.stamps(now: now,
                                            horizon: WidgetTimeline.briefHorizon,
                                            step: WidgetTimeline.briefStep)
-        stamps.append(contentsOf: skyChangeStamps(now: now, horizon: WidgetTimeline.briefHorizon))
 
-        // 去重（切档时刻可能正好落在半点上）并保证不出现过去的帧
+        // 去重后升序，并保证不出现过去的帧
         let ordered = Array(Set(stamps.filter { $0 >= now })).sorted()
         return ordered.map { stamp in
-            BriefEntry.make(date: stamp, payload: payload)
+            BriefEntry.make(date: stamp, payload: payload, weather: weather)
         }
-    }
-
-    /// 未来一段时间里天色换档的时刻。
-    ///
-    /// 为什么要单独插这些时刻：30 分钟网格只能保证"最多晚 30 分钟变色"，
-    /// 而日出的第一缕光是这张卡最好看的一帧，晚半小时就完全错过了。
-    /// `SkyPhase.deadline(at:)` 本身就是"这一档结束于哪一刻"，直接拿来当帧边界。
-    ///
-    /// 防死循环：每一轮都强制把游标往前推，且循环次数有硬上限
-    /// （12 小时最多跨 7 档，16 次给足了余量）。
-    static func skyChangeStamps(now: Date, horizon: TimeInterval) -> [Date] {
-        let limit = now.addingTimeInterval(horizon)
-        var result: [Date] = []
-        var cursor = now
-
-        for _ in 0..<16 {
-            guard let deadline = SunClock.phase(at: cursor).deadline(at: cursor) else { break }
-            if deadline > now, deadline < limit {
-                result.append(deadline)
-            }
-            // 越过这一档：+60 秒确保下一次 `SunClock.phase` 真的换了一档
-            let next = max(deadline.addingTimeInterval(60), cursor.addingTimeInterval(60))
-            if next >= limit { break }
-            cursor = next
-        }
-        return result
     }
 }

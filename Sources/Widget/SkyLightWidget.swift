@@ -28,6 +28,23 @@ import WidgetKit
 ///   `Spacing` / `SkyCard`（那些在 DesignSystem，Widget target 里不存在）；
 /// - 颜色一律 `Theme.sky(phase)`，本组件没有任何颜色字面量；
 /// - 不新增 target、不改 `project.yml` —— 注册进 `SkyWidgetBundle` 即可。
+///
+/// ## 天气是叠加层（V3.5）
+/// 用户要的是"在它原有之上，再添加一种天气效果"，所以本文件的配置**一个字都不改**
+/// （kind / displayName / supportedFamilies / contentMarginsDisabled 全部照旧）——
+/// 天气不改变这张卡的形态，只改变背景层里多画了点什么：
+///
+/// ```
+/// SkyLightProvider.getTimeline   ← 唯一一次网络请求（/api/app/weather，8 秒超时）
+///        ↓ 同一个 WeatherNow 发给这一轮全部 ~103 帧（半小时内天气不会变）
+/// SkyLightEntry.weather
+///        ↓
+/// SkyLightSky.body 的第 ③ 层（云）与第 ⑥ 层（雨 / 雪 / 雾 / 闪电）
+/// ```
+///
+/// 拉失败或后端没给代码 → `weather == nil` → 这两层整块不画，卡片与升级前完全相同。
+/// **绝不兜底成晴天**：把缺数据画成晴天，等于骗人（`WeatherKind.from(code:)` 的注释里
+/// 记着这个项目已经踩过一次的坑）。
 struct SkyLightWidget: Widget {
 
     /// WidgetKit 用 kind 匹配已上桌的实例，改名等于让所有用户的小组件失效

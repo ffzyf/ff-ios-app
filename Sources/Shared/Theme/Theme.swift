@@ -481,6 +481,73 @@ extension Theme {
     }
 }
 
+// MARK: - 天气氛围色（V3.7 简报卡按当天天气换一套氛围）
+
+extension Theme {
+
+    /// 「今天的天气」的八档氛围色 —— 简报卡的底色 + 中心柔光。
+    ///
+    /// **为什么不用 `Palette`、不走 `dyn`（不参与换肤）**：
+    /// 换肤改的是界面自己的情绪（青柠 / 暮紫 / 暖砂 / 海蓝 / 樱粉），而天气是**物理事实**——
+    /// 切到樱粉主题时把「下雨」染成粉色，这张卡就不再是天气报表，而是一张装饰插画了。
+    /// 所以八档用固定 hex：五套主题下同一场雨永远是同一种蓝。
+    /// 它们**只做面**（底色 / 柔光 / 粒子），文字一律走 `sky(.night).ink`，
+    /// 因此换主题也不会让任何一处对比度失守（`ink` = `#F5F8FF`，与八档顶色的对比度都在 15:1 以上）。
+    ///
+    /// **为什么八档全是深色**：简报卡要压住近白的白字。底色一浅，白字立刻读不清，
+    /// 而"换一天天气就得换一套字色"是这套系统里最容易漏掉、又最难在评审时发现的错误。
+    /// 于是明度全部贴着 `sky(.night)`（`#05070E`）走，**只靠色相区分天气**：
+    /// 晴是暖褐、雨是深蓝、雷是近黑紫 —— 用户扫一眼读到的是"今天是暖的还是冷的"，
+    /// 而不是"今天卡片亮还是暗"。
+    enum Weather {
+
+        /// 天气 → (底色, 柔光)。
+        ///
+        /// - 底色 `top`：最暗的一档，铺满整卡的线性渐变**起点**（终点固定是 `sky(.night).ground`，
+        ///   也就是下面那张"夜纸"），所以八档的卡片下沿都是同一块近黑，只有上半张在变天。
+        /// - 柔光 `glow`：比底色亮一档，**必须靠 `opacity` 压成光**再叠上去（0.12~0.30，
+        ///   由云量反向决定，见 `BriefMetrics.glowAlpha(cloudiness:)`）—— 直接用会变成一块色斑。
+        ///
+        /// - Parameter kind: 天气类型。**`nil` 时返回现有纸面的两个色**（`sky(.night)` 的
+        ///   `top` / `ground`）：没拿到天气就回到现在这张卡的样子，绝不用晴天兜底
+        ///   （与 `WeatherKind.from(code:)` 拒绝兜底是同一条原则）。
+        static func of(_ kind: WeatherKind?) -> (top: Color, glow: Color) {
+            // 没有天气数据：退回现有"夜纸"，一个像素都不变
+            guard let kind = kind else {
+                let night = Theme.sky(.night)
+                return (night.top, night.ground)
+            }
+
+            switch kind {
+            case .clear:
+                // 晒过太阳的纸：暖褐黑 + 暖金。云量 0，所以柔光最亮的一档
+                return (Color(hex: "#1A1510"), Color(hex: "#6B4E22"))
+            case .partly:
+                // 深蓝灰 + 银蓝：还是蓝调，只是被云压暗了一档
+                return (Color(hex: "#131A22"), Color(hex: "#3A4E63"))
+            case .overcast:
+                // 冷灰 + 灰蓝：无色彩倾向，正是"阴天没有光照方向"的感觉
+                return (Color(hex: "#15181C"), Color(hex: "#3B434E"))
+            case .fog:
+                // 灰青：比阴略微发青，让人想到湿度而不是雨
+                return (Color(hex: "#161B1D"), Color(hex: "#445155"))
+            case .drizzle:
+                // 深青 + 青：毛毛雨的青是"空气里的水汽"，不是大雨那种蓝
+                return (Color(hex: "#0F191C"), Color(hex: "#2E5459"))
+            case .rain:
+                // 深蓝 + 蓝：最"正"的雨天色，与 drizzle 的青拉开一档
+                return (Color(hex: "#0C1420"), Color(hex: "#2A4A72"))
+            case .snow:
+                // 冷青白：雪天要"冷"，但不许"亮" —— 底色仍是深的，亮的是落下来的点
+                return (Color(hex: "#121820"), Color(hex: "#5A7080"))
+            case .thunder:
+                // 近黑紫：雷暴的电是紫的（闪电本身用 `glow` 画，见 `BriefFace`）
+                return (Color(hex: "#100E18"), Color(hex: "#463466"))
+            }
+        }
+    }
+}
+
 // MARK: - 平台品牌色（收益页「平台」网格，A+B 混合方案）
 
 extension Theme {

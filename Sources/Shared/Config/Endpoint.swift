@@ -45,6 +45,11 @@ enum Endpoint {
     static let articlePath = "/api/app/article"
     /// 今日简报
     static let briefPath = "/api/app/brief"
+    /// 天气实况（**属于简报站**：与 `briefPath` 同一台机器、同一份上游缓存）
+    ///
+    /// 为什么归简报站而不是红石站：简报里的 `weather` / `windText` / `rain` 三处就是从它派生的，
+    /// 两者共用一次上游请求。分到别的站根下，迟早会出现"卡片说小雨、简报说晴"的分叉。
+    static let weatherPath = "/api/app/weather"
     /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
     static let earningsPath = "/api/app/earnings"
     /// 追加一笔收益条目（`POST`，同样**需要 `ce_auth`**）。

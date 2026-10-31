@@ -48,6 +48,17 @@ enum API {
         return Endpoint.url(base: briefHost, path: briefPath)
     }
 
+    /// 天气实况：`GET /api/app/weather`，无参数、匿名可读。
+    ///
+    /// base 用 `briefHost`（**不是 `rockBase`**）：天气挂在简报站上，
+    /// 与 `brief()` 打同一台机器、共用一份上游缓存；换成红石站域名会 404。
+    ///
+    /// 业务失败时服务端仍返回 HTTP 200 + `{"ok":false,"error":"…"}` ——
+    /// 传输层判不出来，由调用方（`WeatherStore`）看 `ok` 决定，本层只拼地址。
+    static func weather() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.weatherPath)
+    }
+
     // MARK: - 红石站（批次 2）
 
     /// 红石日程。
