@@ -61,6 +61,14 @@ struct RootView: View {
         .task {
             await rock.loadSchedule()
         }
+        // 深链：桌面小组件点一下 → skyapp://brief / skyapp://rock → 落到对应 Tab。
+        //
+        // 为什么挂在根视图的 `body` 上就够冷启动也生效：SwiftUI 会在视图进入层级后
+        // 把「启动 App 的那个 URL」补发一次 `onOpenURL`。所以冷启动（App 没在跑）与
+        // 热启动（App 在后台）走的是**同一条**路径，不需要在 `FFWangApp` 里再存一份待处理的 URL。
+        .onOpenURL { url in
+            open(deepLink: url)
+        }
     }
 
     /// 自绘 Tab 栏只认 Int 索引，这里做一次桥接；切换动画统一在 setter 里给。
@@ -110,5 +118,63 @@ struct RootView: View {
     /// （列表接口不返回 content，PRD F3，不能拿列表数据兜底正文）。
     private func openArticle(_ article: ArticleSummary) {
         openedArticle = article
+    }
+
+    // MARK: - 深链
+
+    /// 处理小组件深链：解析 host → 切 Tab。
+    ///
+    /// 走 `tabSelection` 这个 Binding 而**不是**直接写 `tab = next`：
+    /// 触觉反馈与 `withAnimation(Motion.tab)` 都在它的 setter 里，绕过去就会出现
+    /// "从桌面点进来，页面是硬切过去的、没有过渡"的割裂感 —— 同一个动作两套体验，
+    /// 而且以后调切换动画会有一个人被漏掉。
+    ///
+    /// 认不出的 host 一律忽略（不崩、不跳首页）：宁可不响应，也不要因为一个手打错的
+    /// URL 把用户从当前页面踢走。
+    private func open(deepLink url: URL) {
+        guard url.scheme?.lowercased() == AppDeepLink.scheme else { return }
+
+        // `skyapp://brief` 的 host 是 "brief"；也兼容 `skyapp:///brief`（host 为空、path 有值）
+        let rawHost = url.host ?? url.path
+        let host = rawHost
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .lowercased()
+        guard let target = AppDeepLink.tab(for: host) else { return }
+
+        // 文章详情是全屏覆盖，盖在 Tab 栏之上 —— 不收起它，切 Tab 是"看不到"的
+        if openedArticle != nil {
+            openedArticle = nil
+        }
+
+        tabSelection.wrappedValue = target.rawValue
+    }
+}
+
+// MARK: - 深链契约（App 侧）
+
+/// App 侧对小组件深链的**唯一**认知：scheme + host → Tab。
+///
+/// 为什么不复用 Widget 侧的 `WidgetDeepLink`：那个类型属于 Widget target，
+/// 主 App 的 sources 明确 `excludes: Widget`（见 project.yml 的 R1 —— 否则两个 @main
+/// 会撞成 duplicate symbol），所以 App 引用不到它。两边各留一份，靠
+/// `WidgetProvider.swift` 与 `Resources/Info.plist` 里的注释互相指认：
+/// **改 scheme / host 必须三处一起改**，否则就是"点了没反应"（不报错、不崩溃）。
+private enum AppDeepLink {
+
+    /// 与 `Info.plist` 的 `CFBundleURLSchemes`、`WidgetDeepLink.scheme` 一致
+    static let scheme = "skyapp"
+
+    /// host → 落在哪个 Tab。认不出返回 nil（调用方整条忽略）
+    static func tab(for host: String) -> AppTab? {
+        switch host {
+        case "brief":
+            return .brief
+        case "rock":
+            return .rock
+        case "earnings":
+            return .earnings
+        default:
+            return nil
+        }
     }
 }

@@ -43,6 +43,12 @@ enum WidgetTheme {
     static let statusSecondary = Font.system(size: 11, weight: .medium)
     /// 12pt semibold：顶部一行地名/地图名
     static let headerTitle = Font.system(size: 12, weight: .semibold)
+    /// 11pt 等宽：简报顶行的日期（`10月31日`），数字要对齐
+    static let skyDate = Font.system(size: 11, weight: .medium, design: .monospaced)
+    /// 11pt 等宽：地面区的日出 / 日落时刻（`06:44` / `17:33`）
+    static let sunTime = Font.system(size: 11, weight: .medium, design: .monospaced)
+    /// 10pt：地面区左槽的注脚（`宜 打猎、散步 · 忌 店铺开业`）—— 地平线以下只能放这么小
+    static let skyNote = Font.system(size: 10, weight: .regular)
 
     // MARK: - 间距
 
@@ -52,25 +58,16 @@ enum WidgetTheme {
     static let rowGap: CGFloat = 3
     /// 区块之间
     static let blockGap: CGFloat = 8
+    /// 简报卡左右内边距（比上下多 2pt：顶部胶囊离圆角要留出余量，否则会被裁角）
+    static let skySidePadding: CGFloat = 14
 
-    // MARK: - 外观辅助
+    // MARK: - 天际线几何（与 App 内 `SkyCard` 同一组数）
+    //
+    // 这两个比例必须和 `Sources/DesignSystem/SkyCard.swift` 里的 `crestY` / `edgeY` 一致：
+    // 桌面上那条地平线要和 App 内那张卡落在同一个高度，不然"同一套语言"就成了两套。
 
-    /// Widget 的容器背景：**每个 widget 传自己的渐变**。
-    ///
-    /// 为什么改成接收渐变参数（而不是旧的纯色 `Theme.bgBase`）：
-    /// 任务 1「太阳轨迹」设计要求整卡渐变背景、颜色即信息（晨/日间/黄昏/夜/进行中/即将各有配方），
-    /// 旧的纯色背景直接违背"颜色即信息"。`containerBackground(for: .widget)` 这个 API 必须存在
-    /// （iOS 17 起不加会被 WidgetKit 打红警），所以保留它，但改成交渐变；逐 widget 接线后，
-    /// 全工程已无 widget 再走纯色实现。
-    ///
-    /// - Parameters:
-    ///   - gradient: 由 `TrackGradient.gradient(for:)` 算好的 [Color]（已随系统外观自适应）
-    ///   - start: 渐变起点，默认 `.topLeading`（与设计文档方向一致）
-    ///   - end: 渐变终点，默认 `.bottomTrailing`
-    @ViewBuilder
-    static func containerBackground(gradient: [Color],
-                                   start: UnitPoint = TrackGradient.startPoint,
-                                   end: UnitPoint = TrackGradient.endPoint) -> some View {
-        LinearGradient(colors: gradient, startPoint: start, endPoint: end)
-    }
+    /// 地平线弧顶（占卡片高度）
+    static let skyCrestY: CGFloat = 0.62
+    /// 地平线两端（占卡片高度）
+    static let skyEdgeY: CGFloat = 0.74
 }

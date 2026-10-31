@@ -1,47 +1,8 @@
 import SwiftUI
 
-/// 地平线以下的地面（弧顶在正中，两端下沉）。
-///
-/// 用二次贝塞尔而不是圆弧：参考图里的地平线是"缓坡"不是"圆边"，
-/// 圆弧在宽卡片上两端会翘得过于明显。控制点取 `2·crestY − edgeY`，
-/// 使曲线在 t=0.5 处正好落在 `crestY`（数学上精确穿过弧顶，不是目测）。
-struct HorizonGround: Shape {
-    /// 弧顶位置（正中），占高度比例
-    var crestY: CGFloat
-    /// 两端位置，占高度比例（应大于 crestY）
-    var edgeY: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let w = rect.width
-        let h = rect.height
-        let controlY = h * (2 * crestY - edgeY)
-
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: h * edgeY))
-        path.addQuadCurve(to: CGPoint(x: w, y: h * edgeY),
-                          control: CGPoint(x: w / 2, y: controlY))
-        path.addLine(to: CGPoint(x: w, y: h))
-        path.addLine(to: CGPoint(x: 0, y: h))
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// 地平线亮边（只画那条弧，不闭合）
-struct HorizonEdge: Shape {
-    var crestY: CGFloat
-    var edgeY: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let w = rect.width
-        let h = rect.height
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: h * edgeY))
-        path.addQuadCurve(to: CGPoint(x: w, y: h * edgeY),
-                          control: CGPoint(x: w / 2, y: h * (2 * crestY - edgeY)))
-        return path
-    }
-}
+// `HorizonGround` / `HorizonEdge` 已搬到 `Sources/Shared/UI/HorizonShape.swift`（V3.3）：
+// 桌面简报小组件要用**同一条地平线**，而 Widget target 只编译 Sources/Widget + Sources/Shared。
+// 本文件直接引用共享版本，几何与视觉零变化。
 
 /// 天际线卡（V3.2，照参考图重做简报卡）。
 ///

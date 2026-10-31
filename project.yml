@@ -20,7 +20,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "3.0.0"
-    CURRENT_PROJECT_VERSION: "4"
+    CURRENT_PROJECT_VERSION: "5"
     SWIFT_VERSION: "5.0"
     # 不启用 Swift 6 严格并发：CI 是无签名编译，Sendable 报错只会拖慢落地（设计文档 §1.2）
     SWIFT_STRICT_CONCURRENCY: minimal
@@ -85,7 +85,7 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         # 版本号必须与主 App 一致，否则 archive 报 bundle version mismatch
         MARKETING_VERSION: "3.0.0"
-        CURRENT_PROJECT_VERSION: "4"
+        CURRENT_PROJECT_VERSION: "5"
 
 schemes:
   SkyApp:

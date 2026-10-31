@@ -45,5 +45,28 @@
 	-->
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<!--
+	  V3.3：小组件深链。桌面小组件点一下 → skyapp://brief / skyapp://rock → 落到对应 Tab。
+
+	  scheme 必须与 `Sources/Widget/WidgetProvider.swift` 的 `WidgetDeepLink.scheme` 和
+	  `Sources/App/RootView.swift` 的 `AppDeepLink.scheme` 逐字一致；三处任一改了这里都会"点了没反应"
+	  （而且不报错、不崩溃 —— 是最难查的一类 bug）。
+
+	  注意：这条**只写在宿主 App** 上。Widget 扩展不需要声明 scheme，
+	  它只是"发出"一个 URL；能接收 URL 的是 App。
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>top.skyzyf.skyapp.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>skyapp</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

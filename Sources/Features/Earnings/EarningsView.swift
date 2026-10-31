@@ -31,6 +31,8 @@ struct EarningsView: View {
                 if auth.isLoggedIn {
                     if let summary = store.summary {
                         heroCard(summary: summary)
+                        // 本地账本（自己记的账）。与上面的服务端统计是两套数，只做相邻展示，不相加。
+                        LedgerSection()
                         if summary.platformBreakdown.isEmpty == false {
                             breakdownCard(summary: summary)
                         }
