@@ -52,6 +52,13 @@ enum Endpoint {
     static let weatherPath = "/api/app/weather"
     /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
     static let earningsPath = "/api/app/earnings"
+    /// 云控版本检查（**属于简报站**：与 `briefPath` 同域名，版本数据跟着部署走）。
+    static let appVersionPath = "/api/app/version"
+    /// 云控版本上传（管理端写入接口，App 端只读）。
+    static let appVersionUploadPath = "/api/app/version/upload"
+    /// 安装引导页（相对路径，供 `open` 唤起 Safari 跳）。
+    static let installGuidePath = "/install/"
+
     /// 追加一笔收益条目（`POST`，同样**需要 `ce_auth`**）。
     ///
     /// 三个只有这个接口才有的行为（`EarningsStore.addEntry` 全部要接住）：

@@ -73,6 +73,14 @@ struct FFWangApp: App {
                     rock.allLoadedDays
                 }
             }
+            // 天光实时活动的前台循环（方案 §1.3）：
+            // 与上面的 `.task(id: scenePhase)` 共存是允许的——两个独立的 task，
+            // scenePhase 变化时两个一起取消、一起重启。
+            // 天光是独立协调器，只在前台评估，退后台留在锁屏上、回前台续。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await DaylightActivityCoordinator.shared.monitorForeground()
+            }
         }
     }
 }

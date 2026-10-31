@@ -88,6 +88,30 @@ enum API {
         )
     }
 
+    /// 版本检查（`GET /api/app/version`）。匿名可读。
+    ///
+    /// base 用 `briefHost`：版本数据挂在简报站上，与 `brief()` 同域名；
+    /// 换到别的站根下会 404。
+    static func appVersion() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.appVersionPath)
+    }
+
+    /// ipa 下载地址（传入服务端给的相对或绝对路径；绝对路径直接用，相对路径拼到 briefHost 上）。
+    ///
+    /// 入参是服务端返回的 `downloadUrl`：若它已经是完整 URL（含协议前缀）就直接返回；
+    /// 否则当成相对路径拼到简报站根下。两种形态都兜住，避免服务端改格式时客户端崩。
+    static func appDownload(_ pathOrURL: String) -> URL? {
+        if pathOrURL.hasPrefix("http://") || pathOrURL.hasPrefix("https://") {
+            return URL(string: pathOrURL)
+        }
+        return Endpoint.url(base: briefHost, path: pathOrURL)
+    }
+
+    /// 安装引导页（`/install/`）。
+    static func installGuide() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.installGuidePath)
+    }
+
     // MARK: - 红石站（批次 2）
 
     /// 红石日程。

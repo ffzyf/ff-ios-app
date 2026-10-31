@@ -201,6 +201,16 @@ final class LiveActivityCoordinator {
             )
             lastErrorDescription = nil
             reloadWidgets()
+
+            // 红石一启动，天光立刻让道（方案 §1.2）。
+            // 必须用 `Task { @MainActor in ... }` 而不是直接调用：
+            // `DaylightActivityCoordinator.shared` 是另一个 `@MainActor` 类的单例，
+            // 直接在这个函数里调用会触发 actor 隔离检查；包成一个 detached 的
+            // MainActor task，让调度器在下一个主队列 run 循环执行，既能立即收尾、
+            // 又不阻塞当前 `start` 的返回。
+            Task { @MainActor in
+                DaylightActivityCoordinator.shared.suspendForRock()
+            }
         } catch {
             // 启动失败（系统限制 / 用户在设置里关了实时活动）不该影响 App 的任何功能
             lastErrorDescription = error.localizedDescription
