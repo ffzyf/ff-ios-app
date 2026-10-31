@@ -155,14 +155,21 @@ extension WidgetTheme {
         // 小号（158pt）比中号（338pt）整体降一档：参考图的字号是按中号给的，
         // 原样搬进小号后"蓝调剩余 + 2分钟4秒"会顶到两边圆角。
 
+        /// 阶段名字号（中号 / 小号）。`phaseLabel*` 与 `phaseLabelScaled(_:scale:)` 共用这两个数
+        static let phaseLabelMediumSize: CGFloat = 10
+        static let phaseLabelSmallSize: CGFloat = 9
+        /// 倒计时字号（中号 / 小号）。同上，缩放版共用
+        static let countdownMediumSize: CGFloat = 12
+        static let countdownSmallSize: CGFloat = 10
+
         /// 10pt：中号左上「蓝调剩余」
-        static let phaseLabelMedium = Font.system(size: 10, weight: .semibold)
+        static let phaseLabelMedium = Font.system(size: phaseLabelMediumSize, weight: .semibold)
         /// 9pt：小号左上阶段名
-        static let phaseLabelSmall = Font.system(size: 9, weight: .semibold)
+        static let phaseLabelSmall = Font.system(size: phaseLabelSmallSize, weight: .semibold)
         /// 12pt 等宽：中号右上倒计时（数字对齐，读起来不跳）
-        static let countdownMedium = Font.system(size: 12, weight: .semibold, design: .monospaced)
+        static let countdownMedium = Font.system(size: countdownMediumSize, weight: .semibold, design: .monospaced)
         /// 10pt 等宽：小号右上倒计时
-        static let countdownSmall = Font.system(size: 10, weight: .semibold, design: .monospaced)
+        static let countdownSmall = Font.system(size: countdownSmallSize, weight: .semibold, design: .monospaced)
         /// 9pt 等宽：小号地面区的日出 / 日落（11pt 在两个时刻并排时会顶到边）
         static let sunTimeSmall = Font.system(size: 9, weight: .medium, design: .monospaced)
 
@@ -174,6 +181,22 @@ extension WidgetTheme {
         /// 倒计时：按尺寸取档
         static func countdown(_ family: WidgetFamily) -> Font {
             return family == .systemSmall ? countdownSmall : countdownMedium
+        }
+
+        /// 阶段名（按画布短边缩放，见 `WidgetCanvas`）。
+        ///
+        /// 为什么放在这里而不是 `SkyLightFace` 里：字号常量住在这个 enum，
+        /// 缩放版必须和它读**同一个**尺寸数 —— 分居两个文件时，改字号的人只会看到一半。
+        /// `textScale(158) == 1`，所以 iPhone 上与 `phaseLabel(_:)` 逐点相同。
+        static func phaseLabelScaled(_ family: WidgetFamily, scale: CGFloat) -> Font {
+            let size = family == .systemSmall ? phaseLabelSmallSize : phaseLabelMediumSize
+            return Font.system(size: size * scale, weight: .semibold)
+        }
+
+        /// 倒计时（按画布短边缩放）。等宽必须保留：秒数每帧在走，非等宽会左右跳。
+        static func countdownScaled(_ family: WidgetFamily, scale: CGFloat) -> Font {
+            let size = family == .systemSmall ? countdownSmallSize : countdownMediumSize
+            return Font.system(size: size * scale, weight: .semibold, design: .monospaced)
         }
 
         /// 地面区的日出 / 日落：中号复用 `WidgetTheme.sunTime`（11pt，与简报卡同一档）。

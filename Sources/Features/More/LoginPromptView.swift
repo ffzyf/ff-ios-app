@@ -37,6 +37,10 @@ struct LoginPromptView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
+            // 列宽 640（表单页，§3.9）：这是全屏覆盖页，没有 Tab 栏兜底，
+            // 不限宽的话 iPad 横屏那个密码框会拉到 1154 —— 一个输入框横跨整块屏幕，
+            // 光标离"登录"按钮半米远。窄屏 393 < 640，`maxWidth` 不生效 → 零影响。
+            .pageColumn(Layout.formMaxWidth)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
         }

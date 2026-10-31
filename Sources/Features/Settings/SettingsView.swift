@@ -37,6 +37,9 @@ struct SettingsView: View {
                 .padding(.horizontal, Spacing.page)
                 .padding(.top, 12)
                 .padding(.bottom, Spacing.page)
+                // 表单列宽 640（§3.7）：设置行是"图标 + 标题 …… 值"，行越宽，标题与值之间
+                // 那条空越多、扫读越累。窄屏 393 < 640 → 完全无副作用。
+                .pageColumn(Layout.formMaxWidth)
             }
             .scrollIndicators(.hidden)
             if let toast = toast {
@@ -75,6 +78,9 @@ struct SettingsView: View {
                 Text("完成")
             }
             .buttonStyle(PrimaryCTAStyle())
+            // Esc 关闭（§7.1）：这是本页唯一的"关闭"钮，也是模态的落点。
+            // 与 `ArticleDetailView` 的返回钮分工明确 —— 那个给 ⌘[，这里给 Esc，互不抢。
+            .keyboardShortcut(.cancelAction)
         }
     }
 

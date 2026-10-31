@@ -57,6 +57,20 @@ struct SurveyWorkspaceView: View {
             stack = []
             store.resetMemory()
         }
+        .background {
+            // Esc = 关闭整个工作台（§7.1）。为什么是一枚隐藏按钮而不是挂在页头返回钮上：
+            // 页头那颗钮在栈里是「退一层」、在根部才是「关掉工作台」，而**一个 Button 只能挂
+            // 一个快捷键** —— 返回钮已经给了 ⌘[，Esc 必须有自己的挂载点。
+            // 写法与 `PageColumn.refreshShortcut` 完全一致（不占布局、不进无障碍、不参与按压动画）。
+            Button(action: closeWorkspace) {
+                Color.clear
+            }
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+            .keyboardShortcut(.cancelAction)
+        }
     }
 
     @ViewBuilder
@@ -137,7 +151,9 @@ struct SurveyPageHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            IconGlassButton(icon: "chevron.left", size: 36) {
+            // ⌘[ 返回上一层（§7.1）。四页共用一个页头，所以这个键也只写一次。
+            // 键由 `IconGlassButton` 挂在它内部那颗 `Button` 上：挂在包装 View 上不保证注册。
+            IconGlassButton(icon: "chevron.left", size: 36, shortcut: "[") {
                 onBack()
             }
             .accessibilityLabel("返回")

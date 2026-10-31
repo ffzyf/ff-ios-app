@@ -33,6 +33,9 @@ struct MonitorView: View {
                 .padding(.horizontal, Spacing.page)
                 .padding(.top, 8)
                 .padding(.bottom, Spacing.page)
+                // 表单列宽 640（§3.7 / §3.1 总表）：两张版本卡 + 一段说明，拉宽只会让
+                // "版本号 …… 时间"之间空出一大截。窄屏无副作用。
+                .pageColumn(Layout.formMaxWidth)
             }
             .scrollIndicators(.hidden)
             .refreshable {
@@ -61,7 +64,9 @@ struct MonitorView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                IconGlassButton(icon: "chevron.left", size: 36) {
+                // ⌘[ 返回（§7.1）。与文章详情的返回钮同一个键，用户只需要记一次。
+                // 键交给 `IconGlassButton` 内部那颗 `Button` 注册 —— 挂在包装 View 上不保证生效。
+                IconGlassButton(icon: "chevron.left", size: 36, shortcut: "[") {
                     dismiss()
                 }
                 .accessibilityLabel("返回")

@@ -15,6 +15,11 @@ struct RootView: View {
     /// 红石数据（批次 2）。根视图只负责"启动时先拉一次" —— 概览卡与红石日历都要用，
     /// 谁先出现就先有数据；重复调用由 Store 内部短路（同月已加载即返回）。
     @EnvironmentObject private var rock: RockStore
+    /// 尺寸模型（设计文档 §1.4）。Tab 栏只读 `tabBarWidth` 一个量；
+    /// 页面不做任何尺寸判断，各自读环境自己算 —— 这里刻意**不**把 metrics 往下传。
+    @Environment(\.layoutMetrics) private var metrics
+    /// 前庭敏感用户：选中圆跨 90pt 的滑动是页面里唯一"有距离的动效"，关掉时硬切（§7.6）。
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tab: AppTab = .overview
     /// 当前打开的文章（nil = 没开详情）。详情用 `fullScreenCover` 呈现：
     /// 阅读页必须独占全屏（浮动 Tab 栏、青柠光斑都要让位给正文），
@@ -58,10 +63,21 @@ struct RootView: View {
         // 换配色 → 整块重建。挂在 ZStack 上而不是 RootView 上，`tab` 等 @State 不会被重置。
         .id(appearance.themeId)
         .safeAreaInset(edge: .bottom, spacing: 0) {
+            // 限宽 + 居中（设计文档 §2.5）。顺序不能动：
+            //
+            // `maxWidth` 必须在 `padding(.horizontal, 8)` **之前**。今天栏宽 = 屏宽 − 16；
+            // 放在 padding 之后，iPad 上实际栏宽会变成 480 + 16 = 496，且 iPhone 会变成 361（回归）。
+            // 放在前面时 393 − 16 = 377 与今天逐像素一致。
+            //
+            // 限宽只能加在**外部**：`FloatingTabBar` 内部自带 `.frame(maxWidth: .infinity)`，
+            // 在里面再塞一个 maxWidth 会和它打架，5 项就不再等分。
             FloatingTabBar(tabs: AppTab.tabBarTabs.map { $0.spec }, selection: tabSelection)
+                .frame(maxWidth: metrics.tabBarWidth)
                 .padding(.horizontal, Spacing.tabBarInset)
                 .padding(.bottom, Spacing.tabBarBottomGap)
                 .padding(.top, 6)
+                // 窄屏下等价于今天的满宽（父级 proposal 本来就等于可用宽度）
+                .frame(maxWidth: .infinity, alignment: .center)
         }
         // 详情页全屏覆盖（盖在 Tab 栏之上）：`environmentObject` 显式再注入一遍，
         // 不依赖模态呈现是否继承环境（两行代码换掉一类「找不到 AppModel」的运行期崩溃）。
@@ -113,8 +129,18 @@ struct RootView: View {
             set: { newValue in
                 guard let next = AppTab(rawValue: newValue), next != tab else { return }
                 Haptics.light()
-                withAnimation(Motion.tab) {
+                // Reduce Motion（设计文档 §7.6）：只影响「选中圆怎么过去」。
+                // 关掉动画时圆硬切到位，用户要的结果（页面已换）完全一样。
+                // 不能反过来把 `withAnimation` 整个删掉 —— 那样正常用户也会看到硬切。
+                //
+                // 页面侧那条 `.transaction { $0.animation = nil }` **不动**：
+                // 它本来就是"无动画"（B3 性能点），与 reduceMotion 无关，两者不冲突。
+                if reduceMotion {
                     tab = next
+                } else {
+                    withAnimation(Motion.tab) {
+                        tab = next
+                    }
                 }
             }
         )

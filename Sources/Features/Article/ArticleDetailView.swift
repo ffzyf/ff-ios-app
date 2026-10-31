@@ -85,6 +85,9 @@ struct ArticleDetailView: View {
             .padding(.top, 56)
             // 详情页没有浮动 Tab 栏，底部留白比列表页小一档
             .padding(.bottom, 64)
+            // 正文列宽 640（§3.8：17pt 下约 35 个汉字一行）。加在 padding **之后**，
+            // 于是 640 里含掉左右各 20 的页边距 → 文字正好 600，与文档给的数字一致。
+            .pageColumn(Layout.readingMaxWidth)
         }
         .scrollIndicators(.hidden)
         // 用字符串版 `coordinateSpace(name:)`：iOS 17 起有 `coordinateSpace(.named(...))` 新写法，
@@ -100,7 +103,10 @@ struct ArticleDetailView: View {
 
     private var navigationBar: some View {
         HStack(spacing: 12) {
-            IconGlassButton(icon: "chevron.left", size: 36) {
+            // ⌘[ 返回 / 关闭（§7.1）。iPhone 上无键盘时是死代码，不占布局、不改任何像素。
+            // 快捷键由 `IconGlassButton` 挂到它内部那颗 `Button` 上 —— 挂在这一层（包装 View）
+            // 不保证被注册进快捷键表，Apple 的说法是"assigns it to the modified control"。
+            IconGlassButton(icon: "chevron.left", size: 36, shortcut: "[") {
                 dismiss()
             }
             .accessibilityLabel("返回")
@@ -113,8 +119,14 @@ struct ArticleDetailView: View {
             .accessibilityLabel("分享")
         }
         .padding(.horizontal, Spacing.page)
+        // 导航条与正文**同列**。这一行不是锦上添花：导航条若是满宽，iPad 上返回钮会贴在
+        // 1194 屏幕的最左边、正文却在中间的 640 里，视线要横跨 500pt 才能对上。
+        // 窄屏下 640 > 393，`maxWidth` 不生效 → 与今天逐像素一致。
+        .pageColumn(Layout.readingMaxWidth)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        // 玻璃底必须满宽（它是"条"，不是"列"）：所以 `pageColumn` 加在 `.background` **之前**，
+        // 限宽只作用在按钮那一行上。
         .background {
             chromeBackground
         }

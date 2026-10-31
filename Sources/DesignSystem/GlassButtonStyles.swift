@@ -84,10 +84,23 @@ struct CapsuleGlassButton: View {
 }
 
 /// 圆形图标玻璃按钮（浮动返回 / 设置齿轮 / 回到顶部 / 全屏图右上角关闭）
+///
+/// `shortcut` 是**可选**的 ⌘ 主键，默认 `nil`（= 不挂快捷键），所以老调用点一位都不用改。
 struct IconGlassButton: View {
     let icon: String
     var size: CGFloat = 36
     var level: GlassLevel = .floating
+    /// ⌘ + 这个键（`KeyEquivalent` 有字素簇字面量，调用处直接写 `shortcut: "["`）。
+    ///
+    /// 为什么放在 `action` **之前**而不是存储属性表的最后：`action` 必须留在参数表末尾，
+    /// 否则调用点惯用的尾随闭包（`IconGlassButton(icon:) { … }`）会匹配到 `shortcut` 上编译不过。
+    /// 也就是说"加在末尾"实际只能加到"最后一个非闭包参数"之后。
+    ///
+    /// 为什么要这个参数：`.keyboardShortcut` 的语义是"assigns it to the **modified control**"，
+    /// 挂在包了一层的自定义 View 上不保证被注册进快捷键表（三处调用点就是这么写的）。
+    /// 快捷键只有挂到真正吃点击的那个 `Button` 上才算数，而那个 `Button` 只有本文件能碰到 ——
+    /// 所以能力必须从这里开口，而不是继续在页面层对包装 View 加修饰器。
+    var shortcut: KeyEquivalent? = nil
     let action: () -> Void
 
     var body: some View {
@@ -103,5 +116,26 @@ struct IconGlassButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(PressableStyle())
+        // 修饰器紧贴 `Button`（`buttonStyle` 不改变"被修饰的控件"是谁），
+        // 条件挂在修饰器内部完成 —— 用一个空分支包住 Button 会让它多一层容器，
+        // 而多出来的容器在 HStack 里会影响对齐。
+        .modifier(OptionalCommandShortcut(shortcut: shortcut))
+    }
+}
+
+/// 把「可选快捷键」收成一条修饰器：`nil` 时**原样返回**，不注册任何键。
+///
+/// 为什么不直接写 `if let` 包一层：那样 `nil` 分支要么重复整段 Button、要么留一个
+/// `if` 的空分支视图，两者都会改变视图树形状；修饰器的两个分支返回的都是"同一块内容"，
+/// 布局与身份都不受影响。
+private struct OptionalCommandShortcut: ViewModifier {
+    let shortcut: KeyEquivalent?
+
+    func body(content: Content) -> some View {
+        if let shortcut = shortcut {
+            content.keyboardShortcut(shortcut, modifiers: .command)
+        } else {
+            content
+        }
     }
 }

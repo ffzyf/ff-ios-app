@@ -24,6 +24,9 @@ import Foundation
 /// Tab 状态由 `RootView` 通过 `selectedTab` 注入。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
+    /// 尺寸模型（设计文档 §3.2）：概览是**单列**页 —— 一屏一锚点，hero 与简报并排会让
+    /// 两个"此刻"互相打架，且 240 与 168 不等高，并排必然一块矮一截。
+    @Environment(\.layoutMetrics) private var metrics
     /// 红石数据不再由本页直读：hero 卡自己从环境取 `RockStore`。
     /// 请求仍由 `RootView` 的 task 统一发起（页面绝不自己开请求，§7.3）。
     @Binding private var selectedTab: AppTab
@@ -51,6 +54,11 @@ struct OverviewView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 列宽 720 居中（含 page padding 20×2 → 文字 680）。
+            // 挂在最外层：`Spacing.page` 是"列边距"的一部分，720 必须把它算在里面，
+            // 否则 iPad 上文字会变成 720 − 40 = 680 之外再被裁一次。
+            // 窄屏 393 < 720，`maxWidth` 不生效 —— 与 3.4.0 逐像素一致。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -61,10 +69,20 @@ struct OverviewView: View {
                 OfflineBanner()
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
+                    // 细条与主体同列宽（720 含 page padding 20×2 = 680 的胶囊）。
+                    // 细条本身是 `.frame(maxWidth: .infinity)` 的胶囊，不吃列宽的话
+                    // iPad 上它会比下面的内容列宽出整整 (1194 − 40) − 680，左右各探出一大截。
+                    // 窄屏 393 < 720，`maxWidth` 不生效 → 与今天逐像素一致。
+                    .pageColumn(Layout.contentMaxWidth)
             }
         }
         .refreshable {
             await model.refresh()
+        }
+        // ⌘R（设计文档 §7.1）：走的就是下拉刷新同一个方法，不另开一条请求路径 ——
+        // 两条路径会让"下拉能刷出来、⌘R 刷不出来"这种差异成为可能。
+        .refreshShortcut {
+            Task { await model.refresh() }
         }
         // 全站共享的轻提示（B2 后来源是 ToastStore，这里不传文案即读全局）
         .overlay(alignment: .bottom) {
@@ -135,7 +153,9 @@ struct OverviewView: View {
     private var continueReadingSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "继续读", actionTitle: "更多", action: openArticles)
-            Rail {
+            // 出血只对"列宽 = 屏宽"成立。宽屏列宽 720 < 1194，继续出血会让卡片滑到列外
+            // 压在空白上（§4.3），所以由 `allowsRailBleed` 决定。窄屏它恒为 true → 与今天一致。
+            Rail(bleeds: metrics.allowsRailBleed) {
                 ForEach(railArticles) { article in
                     ArticleRailCard(article: article) {
                         openArticles()

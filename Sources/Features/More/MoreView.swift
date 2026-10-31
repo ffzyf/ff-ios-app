@@ -117,6 +117,9 @@ struct MoreView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 单列 720 居中（设计文档 §3.7）。这一页只有 2 tile + 4 行，分栏反而更空。
+            // 窄屏 393 < 720 → 无影响。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -299,6 +302,10 @@ struct MoreRow: View {
             .glassSurface(.card, in: RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
         }
         .buttonStyle(PressableStyle())
+        // 指针悬停高亮（设计文档 §7.2）。行本身就是一整块玻璃，`lift` 会与
+        // `glassShadow` 的双层投影叠加成"跳一下"，所以只用 `highlight`。
+        // iPhone 上无指针 → 完全无影响。
+        .hoverEffect(.highlight)
     }
 }
 

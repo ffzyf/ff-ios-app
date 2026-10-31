@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// 深空双层背景（PRD §4.1）：
 /// 1. 线性渐变（顶）`bgRaise` → `bgBase`（底部 60% 处）
@@ -41,19 +40,41 @@ private struct LimeGlow: View {
 
     /// V2 渐变里的青柠不透明度 / PRD 的强度基准 → 0.2（推导见 `PageBackground` 注释）
     private static let alphaRatio: Double = 0.2
-    /// 光斑半径改用「屏幕最大边的相对比例」（B7）：不再用 `GeometryReader` 读 `width`，
-    /// 避免 tab 切换动画里每帧重测布局、重建渐变。屏幕尺寸是常量，半径只算一次，不参与动画。
+    /// 光斑半径改用「**实际被涂的那块区域**最大边的相对比例」（B7 + 设计文档 §1.6）：
+    /// 不再用 `GeometryReader` 包住渐变读 `width`（那会让布局参与每帧动画、重建渐变），
+    /// 也不用 `UIScreen.main.bounds`（分屏下那是**屏幕**尺寸而不是**窗口**尺寸）。
     private static let radiusRatio: CGFloat = 0.9
 
+    /// 绘制区域的最大边。只在 `onAppear` 与尺寸真变时写入，滚动 / Tab 动画期间不变 → 不重算渐变。
+    ///
+    /// 初值 852 = 393×852 的长边，于是首帧半径 = 852 × 0.9 = **766.8**，
+    /// 与今天 iPhone 上逐像素相同 —— 即使 `onAppear` 因为任何原因没有跑到，也不会闪一个错的半径。
+    @State private var maxDimension: CGFloat = 852
+
     var body: some View {
-        // 半径与几何布局无关（取自 UIScreen，恒定），不再进 GeometryReader 的每帧布局路径
-        let maxDimension = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+        // 半径与几何布局无关（只取决于被绘制的区域有多大），不进 GeometryReader 的每帧布局路径
         RadialGradient(
             gradient: Self.gradient(opacity: metrics.glowOpacity),
             center: UnitPoint(x: 0.2, y: -0.1),
             startRadius: 0,
             endRadius: maxDimension * Self.radiusRatio
         )
+        // 为什么不复用 `layoutMetrics.containerSize`：根部量到的那个尺寸是"窗口的安全区内容尺寸"
+        // 还是"全窗口尺寸"，取决于 SwiftUI 在该层的 proposal 语义（RootView 自己也有 safeAreaInset）。
+        // 若它不含状态栏 / Home Indicator 区域，iPhone 上半径会从 766.8 掉到 ~683（小 11%，肉眼可见）。
+        // **半径应当相对"实际被涂的那块区域"算** —— 那就到涂它的这一层去量，语义自洽，
+        // 且与安全区怎么分配无关。`PageBackground` 带 `.ignoresSafeArea()`，所以这里量到的就是全屏。
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { maxDimension = max(proxy.size.width, proxy.size.height) }
+                    .onChange(of: proxy.size) { _, newSize in
+                        let next = max(newSize.width, newSize.height)
+                        // 只在尺寸真变时写：旋转 / 分屏才触发，滚动与 Tab 滑动期间恒定
+                        if next > 0, next != maxDimension { maxDimension = next }
+                    }
+            }
+        }
     }
 
     /// 颜色停靠点固定（只随外观变、不随布局变）：抽成函数，避免每次 body 重建 `Gradient` 对象。

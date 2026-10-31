@@ -1,5 +1,8 @@
 import SwiftUI
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 红石 / 黑石的标记色。
 ///
@@ -103,6 +106,27 @@ struct RedstoneMonthGrid: View {
                     cellContent(dayNumber: dayNumber, day: day)
                 }
                 .buttonStyle(PressableStyle(scale: 0.94))
+                // 日期格的长按菜单（§7.3）：两个动作都不新增视图，也不改变这一格的任何几何。
+                // 「看这天的场次」复用既有的 `onSelect`（与点按同一入口，不另开一条路径）；
+                // 「复制日期」复制 `yyyy-MM-dd` 而不是「10月30日 周五」—— 复制出去的用途
+                // 多半是贴进文档/聊天里排期，机器可读的那一版更有用。
+                .contextMenu {
+                    Button {
+                        Haptics.light()
+                        onSelect(day)
+                    } label: {
+                        Label("看这天的场次", systemImage: "calendar")
+                    }
+                    Button {
+                        Haptics.light()
+                        #if canImport(UIKit)
+                        UIPasteboard.general.string = day.date
+                        Haptics.success()
+                        #endif
+                    } label: {
+                        Label("复制日期", systemImage: "doc.on.doc")
+                    }
+                }
                 .accessibilityLabel(accessibilityText(dayNumber: dayNumber, day: day))
             } else {
                 cellContent(dayNumber: dayNumber, day: nil)

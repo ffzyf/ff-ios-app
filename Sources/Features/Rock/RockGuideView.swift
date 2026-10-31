@@ -52,6 +52,10 @@ struct RockGuideView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
             .padding(.bottom, 40)
+            // 列宽 720（含 page padding 20×2 → 文字 680）。这是全屏覆盖页，没有 Tab 栏兜底，
+            // 所以必须自己限宽：不限的话 iPad 横屏正文行宽会到 1154，一行塞 60 多个汉字。
+            // 窄屏 393 < 720，`maxWidth` 不生效 → 与今天逐像素一致。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollIndicators(.hidden)
         .refreshable {
@@ -184,6 +188,13 @@ struct RockGuideView: View {
         .padding(.horizontal, Spacing.page)
         .padding(.top, 6)
         .padding(.bottom, 6)
+        // 按钮行与正文同列：`topBar` 是浮在内容上的独立 HStack（ZStack 的一层），
+        // 不是 VStack 流里的一员，也没有自己的背景 —— 所以 `pageColumn` 加在这个 HStack
+        // 自己身上（在 page padding *之后*，与 `scrollContent` 的顺序一致：列宽 720 含
+        // padding 20×2，内宽 680 与正文逐像素对齐）。加在外层 ZStack 上无效（ZStack 已被
+        // `PageBackground` 撑满），加 `PageBackground` 则会把满屏渐变缩成 720 窄条。
+        // 窄屏 393 < 720，两次 frame 都不生效 → iPhone 零影响。
+        .pageColumn(Layout.contentMaxWidth)
     }
 
     // MARK: - 全屏看图

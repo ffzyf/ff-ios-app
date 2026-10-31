@@ -9,6 +9,9 @@ import Foundation
 struct RockCalendarView: View {
     @EnvironmentObject private var rock: RockStore
     @EnvironmentObject private var guide: RockGuideStore
+    /// 尺寸模型（设计文档 §3.3）：红石是三个会做两列的页面之一 ——
+    /// 月历是 7 列网格，拉宽只让格子变胖；右侧 368 恰好放"下一场／分布／规律"。
+    @Environment(\.layoutMetrics) private var metrics
 
     /// 当前弹层。用**一个** sheet 装两种内容（某天场次 / 规律说明）：
     /// 同一个视图上挂两个 `.sheet` 在 iOS 上容易互相顶掉，改成一个 `item` 派发最稳。
@@ -29,15 +32,23 @@ struct RockCalendarView: View {
             // 月历（336pt）与 32pt 高的翻月器被同样对待，重块被轻块夹住（设计报告 §3.2）
             VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
                 header
-                NextEventBar(days: rock.allLoadedDays)
-                monthGroup
-                distributionGroup
-                rulesGroup
+                pageGroups
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 列宽：两列时 960（= 560 + 32 + 368 的**列区**），单列时 720。
+            //
+            // 为什么要 `+ Spacing.page * 2`：`pageColumn` 套在 `.padding(.horizontal, 20)` 外面，
+            // 页边距是"列区之外"的 40pt。若直接写 960，内容区只剩 920，
+            // 主列被压到 520 —— 月历 7 格每格瘦 5pt，恰好落在"看着不对劲但说不上哪不对"的区间。
+            // 窄屏 393 < 720，`maxWidth` 不生效 → 与 3.4.0 逐像素一致。
+            .pageColumn(
+                metrics.isTwoColumn
+                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
+                    : Layout.contentMaxWidth
+            )
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -47,6 +58,10 @@ struct RockCalendarView: View {
         }
         .refreshable {
             await rock.refresh()
+        }
+        // ⌘R：与下拉刷新同一个方法，不另开请求路径
+        .refreshShortcut {
+            Task { await rock.refresh() }
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -65,6 +80,58 @@ struct RockCalendarView: View {
             await rock.loadSchedule()
             await rock.loadRules()
         }
+    }
+
+    // MARK: - 分组排布（单列 / 两列）
+
+    /// 两列的写法：**同一个 body 里分支**，不复制两份布局。
+    ///
+    /// 四个分组各自只是一个属性，定义只有一份；这里分叉的只有"谁在谁上面"这件事 ——
+    /// 而这正是宽屏真正要改的东西（宽屏把「下一场／分布／规律」从月历**下面**搬到**右边**）。
+    ///
+    /// 窄屏分支的视图顺序、间距与 3.4.0 完全一致：下一场 → 月历 → 分布 → 规律。
+    /// 顺序写反（比如把 `nextEventBar` 放到 `monthGroup` 之后）是这一页最隐蔽的回归 ——
+    /// 因为它依然"看起来正常"，只是信息层级被悄悄换了。
+    @ViewBuilder
+    private var pageGroups: some View {
+        if metrics.isTwoColumn {
+            HStack(alignment: .top, spacing: Layout.columnGap) {
+                monthGroup
+                    // 560 是推出来的，不是拍的：960 − 368 − 32。
+                    // 用 `maxWidth` 而不是 `width`：900…1000 这段区间里列区不足 960，
+                    // 固定 560 的 HStack 总宽会超过可用宽度被横向裁掉（尾部的翻月 / 攻略钮消失）。
+                    // `maxWidth` 在列区够宽时等价于 560。
+                    .frame(maxWidth: mainColumnWidth)
+                sideColumn
+                    .frame(width: Layout.sideColumnWidth)
+            }
+        } else {
+            nextEventBar
+            monthGroup
+            distributionGroup
+            rulesGroup
+        }
+    }
+
+    /// 主列宽 = 两列总宽 − 副列 − 列间距
+    private var mainColumnWidth: CGFloat {
+        Layout.twoColumnMaxWidth - Layout.sideColumnWidth - Layout.columnGap
+    }
+
+    /// 宽屏副列：顺序 `NextEventBar` → 分布 → 规律（§3.3）。
+    /// 组内 32 与整页同一套呼吸节奏，不另造一套间距。
+    private var sideColumn: some View {
+        VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+            nextEventBar
+            distributionGroup
+            rulesGroup
+        }
+    }
+
+    /// 单独提出来是为了让"窄屏 / 宽屏两条路径引用同一个定义"，
+    /// 而不是在 `pageGroups` 里各写一遍 `NextEventBar(days: rock.allLoadedDays)`。
+    private var nextEventBar: some View {
+        NextEventBar(days: rock.allLoadedDays)
     }
 
     // MARK: - 标题
@@ -194,6 +261,12 @@ struct RockCalendarView: View {
         }
         .buttonStyle(PressableStyle())
         .disabled(!enabled)
+        // ⌘← / ⌘→ 翻月（设计文档 §7.1）。挂在既有 Button 上、不新增视图 ——
+        // 翻月本来就是"左右"这件事，方向键是最不需要记的映射。
+        // 用 `offset` 决定方向而不是再传一个参数：两处（左/右）各调一次，
+        // 多一个参数就多一处可以让"图标向左、快捷键向右"的错配活下来的地方。
+        // `.disabled(!enabled)` 对快捷键同样生效：到头了按 ⌘→ 不会有任何反应。
+        .keyboardShortcut(offset < 0 ? .leftArrow : .rightArrow, modifiers: .command)
         .accessibilityLabel(label)
     }
 
@@ -261,20 +334,35 @@ struct RockCalendarView: View {
 
     // MARK: - 顶部细条
 
+    /// 顶部细条要与主体同列宽：主体在 `pageColumn` 里限到 960（两列）/ 720（单列），
+    /// 而细条是 `.frame(maxWidth: .infinity)` 的胶囊、挂在 `safeAreaInset` 上拿的是满宽 ——
+    /// 不吃列宽的话 iPad 上它会比内容列宽 194、左右各探出 97。
+    /// 照抄 body 里那条表达式（含 `+ Spacing.page * 2`）而不是写死一个常量：
+    /// 细条外面同样套了 `.padding(.horizontal, Spacing.page)`，页边距在列区之外。
+    /// 窄屏两个值都 > 393，`maxWidth` 不生效 → 零影响。
+    private var bannerColumnWidth: CGFloat {
+        metrics.isTwoColumn
+            ? Layout.twoColumnMaxWidth + Spacing.page * 2
+            : Layout.contentMaxWidth
+    }
+
     @ViewBuilder
     private var bannerArea: some View {
         if rock.isOffline {
             OfflineBanner(kind: .offline)
                 .padding(.horizontal, Spacing.page)
                 .padding(.bottom, 6)
+                .pageColumn(bannerColumnWidth)
         } else if rock.isDataOld {
             OfflineBanner(kind: .staleData, text: "排期已有些天数没更新，先按现在的看。")
                 .padding(.horizontal, Spacing.page)
                 .padding(.bottom, 6)
+                .pageColumn(bannerColumnWidth)
         } else if let warning = rock.warningText {
             OfflineBanner(kind: .staleData, text: warning)
                 .padding(.horizontal, Spacing.page)
                 .padding(.bottom, 6)
+                .pageColumn(bannerColumnWidth)
         }
     }
 }

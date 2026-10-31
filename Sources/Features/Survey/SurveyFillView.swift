@@ -43,6 +43,8 @@ struct SurveyFillView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 6)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 填答列宽 640（§3.9 / §3.1）：输入型页面，行越宽越难对着题干读选项。
+            .pageColumn(Layout.formMaxWidth)
         }
         .scrollIndicators(.hidden)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -50,6 +52,10 @@ struct SurveyFillView: View {
                 OfflineBanner(kind: .offline, text: "现在没网，先填着，联网后再提交。")
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
+                    // 与主体同一个列宽（640，见 body 里的 `pageColumn`）：填答页是表单列，
+                    // 细条若按满宽画，iPad 上会比输入框宽出一大截，看着像两套栅格。
+                    // 窄屏 393 < 640，`maxWidth` 不生效 → 零影响。
+                    .pageColumn(Layout.formMaxWidth)
             }
         }
         .task {

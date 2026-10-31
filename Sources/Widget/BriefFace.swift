@@ -17,10 +17,30 @@ enum BriefMetrics {
     static let eyebrow = Font.system(size: 11, weight: .semibold)
     /// 9pt semibold：右上角「简报」胶囊 —— 它只是标记，不能和标题抢字重
     static let tag = Font.system(size: 9, weight: .semibold)
+    /// 标题字号。`title` 与 `titleScaled(_:)` **共用这一个数**：两处各写一个字面量，
+    /// 将来调字号时必然有一处被忘掉，而"忘掉"的表现是"iPad 上只有一半的字变大"。
+    static let titleSize: CGFloat = 20
+    /// 正文字号（同上）
+    static let bodySize: CGFloat = 13
+
     /// 20pt bold：卡名「每日简报」。一句话的卡不需要 28pt，但必须明显高于正文
-    static let title = Font.system(size: 20, weight: .bold)
+    static let title = Font.system(size: titleSize, weight: .bold)
     /// 13pt：正文首句（中号 2 行 / 小号 1 行）
-    static let body = Font.system(size: 13, weight: .regular)
+    static let body = Font.system(size: bodySize, weight: .regular)
+
+    /// 标题（按画布短边缩放，见 `WidgetCanvas`）。
+    ///
+    /// 为什么新增一个函数而不是把 `title` 改成 `title(scale:)`：本机没有 Swift 工具链，
+    /// 改签名会把"漏改一处 → 只错在 iPad"升级成"漏改一处 → 编译失败 → 一轮 CI 报废"。
+    /// `textScale(158) == 1`，所以 iPhone 上与 `title` 逐点相同。
+    static func titleScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: titleSize * scale, weight: .bold)
+    }
+
+    /// 正文（按画布短边缩放）
+    static func bodyScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: bodySize * scale, weight: .regular)
+    }
     /// 正文行距：中文字面高、行距为 0 会糊成一团
     static let bodyLineSpacing: CGFloat = 2
     /// 11pt：底部注脚（宜忌）
@@ -238,8 +258,17 @@ struct BriefFace: View {
 
     private let entry: BriefEntry
 
+    /// 画布短边（pt）。0 = 还没量到 → `s == 1` → 字号与 3.4.0 完全一致（降级方向安全）。
+    /// 只影响字号，不参与任何几何计算（padding / 行高 / 轨迹点数全部不动）。
+    @State private var canvasMinSide: CGFloat = 0
+
     init(entry: BriefEntry) {
         self.entry = entry
+    }
+
+    /// 这一帧的字号比例（158 → 1.0，iPad 小号 ≈170 → 1.076，上限 1.15）
+    private var s: CGFloat {
+        return WidgetCanvas.textScale(minSide: canvasMinSide)
     }
 
     private var isSmall: Bool {
@@ -269,11 +298,31 @@ struct BriefFace: View {
                     BriefWeatherLayer(kind: today, date: entry.date, family: family)
                 }
             }
+            // 画布测量：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
+            // 只在 `onAppear` / 尺寸真变时写 `@State`（滚动、重绘都不会触发），
+            // 与 `LayoutMetricsScope` / `PageBackground` 用的是同一个手法。
+            .background {
+                canvasProbe
+            }
             // 整卡可点：落到 `skyapp://brief`（深链契约见 `WidgetDeepLink`）
             .widgetURL(WidgetDeepLink.brief)
             .containerBackground(for: .widget) {
                 BriefCanvas(kind: kind)
             }
+    }
+
+    /// 量画布**短边**。为什么不是宽度：medium 是 338×158（iPad 364×170），
+    /// 按宽度算会得到 2.14 再被 clamp 到 1.15 —— iPhone 上所有 medium 档字号一次跳 15%，
+    /// 肉眼立刻可见。短边在两档里都是 158，才是真正的"画布尺度"。
+    private var canvasProbe: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { canvasMinSide = min(proxy.size.width, proxy.size.height) }
+                .onChange(of: proxy.size) { _, newSize in
+                    let short = min(newSize.width, newSize.height)
+                    if short != canvasMinSide { canvasMinSide = short }
+                }
+        }
     }
 
     // MARK: - 版式骨架
@@ -348,7 +397,7 @@ struct BriefFace: View {
 
     private var titleRow: some View {
         Text("每日简报")
-            .font(BriefMetrics.title)
+            .font(BriefMetrics.titleScaled(s))
             .foregroundStyle(paper.ink)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
@@ -361,7 +410,7 @@ struct BriefFace: View {
     private var bodyRow: some View {
         if let text = bodyText {
             Text(text)
-                .font(BriefMetrics.body)
+                .font(BriefMetrics.bodyScaled(s))
                 .foregroundStyle(paper.inkDim)
                 .lineLimit(BriefMetrics.bodyLineLimit(family))
                 .lineSpacing(BriefMetrics.bodyLineSpacing)
@@ -370,7 +419,7 @@ struct BriefFace: View {
         } else {
             // 早上简报还没生成是**正常业务状态**，不是错误：说清楚"还没有"，不吓人、不编内容
             Text("今天还没有简报")
-                .font(BriefMetrics.body)
+                .font(BriefMetrics.bodyScaled(s))
                 .foregroundStyle(paper.inkDim)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)

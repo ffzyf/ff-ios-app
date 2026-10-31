@@ -10,9 +10,21 @@ import SwiftUI
 /// `scrollPosition` Binding 把偏移存到常驻字典，切回时 `ScrollView` 读回，大致回到原位。
 struct ArticlesView: View {
     @EnvironmentObject private var model: AppModel
+    /// 尺寸模型（设计文档 §3.6）：文章是列表型内容，宽屏走 **2 列网格**（一屏 8 篇）。
+    @Environment(\.layoutMetrics) private var metrics
     /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
     private let scrollPosition: Binding<ScrollPosition>
     private let onOpenArticle: (ArticleSummary) -> Void
+
+    /// 宽屏 2 列网格的列定义。每列 474 = (960 − 12) / 2。
+    ///
+    /// 为什么不用 `.adaptive(minimum:)`：adaptive 会随宽度自己变成 3–4 列，
+    /// 一屏从 8 篇变成 16 篇的同时每张卡的标题可读宽度也变了 —— 版式就不再"所有设备一致"。
+    /// 固定两列让窄屏 = 单列、宽屏 = 两列，中间没有第三种形态。
+    private let gridColumns: [GridItem] = [
+        GridItem(.flexible(), spacing: Spacing.cardGap),
+        GridItem(.flexible(), spacing: Spacing.cardGap)
+    ]
 
     /// 只在「本页正在追加」时置真，避免同一页被触发两次
     @State private var isLoadingMore: Bool = false
@@ -38,6 +50,13 @@ struct ArticlesView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 窄屏 393 < 720 → 无影响。宽屏时 960 是**列区**宽度（2 × 474 + 12），
+            // 页边距 20×2 在它外面，所以要加回去（与红石 / 收益两页同一处推导）。
+            .pageColumn(
+                metrics.isTwoColumn
+                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
+                    : Layout.contentMaxWidth
+            )
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -48,6 +67,16 @@ struct ArticlesView: View {
                 OfflineBanner()
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
+                    // 细条必须和上面那个 ScrollView 的列宽一模一样（两列时 960，单列时 720），
+                    // 否则 iPad 上胶囊比内容列宽出 194、左右各探出 97 —— 一条"出血"的横杠。
+                    // 所以这里照抄 body 里 `pageColumn` 的表达式，而不是写死 720：
+                    // 写死的 720 在两列时又会比内容列窄 240，变成另一种错位。
+                    // 窄屏两个值都 > 393，`maxWidth` 不生效 → 零影响。
+                    .pageColumn(
+                        metrics.isTwoColumn
+                            ? Layout.twoColumnMaxWidth + Spacing.page * 2
+                            : Layout.contentMaxWidth
+                    )
             }
         }
         .refreshable {
@@ -84,12 +113,40 @@ struct ArticlesView: View {
         } else if model.articles.isEmpty && model.pinnedArticles.isEmpty {
             EmptyStateView.noArticles
         } else {
-            if !model.pinnedArticles.isEmpty {
-                sectionLabel("置顶")
-                ForEach(model.pinnedArticles) { article in
-                    ArticleRowCard(article: article, pinned: true) {
+            if metrics.isTwoColumn {
+                // 宽屏：置顶卡不单独加「置顶」小标题，直接当网格第一格 ——
+                // 卡片自带 `置顶` 徽标，一行只有两格时再加一个 11pt 小标题会把网格切成两段。
+                // 这个分叉只在这里，窄屏的「置顶」分段标题一行都没动。
+                twoColumnGrid
+            } else {
+                if !model.pinnedArticles.isEmpty {
+                    sectionLabel("置顶")
+                    ForEach(model.pinnedArticles) { article in
+                        ArticleRowCard(article: article, pinned: true) {
+                            onOpenArticle(article)
+                        }
+                    }
+                }
+                ForEach(model.articles) { article in
+                    ArticleRowCard(article: article) {
                         onOpenArticle(article)
                     }
+                }
+            }
+            footer
+        }
+    }
+
+    /// 宽屏 2 列网格。置顶在前、普通在后（与服务端给的顺序一致，不在客户端重排）。
+    private var twoColumnGrid: some View {
+        LazyVGrid(
+            columns: gridColumns,
+            alignment: .leading,
+            spacing: Spacing.cardGap
+        ) {
+            ForEach(model.pinnedArticles) { article in
+                ArticleRowCard(article: article, pinned: true) {
+                    onOpenArticle(article)
                 }
             }
             ForEach(model.articles) { article in
@@ -97,7 +154,6 @@ struct ArticlesView: View {
                     onOpenArticle(article)
                 }
             }
-            footer
         }
     }
 

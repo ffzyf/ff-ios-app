@@ -45,9 +45,14 @@ struct FFWangApp: App {
 
     var body: some Scene {
         WindowGroup {
-            // ThemeScope 必须在 preferredColorScheme 的子树里才拿得到"生效后"的外观
+            // 注入顺序有讲究：ThemeScope 必须在 preferredColorScheme 的子树里才拿得到"生效后"的外观；
+            // LayoutMetricsScope 必须在 ThemeScope **内部** —— 它不是要靠外观，而是"越靠近 RootView
+            // 越能保证量到的就是 RootView 真正拿到的容器尺寸"。反过来套（Scope 在外）也能量，
+            // 但一旦将来 ThemeScope 自身引入 padding 就会量偏，所以按"由外到内 = 由粗到细"排列。
             ThemeScope {
-                RootView()
+                LayoutMetricsScope {
+                    RootView()
+                }
             }
             .environmentObject(model)
             .environmentObject(rock)

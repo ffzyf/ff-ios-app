@@ -115,6 +115,9 @@ struct GlassListRow: View {
             .glassSurface(.card, in: RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
         }
         .buttonStyle(PressableStyle())
+        // 指针悬停高亮（设计文档 §7.2）：**纯叠加**，不动样式、不动行高、不动 `.contentShape`。
+        // iPhone 上无指针 → 完全无影响（`hoverEffect` 在没有指针时会自行降级为无操作）。
+        .hoverEffect(.highlight)
     }
 }
 

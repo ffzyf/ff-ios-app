@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 收益工作站（V3.2 新增，替换原来的「文章」Tab 位）。
 ///
@@ -33,6 +36,8 @@ struct EarningsView: View {
 
     @ObservedObject private var auth = EarningsAuth.shared
     @ObservedObject private var store = EarningsStore.shared
+    /// 尺寸模型（设计文档 §3.5）：收益是数据看板 —— hero（总）与平台占比（分）并置才能对照。
+    @Environment(\.layoutMetrics) private var metrics
 
     @State private var password: String = ""
     @State private var loginError: String?
@@ -86,11 +91,7 @@ struct EarningsView: View {
 
                 if auth.isLoggedIn {
                     if let summary = store.summary {
-                        heroCard(summary: summary)
-                        monthSection(summary: summary)
-                        platformSection(summary: summary)
-                        activitySection
-                        footerNote
+                        loadedBlocks(summary: summary)
                     } else if store.isLoading {
                         loadingCard
                     } else {
@@ -104,11 +105,22 @@ struct EarningsView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 窄屏 393 < 720 → 无影响。宽屏两列时 960 是**列区**宽度，
+            // 页边距 20×2 在它外面，所以要加回去（理由与红石页同一处）。
+            .pageColumn(
+                metrics.isTwoColumn
+                    ? Layout.twoColumnMaxWidth + Spacing.page * 2
+                    : Layout.contentMaxWidth
+            )
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
         .refreshable {
             await store.load(force: true)
+        }
+        // ⌘R：与下拉刷新同一个方法
+        .refreshShortcut {
+            Task { await store.load(force: true) }
         }
         .task {
             // 已登录才拉：没凭证时 load() 自己会清成空态，不发请求
@@ -117,6 +129,58 @@ struct EarningsView: View {
         .sheet(isPresented: $showsRecord) {
             EarningsRecordSheet()
         }
+    }
+
+    // MARK: - 正文排布（单列 / 两列）
+
+    /// 左主列的两个锚点：hero（总计）+ 本月三格。
+    ///
+    /// 抽成一段而不是在 body 里写两遍：宽屏它放左、窄屏它照旧纵向排，两种情况下
+    /// 内部都是"组间 32"—— 所以抽出来**不改变窄屏的任何间距与顺序**。
+    private func mainColumn(summary: EarningsSummary) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sectionGapLoose) {
+            heroCard(summary: summary)
+            monthSection(summary: summary)
+        }
+    }
+
+    /// 主列宽 = 两列总宽 − 副列 − 列间距（= 560）
+    private var mainColumnWidth: CGFloat {
+        Layout.twoColumnMaxWidth - Layout.sideColumnWidth - Layout.columnGap
+    }
+
+    /// 已登录且有数据时的正文（设计文档 §3.5）。
+    ///
+    /// 窄屏分支的顺序与 3.4.0 一致：hero → 本月 → 平台 → 活动流水 → 页脚。
+    /// 宽屏只是把「平台」从下方搬到右边 —— 四个分组各自只有一份定义。
+    ///
+    /// 为什么两列条件里还要带上 `platformBreakdown.isEmpty == false`：
+    /// 平台区块在没有平台数据时**整块不渲染**（`platformSection` 内部就是空分支），
+    /// 但副列那个 `.frame(width: Layout.sideColumnWidth)` 是挂在调用处的 ——
+    /// 于是 iPad 上会出现"左 560 有内容 + 32 间隔 + 右 368 全空"，右侧白掉一大条。
+    /// 没有可放进副列的东西时就不该有副列：退回单列后主列自然吃满 960。
+    /// 窄屏本来就只渲染主列（下面 else 分支），所以这只是把宽屏对齐到窄屏的规则。
+    @ViewBuilder
+    private func loadedBlocks(summary: EarningsSummary) -> some View {
+        if metrics.isTwoColumn && !summary.platformBreakdown.isEmpty {
+            HStack(alignment: .top, spacing: Layout.columnGap) {
+                mainColumn(summary: summary)
+                    // 560 是推出来的（960 − 368 − 32）。用 `maxWidth` 而不是 `width`：
+                    // 列区不足 960 时（900…1000 这段）固定宽度会横向溢出被裁。
+                    .frame(maxWidth: mainColumnWidth)
+                // 副列固定 368：平台网格仍是两列（(368 − 12) / 2 = 178 一张），
+                // 不改 `.adaptive` —— 金额字号是按 150pt 卡宽定的（文件上方已写明理由）。
+                platformSection(summary: summary)
+                    .frame(width: Layout.sideColumnWidth)
+            }
+        } else {
+            mainColumn(summary: summary)
+            platformSection(summary: summary)
+        }
+
+        // 活动流水**通栏**：它天然是"流水"，宽度越大越好读；放副列会让右列比左列高一倍
+        activitySection
+        footerNote
     }
 
     // MARK: - 头部
@@ -462,6 +526,21 @@ struct EarningsView: View {
         }
         .frame(minHeight: activityRowHeight)
         .contentShape(Rectangle())
+        // 活动行的长按菜单（§7.3 第三处）：只放「复制金额」。
+        // 为什么不做「编辑 / 标记已发」：那两个要长表单与状态回写，留在网页端（PRD 的边界）。
+        // 复制的是 `formatCents` 的输出（与屏幕上看到的**同一个**字符串），不是原始分数 ——
+        // 用户复制完贴到账本里，看到的和记的对得上。
+        .contextMenu {
+            Button {
+                Haptics.light()
+                #if canImport(UIKit)
+                UIPasteboard.general.string = EarningsMoney.formatCents(activity.totalCents)
+                Haptics.success()
+                #endif
+            } label: {
+                Label("复制金额", systemImage: "doc.on.doc")
+            }
+        }
     }
 
     // MARK: - 状态页

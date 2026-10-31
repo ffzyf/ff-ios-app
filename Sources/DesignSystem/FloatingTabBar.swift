@@ -105,7 +105,18 @@ struct FloatingTabBar: View {
                 knob(icon: tab.icon, badge: tab.badge, selected: isSelected)
                 Text(tab.title)
                     .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(isSelected ? Theme.limeInk : Theme.textTertiary)
+                    // 未选中标签从 `textTertiary` 提到 `textSecondary`（设计文档 §8「Liquid Glass 更新」）。
+                    //
+                    // 这不是随手调色，理由是 iOS 27 的 Liquid Glass 新增了「玻璃着色」滑块
+                    // （超清透 → 完全着色）：用户把它拉满时，玻璃底色会变深、变彩，而 11pt 的
+                    // `textTertiary` 在着色玻璃上对比不足。全工程"压在浮动玻璃上的小字"只有这一处
+                    // （Tab 标签），所以也只改这一处 —— 图标（21pt）不在此列：它大得多，
+                    // 且未选中态靠形状而不是明度区分，提亮反而会让它去抢选中圆的注意力。
+                    //
+                    // 为什么不去读系统的着色设置：没有公开 API，猜一个等于把系统行为写死。
+                    // 为什么不去调 `Glass` 参数：系统着色是**叠加**在用户偏好之上的，
+                    // 我们调 tint 只会让深浅两套外观更难对齐，且 iPhone 上会立刻看到颜色变化 = 回归。
+                    .foregroundStyle(isSelected ? Theme.limeInk : Theme.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -113,6 +124,22 @@ struct FloatingTabBar: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
+        // ⌘1–⌘5 切页（设计文档 §7.1）。iPad 外接键盘才有意义，iPhone 上无键盘时是死代码、
+        // 不占布局、不改变任何像素。
+        //
+        // 为什么是 `tab.id + 1` 而不是 `tab.id`：`TabSpec.id` 来自 `AppTab.rawValue`，
+        // 栏里 5 项是 0…4（`articles` 的 rawValue 是 5 但不在栏里）。快捷键必须是人读的
+        // ⌘1…⌘5，所以 +1。写成 `tab.id` 会得到 ⌘0…⌘4 且整体错位一格。
+        //
+        // 为什么不用 `.keyboardShortcut(.defaultAction)` 之类：只有"切到第 N 页"有天然的
+        // 数字对应关系，其余动作刻意不配快捷键（§7.1 末段）。
+        .keyboardShortcut(
+            KeyEquivalent(Character(String(tab.id + 1))),
+            modifiers: .command
+        )
+        // 指针悬停高亮（§7.2）：叠加在 `PressableStyle` / 裸 Button 之上，不改任何几何与字色。
+        // iPad 上无指针 —— 完全无影响。
+        .hoverEffect(.highlight)
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
     }

@@ -34,8 +34,17 @@ struct SkyLightFace: View {
 
     private let entry: SkyLightEntry
 
+    /// 画布短边（pt）。0 = 还没量到 → 比例为 1 → 与 3.4.0 逐像素一致（降级方向安全）。
+    /// **只影响字号**：padding / 弧高 / 圆点直径一个都不缩放（缩放会让地平线压字）。
+    @State private var canvasMinSide: CGFloat = 0
+
     init(entry: SkyLightEntry) {
         self.entry = entry
+    }
+
+    /// 这一帧的字号比例（158 → 1.0；iPad 小号 ≈170 → 1.076，上限 1.15）
+    private var s: CGFloat {
+        return WidgetCanvas.textScale(minSide: canvasMinSide)
     }
 
     private var isSmall: Bool {
@@ -49,12 +58,30 @@ struct SkyLightFace: View {
 
     var body: some View {
         content
+            // 画布测量（§5.2）：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
+            // 只在 `onAppear` / 尺寸真变时写 `@State`，15 分钟换一帧的重绘不会触发 body 重算。
+            .background {
+                canvasProbe
+            }
             // 整卡可点：落到简报页（复用 `WidgetProvider` 里已有的深链常量，不新造 URL）
             .widgetURL(WidgetDeepLink.brief)
             // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
             .containerBackground(for: .widget) {
                 SkyLightSky(entry: entry)
             }
+    }
+
+    /// 量画布**短边**。为什么不是宽度：medium 是 338×158（iPad 364×170），按宽度算会得到 2.14
+    /// 再被 clamp 到 1.15 —— 所有 medium 档字号一次跳 15%，iPhone 上肉眼可见。
+    private var canvasProbe: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { canvasMinSide = min(proxy.size.width, proxy.size.height) }
+                .onChange(of: proxy.size) { _, newSize in
+                    let short = min(newSize.width, newSize.height)
+                    if short != canvasMinSide { canvasMinSide = short }
+                }
+        }
     }
 
     /// 文字层：只有上下两行，中间全留给天空 —— 参考图里没有任何元素压在地平线上
@@ -84,7 +111,7 @@ struct SkyLightFace: View {
                        height: WidgetTheme.SkyLight.dotDiameter)
 
             Text(entry.phase.label)
-                .font(WidgetTheme.SkyLight.phaseLabel(family))
+                .font(WidgetTheme.SkyLight.phaseLabelScaled(family, scale: s))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -112,13 +139,13 @@ struct SkyLightFace: View {
         if let deadline = entry.deadline, deadline > entry.date {
             if entry.needsSecondTicker {
                 Text(timerInterval: entry.date...deadline, countsDown: true, showsHours: false)
-                    .font(WidgetTheme.SkyLight.countdown(family))
+                    .font(WidgetTheme.SkyLight.countdownScaled(family, scale: s))
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             } else {
                 Text(entry.countdownText ?? "")
-                    .font(WidgetTheme.SkyLight.countdown(family))
+                    .font(WidgetTheme.SkyLight.countdownScaled(family, scale: s))
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)

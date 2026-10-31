@@ -37,6 +37,21 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!--
+	  iPad 四向。基础键 UISupportedInterfaceOrientations 保持只有 Portrait ——
+	  iPhone 仍锁竖屏（横屏下 932 宽会让 hero 卡排版无意义地拉长），
+	  iPad 则需要四向（横屏 1194 才是两列布局的主场景，见设计文档 §1.2）。
+
+	  为什么用 ~ipad 后缀而不是改基础键：后缀键只在 iPad 上生效，
+	  基础键对 iPhone/iPad 都生效 —— 改基础键等于放开 iPhone 横屏，属回归。
+	-->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!--

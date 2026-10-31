@@ -50,6 +50,8 @@ struct SurveyDetailView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 6)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 问卷详情列宽 720（§3.9）：统计是逐行条，横向并排会让每条变短、比较失真。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollIndicators(.hidden)
         .overlay(alignment: .bottom) {

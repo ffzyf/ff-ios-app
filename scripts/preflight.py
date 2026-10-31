@@ -31,6 +31,11 @@ NAMESPACES = {
     "Endpoint":   "Shared/Config/Endpoint.swift",
     "Formatters": "Shared/Util/Formatters.swift",
     "Haptics":    "DesignSystem/Haptics.swift",
+    # `Layout.xxx` 是宽屏常量（contentMaxWidth / formMaxWidth / readingMaxWidth …）。
+    # 加进来是因为 T4/T5 起每个二级页面都要写 `Layout.formMaxWidth` 一类的名字，
+    # 而它们**没有默认值兜底**：拼错一个字母，`.pageColumn(Layout.formMaxWidht)` 在
+    # 没有编译器的本机只表现为"iPad 上列宽没生效"，到 CI 才炸成一轮 10 分钟的编译失败。
+    "Layout":     "DesignSystem/Layout.swift",
 }
 
 STRIP_COMMENTS = [

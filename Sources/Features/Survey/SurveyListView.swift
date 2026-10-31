@@ -33,6 +33,9 @@ struct SurveyListView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 6)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 问卷列表列宽 720（§3.9）。页头在 ScrollView 里，所以跟着同列走 ——
+            // 这正是"返回钮与内容对齐"不需要另外处理的原因。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollIndicators(.hidden)
         // 顶部细条占自己的高度，不压标题
@@ -41,6 +44,10 @@ struct SurveyListView: View {
                 OfflineBanner(kind: .offline)
                     .padding(.horizontal, Spacing.page)
                     .padding(.bottom, 6)
+                    // 与主体同一个列宽（720，见 body 里的 `pageColumn`）：细条挂在
+                    // `safeAreaInset` 上拿的是满宽，不限的话 iPad 上胶囊会左右各探出 97。
+                    // 窄屏 393 < 720，`maxWidth` 不生效 → 零影响。
+                    .pageColumn(Layout.contentMaxWidth)
             }
         }
         .refreshable {

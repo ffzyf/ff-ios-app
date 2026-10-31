@@ -47,6 +47,8 @@ struct SurveyResultView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 6)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 结果看板列宽 720（§3.9）：理由同详情页 —— 条形图的可比性依赖行宽一致。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollIndicators(.hidden)
         .refreshable {

@@ -34,6 +34,10 @@ struct BriefView: View {
             .padding(.horizontal, Spacing.page)
             .padding(.top, 8)
             .padding(.bottom, Spacing.pageBottomInset)
+            // 单列 720 居中（设计文档 §3.4）。这一页**刻意不做两列**：
+            // 主体是文字，680 的正文折成两列只剩 340 ≈ 19 汉字/行，低于 30 字的下限；
+            // 而且"版本对比"与"今日详情"并排会让读者以为它们是同一层级的两件事。
+            .pageColumn(Layout.contentMaxWidth)
         }
         .scrollPosition(scrollPosition)
         .scrollIndicators(.hidden)
@@ -41,6 +45,11 @@ struct BriefView: View {
             await model.loadBrief()
             // 推送状态与简报同源但不同接口：下拉刷新时一起刷，避免「简报是新的一行是旧的」
             await monitor.load(force: true)
+        }
+        // ⌘R：与下拉刷新走同两条（简报 + 监控），否则键盘用户会看到"简报新了、推送还是旧的"
+        .refreshShortcut {
+            Task { await model.loadBrief() }
+            Task { await monitor.load(force: true) }
         }
         // 首屏只补一次监控状态：它在简报页是"附加信息"，失败也不影响简报本体
         .task {

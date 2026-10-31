@@ -19,8 +19,19 @@ enum RedstoneMetric {
     /// 11 / 13 / 34 三档，没有任何 10pt、9pt。全文件一个 10pt 的字号声明都不留。
     /// 11pt semibold：地图全名（`暮土·失落方舟`，含点位）
     static let mapName = Font.system(size: 11, weight: .semibold)
+    /// 主时刻字号。`time` 与 `timeScaled(_:)` 共用这一个数（两处各写一个字面量，将来必有一处被忘）
+    static let timeSize: CGFloat = 34
     /// 34pt rounded bold：主时刻（`23:08`）—— 卡面上唯一的大数字
-    static let time = Font.system(size: 34, weight: .bold, design: .rounded)
+    static let time = Font.system(size: timeSize, weight: .bold, design: .rounded)
+
+    /// 主时刻（按画布短边缩放，见 `WidgetCanvas`）。`textScale(158) == 1` → iPhone 逐点不变。
+    ///
+    /// 为什么新增函数而不把 `time` 改成 `time(scale:)`：本机没有 Swift 工具链，
+    /// 改签名会让"漏改一处 → 只错在 iPad"升级成"漏改一处 → 编译失败 → 一轮 CI 报废"。
+    /// 为什么只缩放大数字：11pt 注脚放大 7% 肉眼不可辨，改它只是多一处回归面（§5.2 纪律 2）。
+    static func timeScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: timeSize * scale, weight: .bold, design: .rounded)
+    }
     /// 11pt 等宽：弧两端的时间（`11:08` / `23:08`），等宽才和弧的端点对得齐
     static let endpoint = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// 11pt 等宽：倒计时。系统每帧重绘秒数，等宽才不会左右跳
@@ -156,8 +167,17 @@ struct RedstoneFace: View {
 
     private let entry: RedstoneEntry
 
+    /// 画布短边（pt）。0 = 还没量到 → 比例为 1 → 与 3.4.0 逐像素一致（降级方向安全）。
+    /// **只影响字号**：padding / 弧高 / 节点直径一个都不缩放（缩放会让弧压字）。
+    @State private var canvasMinSide: CGFloat = 0
+
     init(entry: RedstoneEntry) {
         self.entry = entry
+    }
+
+    /// 这一帧的字号比例（158 → 1.0；iPad 小号 ≈170 → 1.076，上限 1.15）
+    private var s: CGFloat {
+        return WidgetCanvas.textScale(minSide: canvasMinSide)
     }
 
     /// 本月窗口三态：与 App 首页红石卡**同一份判定**（`Sources/Shared/Domain/RedstoneWindow.swift`）。
@@ -198,6 +218,24 @@ struct RedstoneFace: View {
         }
         .padding(RedstoneMetric.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // 画布测量（§5.2）：`.background` 不参与布局，`Group` 拿到的 proposal 与不挂时完全相同。
+        // 只在 `onAppear` / 尺寸真变时写 `@State`，重绘与帧切换都不会触发 body 重算。
+        .background {
+            canvasProbe
+        }
+    }
+
+    /// 量画布**短边**。为什么不是宽度：medium 是 338×158，按宽度算会得到 2.14 再被 clamp 到
+    /// 1.15 —— 所有 medium 档字号一次跳 15%，iPhone 上肉眼可见。短边才是画布尺度。
+    private var canvasProbe: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { canvasMinSide = min(proxy.size.width, proxy.size.height) }
+                .onChange(of: proxy.size) { _, newSize in
+                    let short = min(newSize.width, newSize.height)
+                    if short != canvasMinSide { canvasMinSide = short }
+                }
+        }
     }
 
     // MARK: - 正常倒计时
@@ -279,7 +317,7 @@ struct RedstoneFace: View {
     private var timeBlock: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(entry.focus?.time ?? "")
-                .font(RedstoneMetric.time)
+                .font(RedstoneMetric.timeScaled(s))
                 .foregroundStyle(band.sky.ink)
                 .monospacedDigit()
                 .lineLimit(1)
