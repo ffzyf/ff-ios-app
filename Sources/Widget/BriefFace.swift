@@ -126,6 +126,19 @@ enum BriefMetrics {
     /// 雨丝斜穿两行中文会把字切碎，而这 20pt 正好是行距 + 一点余量的量级，
     /// 视觉上又不会被读成"卡片中间有一条空带"。八档天气共用同一条，不各调各的。
     static let particleClearBand: CGFloat = 20
+
+    /// 正文块**下方**给降水让出的高度（只有 6pt，远小于 `particleClearBand`）。
+    ///
+    /// 为什么上下不对称：`particleClearBand` 那条 20pt 是给**云**留的 —— 云是 α ≤ 0.16 的
+    /// 软团，落在标题行上只是"标题后面有一点亮"，不影响读数（3.7 上线后没人报过问题）。
+    /// 但雨是 1pt 的锐利斜线，穿进 20pt 粗的标题就会把字切碎。
+    ///
+    /// 而这张卡的上半部**全是字**（顶行日期 [12,26]、标题 [32,56]、正文 [60,92]），
+    /// 正文块顶边以上就是 `verticalPadding` 那 12pt —— 上方根本没有能落雨的空白。
+    /// 所以"雨滴太往下了"这个诉求，唯一能动的方向是**把下面那条净空带收窄**：
+    /// 20 → 6，中号卡的雨区从 38pt 变成 54pt、上沿从 y=114 提到 y=98，
+    /// 雨就从正文正下方开始落，不再贴着卡底那一条。
+    static let particleClearBelowBody: CGFloat = 6
     /// 粒子层底部留白。
     ///
     /// 只有 6pt —— 不为"轨迹 + 注脚"整块让位，理由见 `BriefWeatherLayer.precipitationBands`：
@@ -777,9 +790,9 @@ private struct BriefCanvas: View {
 ///    换肤、换明暗、将来调色板，这个颜色都会是唯一一处对不上的地方；
 /// 2. **数量封顶**：云 ≤ 3、雨丝 ≤ 20、雪点 ≤ 14。再多就不是天气，是噪点
 ///    （顺带也是 Widget 的绘制成本：系统每小时都会重画一次）；
-/// 3. **正文保护**：正文块上下各留 `particleClearBand`（20pt）的净空带，里面一颗粒子都不放。
-///    斜雨穿两行中文会把字切碎；云落在标题行上是可以的（α ≤ 0.16，白字照样读得清），
-///    但绝不越过这条带；
+/// 3. **正文保护**：正文块 `[verticalPadding, bodyBottom]` 之内一颗粒子都不放。
+///    斜雨穿两行中文会把字切碎；云落在标题行上是可以的（α ≤ 0.16、软团，白字照样读得清），
+///    但雨 / 雪 / 闪电是锐利图形，一律不越过正文块顶边（见 `particleClearBelowBody`）；
 /// 4. **零模糊滤镜**（连 `.blur` 这个 modifier 都不出现）：Widget 每帧重绘，模糊是这里最贵的一笔。
 ///    雾带的柔边完全由 `LinearGradient` 的上下两端透明伪造。
 ///
@@ -825,8 +838,11 @@ private struct BriefWeatherLayer: View {
 
     /// 云带：卡顶 → 正文块顶边往上一整个净空带。
     ///
-    /// 云只活在这一条里，于是"云压字"这件事在几何上就不可能发生 ——
-    /// 比"我算一个够小的透明度和刚好不压字的坐标"可靠得多。
+    /// 云只活在这一条里。它**会压到标题行**（中号下沿 40，而标题占 [32,56]）——
+    /// 这是刻意的：云是 α ≤ 0.16 的软团，落在标题后面只是"字后面有一点亮"，
+    /// 读得清（3.7 上线后没有反馈过问题）。换成锐利图形（雨 / 雪 / 闪电）就必须
+    /// 让开正文块，见 `particleClearBelowBody` 与 `precipitationBands`。
+    /// 不要把这条带子"顺手"往下推：它决定了云在卡上的高度，一改就是整张卡的天变了。
     private func cloudBand(in size: CGSize) -> CGRect {
         let top = BriefMetrics.verticalPadding(family) * 0.2
         let bottom = BriefMetrics.bodyTop(family) - BriefMetrics.particleClearBand
@@ -834,29 +850,33 @@ private struct BriefWeatherLayer: View {
         return CGRect(x: 0, y: top, width: size.width, height: height)
     }
 
-    /// 降水区：**天空段 + 地面段**两条带。为什么是两段，见下。
+    /// 降水区：**天空段 + 地面段**两条带。
     ///
     /// 用户原话是「雨滴太往下了」。旧版只有一条带 = `[正文底边 + 净空带, 卡底 − 6]`，
-    /// 中号卡上就是 y∈[114,152] —— 卡高 72%–96% 那一窄条。正文上方那 60pt 的天空里
-    /// 一颗粒子都没有，雨只从卡片最下面那条缝里落，所以"往下"说的就是这个。
+    /// 中号卡上就是 y∈[114,152] —— 卡高 72%–96% 那一窄条，所以"往下"说的就是这个。
     ///
-    /// 拆成两段之后**净空带的规则一个字没改**（正文块 `[bodyTop, bodyBottom]` 上下各
-    /// `particleClearBand` 之内仍然一颗粒子都没有，见 `BriefMetrics.particleClearBand`），
-    /// 只是把正文上方的天空也还给雨：
+    /// **3.8.1 修正（第一版错了，记在这里）**：第一版把天空段下沿写成 `bodyTop − 20`
+    /// （中号 = 40），可那条线其实落在**标题内部**（标题占 y∈[32,56]、顶行日期占 [12,26]）——
+    /// 雨丝会斜穿 20pt 粗的标题，正是净空带想避免的事。正文块是
+    /// `[verticalPadding, bodyBottom]`（中号 [12,92]），卡顶到正文块顶边只剩 `verticalPadding`
+    /// 那 12pt，**上方没有任何能落雨的空白**。所以现在的口径是：
     ///
-    /// · 天空段上沿 = `verticalPadding(family) × 0.2` —— **刻意与 `cloudBand` 用同一个式子**，
-    ///   于是"云带"和"天空段的雨"是同一个框：将来云要挪，雨跟着挪，不会出现
-    ///   "云在 2.4 起步、雨在 0 起步"的两套边距；
-    /// · 天空段下沿 = `bodyTop − particleClearBand`（中号 40），上边界就是这条净空带；
-    /// · 地面段上沿 = `bodyBottom + particleClearBand`（中号 114 / 小号 96），
-    ///   下沿 = 卡底 − `particleBottomInset` → **与改版前逐点一致**：那一段本来就没毛病。
+    /// · 天空段 = 卡顶内边距那一条（`[padding × 0.2, padding]`，中号 9.6pt）。
+    ///   它低于 `minFilledBand`（16pt），`split` 会把粒子全给地面段 —— 这是**预期**结果，
+    ///   不是 bug：158pt 高的卡上半部全是字，雨放上去就是切字。
+    ///   保留这条带是为了将来正文块变矮、或出现更高的 family 时，雨自己回到上面，
+    ///   不用再改第二处几何；
+    /// · 地面段 = `[bodyBottom + particleClearBelowBody, 卡底 − particleBottomInset]`
+    ///   （中号 [98,152] 共 54pt；小号 [82,152] 共 70pt）。**"太往下"是在这里解决的**：
+    ///   下方净空带从 20 收到 6，雨区高度 +42%（中号 38→54、小号 56→70），上沿从
+    ///   y=114 提到 y=98。雨从正文正下方就开始落，而不是贴着卡底那一条。
     ///
     /// 下沿仍然不避让轨迹与注脚（理由同旧注释）：那一块画在粒子之上，雨从它们背后落过
     /// 不盖任何读数，而视觉上正是"雨落满整卡"。
     private func precipitationBands(in size: CGSize) -> (sky: CGRect, ground: CGRect) {
         let skyTop = BriefMetrics.verticalPadding(family) * 0.2
-        let skyBottom = BriefMetrics.bodyTop(family) - BriefMetrics.particleClearBand
-        let groundTop = BriefMetrics.bodyBottom(family) + BriefMetrics.particleClearBand
+        let skyBottom = BriefMetrics.verticalPadding(family)
+        let groundTop = BriefMetrics.bodyBottom(family) + BriefMetrics.particleClearBelowBody
         let groundBottom = size.height - BriefMetrics.particleBottomInset
 
         let sky = CGRect(x: 0,
@@ -992,8 +1012,9 @@ private struct BriefWeatherLayer: View {
     /// 雨丝 / 毛毛雨：一排极细的 `Capsule`，按 `tilt` 倾斜。
     ///
     /// 条数按两段的高度比例分（`BriefMetrics.split`），然后**两段各画一遍**：
-    /// 这样"雨落满整卡"才是字面意思 —— 天空段落一段、正文下方的地面段落一段，
-    /// 中间隔着净空带（正文块上下各 20pt，见 `precipitationBands`）。
+    /// 每段各自等距排布，段与段之间由正文块隔开（正文块内一颗粒子都没有，
+    /// 见 `precipitationBands`）。今天天空段只有 9.6pt，低于 `minFilledBand`，
+    /// 所以实际雨丝全在地面段 —— `split` 的 0 条分支会自然处理，不需要外面再判一次。
     ///
     /// 为什么两段共用同一个 `ForEach` 之外不共用一个 `ForEach`：段不同、坐标就不同，
     /// 分两个 `ForEach` 之后每段的 `column` 都以**本段的条数**为分母（`(i + 0.5) / n`），
@@ -1076,17 +1097,17 @@ private struct BriefWeatherLayer: View {
         .position(x: size.width / 2, y: centerY)
     }
 
-    /// 雪点：1.5pt 的小点，约 1/3 散在**天空段**（"散布全卡"），其余落**地面段**。
+    /// 雪点：1.5pt 的小点，全部散在**地面段**。
     ///
-    /// 上 1/3 落天空段而不是 `cloudBand`：两段的上沿取同一个式子
-    /// （`verticalPadding × 0.2`，见 `precipitationBands`），所以几何与改版前逐点一致，
-    /// 只是语义上它现在属于"降水"。两段各自用净空带隔开正文 ——
-    /// 雪点虽小，落在字上同样是脏点。
+    /// 原本有 1/3 落在天空段（"散布全卡"），但天空段现在只有 9.6pt 高 ——
+    /// 5 个 1.5pt 的点挤在一条 9.6pt 的横条里，画出来像一条虚线，比不画更假。
+    /// 所以先问一句"这一段够不够高"，不够就全给地面段（判据与 `split` 的 `minFilledBand` 同源）。
+    /// 雪点虽小，落在字上同样是脏点，正文块内依然一颗都不放。
     private func snowDots(in size: CGSize) -> some View {
         let bands = precipitationBands(in: size)
 
         return ForEach(0..<BriefMetrics.snowCount, id: \.self) { index in
-            let inSky = index % 3 == 0
+            let inSky = bands.sky.height >= BriefMetrics.minFilledBand && index % 3 == 0
             let area = inSky ? bands.sky : bands.ground
             let x = area.minX + area.width * CGFloat(0.04 + 0.92 * scattered(index, 7.9))
             let y = area.minY + area.height * CGFloat(0.10 + 0.80 * scattered(index, 9.4))
