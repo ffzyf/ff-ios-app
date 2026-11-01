@@ -63,6 +63,10 @@ struct SkyRoomView: View {
     @State private var drifting: Bool = false
     /// 滚动提示的 bob 呼吸（2s，±4pt；报告 §三，reduceMotion 不启动）
     @State private var hintBob: Bool = false
+    /// 截图模式下的固定时刻（仅 Debug + bundle 里有 `preview-skyroom.json` 时非 nil）。
+    /// CI 可能在任意时间跑，不钉住时刻的话半夜截图会得到一片夜空，
+    /// 无法和用户反馈的黄昏场景对照。
+    @State private var previewMoment: Date?
 
     var body: some View {
         GeometryReader { proxy in
@@ -76,13 +80,20 @@ struct SkyRoomView: View {
             // 60s 一格：天色与太阳位置每分钟重算一次就够（天色档位本身是整块跳变的）。
             // 秒级走时只发生在顶部倒计时与天光卡倒计时（内层 TimelineView）。
             TimelineView(.periodic(from: Date(), by: 60)) { context in
-                page(size: full, insets: insets, now: context.date)
+                page(size: full, insets: insets, now: previewMoment ?? context.date)
             }
             .frame(width: full.width, height: full.height)
             .offset(x: -insets.leading, y: -insets.top)
         }
         // 兜底底色：万一某一帧没画出天空（首帧量尺寸），也不会有白闪
         .background(Theme.bgBase)
+        // 3.15.0：这一页**强制深色**。
+        //
+        // 天光页是沉浸式场景，它的明暗关系由天空决定，跟系统外观无关。
+        // 浅色模式下 `glassSurface` 用「白 72%」的玻璃，叠在暖色天上会变成一块发闷的白板，
+        // 而卡片文字又是深墨色 —— 真机截图里那几张"灰扑扑的卡片"就是这么来的。
+        // 强制深色后：玻璃 = 白 6% + 厚材质、文字 = 近白，与天空同一套明暗逻辑。
+        .preferredColorScheme(.dark)
         .task {
             await loadWeather()
         }
@@ -182,12 +193,11 @@ struct SkyRoomView: View {
                 .opacity(gone)
                 .offset(y: scrollOffset * SkyRoomMetrics.Scroll.heroLag)
             Spacer(minLength: 0)
-            VStack(spacing: 12) {
-                sunTimesRow(sky: sky, frame: frame, now: now)
-                scrollHint(sky: sky, frame: frame)
-            }
-            .opacity(1 - fade)
-            .padding(.bottom, 10)
+            // 3.15.0：删掉「日出 06:45 · 日落 17:32」那一行 —— 它与「今日天光」卡完全重复，
+            // 而且正好压在地平线上，滚动时和提示叠成一团。日出日落在卡里看得更清楚。
+            scrollHint(sky: sky, frame: frame)
+                .opacity(1 - fade)
+                .padding(.bottom, 14)
         }
         .padding(.top, insets.top + SkyRoomMetrics.Page.topbarReserve)
         .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : 0)
@@ -243,6 +253,10 @@ struct SkyRoomView: View {
             }
         }
         .padding(.horizontal, SkyRoomMetrics.Page.compactInset)
+        // 3.15.0：文字阴影。`sky.ink` 是固定白，而七档天色里有四档的上半部是亮的 ——
+        // 光靠色差读不住。柔和暗影是主流天气 App 的通行做法（把文字从背景里"拎"出来，
+        // 不改字色，于是换档时字色不用跟着跳）。
+        .shadow(color: .black.opacity(0.24), radius: 20, y: 2)
     }
 
     /// 天气现象：服务端中文描述优先，缺了才用八档视觉类型的中性名
@@ -260,20 +274,6 @@ struct SkyRoomView: View {
             return nil
         }
         return "最高 \(Int(high))° · 最低 \(Int(low))°"
-    }
-
-    private func sunTimesRow(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
-        Group {
-            if let times = sunTimes(now: now) {
-                Text("日出 " + Formatters.timeHHmm(times.sunrise)
-                     + " · 日落 " + Formatters.timeHHmm(times.sunset))
-                    .font(SkyRoomMetrics.TextStyle.sunTime(frame.fontScale))
-                    .foregroundStyle(sky.inkDim)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity)
     }
 
     /// 滚动提示：只在第一屏出现，滚过 1/4 屏就淡出（opacity 只减不增，不闪）。
@@ -328,26 +328,46 @@ struct SkyRoomView: View {
             .accessibilityLabel("关闭天光页")
 
             // 阶段名 + 倒计时：秒在走，交给 TimelineView 自己刷（本文件没有 Timer）
+            //
+            // 3.15.0 布局修正：原来是「● 阶段名 ——— Spacer ——— 2分钟59秒」，
+            // 真机上两头被撑到屏幕两侧，中间一条空，读起来像两件不相干的事。
+            // 现在两者紧挨着排，整行靠左，右侧留白 —— 一个"当前状态"才是一个句子。
             TimelineView(.periodic(from: Date(), by: 1)) { context in
-                HStack(spacing: 6) {
+                // 截图模式下时刻是钉住的（`previewMoment`），倒计时不跟着真实秒数跑
+                let moment = previewMoment ?? context.date
+                HStack(spacing: 7) {
                     Circle()
                         .fill(sky.edge)
                         .frame(width: 5, height: 5)
-                    Text(SunClock.phase(at: context.date).label)
+                    Text(SunClock.phase(at: moment).label)
                         .font(SkyRoomMetrics.TextStyle.phase(frame.fontScale))
                         .foregroundStyle(sky.ink)
                         .lineLimit(1)
-                    Spacer(minLength: 8)
-                    if let deadline = SunClock.phase(at: context.date).deadline(at: context.date) {
-                        Text(SkyPhase.countdownText(to: deadline, now: context.date))
+                    if let deadline = SunClock.phase(at: moment).deadline(at: moment) {
+                        Text(shortCountdown(to: deadline, now: moment))
                             .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
                             .foregroundStyle(sky.inkDim)
+                            .monospacedDigit()
                             .lineLimit(1)
                     }
+                    Spacer(minLength: 0)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 顶部倒计时的紧凑格式：`2:59` / `1 时 05 分`。
+    ///
+    /// 不复用 `SkyPhase.countdownText`（那是"2 分钟 59 秒"的完整表达，给小组件与卡片用）：
+    /// 顶栏只有一行、旁边还挨着阶段名，完整表达会把这行撑得很长。
+    private func shortCountdown(to deadline: Date, now: Date) -> String {
+        let total = max(0, Int(deadline.timeIntervalSince(now).rounded()))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 { return "\(hours) 时 \(minutes) 分" }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     // MARK: - 卡片流
@@ -510,7 +530,6 @@ struct SkyRoomView: View {
             // 远 → 近：顺序即 z 轴（后面的盖住前面的）
             ForEach(Array(SkyRoomMetrics.Ridges.layers.enumerated()), id: \.offset) { pair in
                 ridge(spec: pair.element,
-                      index: pair.offset,
                       sky: sky,
                       frame: frame,
                       baseY: baseY,
@@ -519,28 +538,38 @@ struct SkyRoomView: View {
         }
     }
 
-    /// 一层山脊：形状 + 大气透视渐变 + 层间错位 + 滚动视差
+    /// 一层山脊：形状 + 大气透视 + 滚动视差
+    ///
+    /// **山脚的垂直位置是固定的**：矩形底统一落在 `horizon + buryDepth`（0.68H），
+    /// 比地面最外端（0.65H）还低 —— 山一定是从地里长出来的，不存在"山脚露一条天"。
+    /// 峰高由 `heightRatio × amplitude` 决定，三层分别落在 0.47H / 0.51H / 0.53H。
+    ///
+    /// 填充走 `Color.blend` 实色：远山 58% 混入天空色（化在天里），近山 14%（一块实剪影）。
+    /// 3.14.0 用 `opacity` 的结果是一整块"土黄半透明板"——形状轮廓被冲没，只剩脏。
     private func ridge(spec: SkyRoomMetrics.RidgeSpec,
-                       index: Int,
                        sky: Theme.SkyColors,
                        frame: SkyRoomMetrics.Frame,
                        baseY: CGFloat,
                        parallaxY: CGFloat) -> some View {
         let width = frame.stageWidth * spec.widthRatio
         let height = frame.height * spec.heightRatio
-        // 层间错位：远层更高、更靠上（远景先露头）
-        let offsetY = -(CGFloat(index) * SkyRoomMetrics.Ridges.layerOffset) - frame.height * spec.rise
+        // 山脚：固定埋进地面，与 index 无关（层与层的错落由峰高本身拉开）
+        let footY = baseY + frame.height * SkyRoomMetrics.Ridges.buryDepth
+
+        // 山体本色：远山更"化"在天里（混入更多 horizon），近山接近大地本色
+        let ridgeTop = Color.blend(sky.ground, sky.horizon, spec.haze)
+        let ridgeDeep = Color.blend(sky.ground, .black, 0.20)
 
         return SkyRoomRidge(crests: spec.crests,
                             amplitude: spec.amplitude,
                             seed: spec.seed,
                             sampleCount: SkyRoomMetrics.Ridges.sampleCount)
-            // 大气透视：顶部混入更多天空色（远山更"化"在天里），底部才是山体本色
             .fill(
                 LinearGradient(
                     stops: [
-                        .init(color: sky.horizon.opacity(spec.haze), location: 0),
-                        .init(color: sky.ground.opacity(spec.density), location: 1)
+                        .init(color: ridgeTop, location: 0),
+                        .init(color: Color.blend(ridgeTop, ridgeDeep, 0.55), location: 0.55),
+                        .init(color: ridgeDeep, location: 1)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -549,7 +578,7 @@ struct SkyRoomView: View {
             .frame(width: width, height: height)
             // `.position` 返回的是**弹性视图**（铺满 proposal），所以固定尺寸的山不会撑宽父级
             .position(x: frame.stageOriginX + frame.stageWidth * spec.centerX,
-                      y: baseY + offsetY - height / 2)
+                      y: footY - height / 2)
             // 视差下沉：山体下缘原本就埋在地面里，往下沉只会沉得更深，不露底
             .offset(y: parallaxY * spec.parallaxDepth)
     }
@@ -767,30 +796,28 @@ struct SkyRoomView: View {
         let isNight = phase == .night
         let haze = horizonHaze(sky: sky, phase: phase)
 
+        // 三段实色：地平线的暖大地 → 中段大地本色 → 底部压深
+        let crest = Color.blend(sky.horizon, sky.ground, SkyRoomMetrics.Ground.crestMix)
+        let mid = Color.blend(sky.horizon, sky.ground, SkyRoomMetrics.Ground.midMix)
+        let deep = Color.blend(sky.ground, .black, SkyRoomMetrics.Ground.bottomDarken)
+
         return ZStack {
-            // ① 本体：从地平线的**天色**渐到深色（不是一刀切 —— 那正是"断面生硬"的来源）
+            // ① 本体：三段实色（3.15.0 起不再叠半透明 —— 那正是"地平线一片暧昧橙"的来源）
             shape.fill(
                 LinearGradient(
                     stops: [
-                        .init(color: sky.horizon.opacity(SkyRoomMetrics.Ground.skyBleed), location: 0),
-                        .init(color: sky.ground, location: SkyRoomMetrics.Ground.midStop),
-                        .init(color: sky.ground.opacity(SkyRoomMetrics.Ground.bottomAlpha), location: 1)
+                        .init(color: crest, location: 0),
+                        .init(color: mid, location: SkyRoomMetrics.Ground.midStop),
+                        .init(color: sky.ground, location: SkyRoomMetrics.Ground.midStop + 0.22),
+                        .init(color: deep, location: 1)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
-            // ② 玻璃质感：一层极淡的内亮（token 固定，不随帧变色）
-            shape.fill(
-                LinearGradient(
-                    colors: [Theme.glassSheen, Theme.glassHighlightFade],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            // ③ 极淡的竖向纹理（0.02 不透明度）：用 `Canvas` 一次画完
+            // ② 极淡的竖向纹理（0.02 不透明度）：用 `Canvas` 一次画完
             groundTexture(sky: sky, frame: frame)
-            // ④ 地平线下方 20pt 的暖色辉光（从地平线往下淡出）
+            // ③ 地平线下方 20pt 的暖色辉光（从地平线往下淡出）
             shape.fill(
                 LinearGradient(
                     stops: [
@@ -909,6 +936,14 @@ struct SkyRoomView: View {
     /// 所以这一页既不需要新 Store，也不会因为断网把页面变成错误态。
     @MainActor
     private func loadWeather() async {
+        #if DEBUG
+        // 截图模式：bundle 里有标记文件就用它，不请求网络（CI 模拟器可能没网）
+        if let scene = SkyRoomPreviewScene.load() {
+            weatherNow = scene.weather
+            previewMoment = scene.moment
+            return
+        }
+        #endif
         await WeatherStore.shared.load()
         weatherNow = WeatherStore.shared.current
     }
@@ -963,6 +998,33 @@ private struct TopBarGlass: ViewModifier {
         }
     }
 }
+
+// MARK: - 截图场景（仅 Debug）
+
+#if DEBUG
+/// 从 bundle 里的 `preview-skyroom.json` 解出一份天气，并把页面时刻钉在**今天 17:25**（日落档）。
+///
+/// 这个文件只在"准备截图"的那次构建里提交，发版前删除；整段在 `#if DEBUG` 里，
+/// Release 包里既没有这段代码，也没有那个 json。
+private struct SkyRoomPreviewScene {
+
+    let weather: WeatherNow
+    let moment: Date
+
+    static func load() -> SkyRoomPreviewScene? {
+        guard let url = Bundle.main.url(forResource: "preview-skyroom", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let weather = try? JSONDecoder().decode(WeatherNow.self, from: data) else {
+            return nil
+        }
+        var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        components.hour = 17
+        components.minute = 25
+        let moment = Calendar.current.date(from: components) ?? Date()
+        return SkyRoomPreviewScene(weather: weather, moment: moment)
+    }
+}
+#endif
 
 // MARK: - 天幕网格的几何结果
 
@@ -1067,18 +1129,24 @@ private struct SkyRoomDome: View, Equatable {
         }
     }
 
-    /// 某一行的颜色（天顶深 → 地平线暖）
+    /// 某一行的颜色（天顶深 → 地平线暖）。
+    ///
+    /// **全部是 `Color.blend` 的实色混合，一个 `opacity` 都没有**（3.15.0 修的就是这一条）。
+    /// 半透明色会让"天空的颜色"由底下垫着的东西决定，而 MeshGradient 底下什么都没有 ——
+    /// 于是整片天被稀释成灰白。3.14.0 真机截图里那块灰白布就是这么来的。
     private func color(row: Int, warm: Color, depth: Double) -> Color {
         switch row {
         case 0:
-            // 天顶：该档最深的 token 压一层 —— "冷"与"深"是同一件事
-            return sky.ground.opacity(depth * SkyRoomMetrics.SkyDome.zenithAlpha)
+            // 天顶：往该档最深的色里压 —— "冷"与"深"是同一件事
+            return Color.blend(sky.top, sky.ground,
+                               depth * SkyRoomMetrics.SkyDome.zenithMix)
         case 1:
-            return sky.horizon.opacity(SkyRoomMetrics.SkyDome.midWarmth * 0.45)
+            return Color.blend(sky.top, sky.horizon, SkyRoomMetrics.SkyDome.row1Warmth)
         case 2:
-            return sky.horizon.opacity(SkyRoomMetrics.SkyDome.midWarmth)
+            return Color.blend(sky.top, sky.horizon, SkyRoomMetrics.SkyDome.row2Warmth)
         default:
-            return warm.opacity(SkyRoomMetrics.SkyDome.horizonWarmth)
+            // 贴地平线那一行：该档最暖的色，实色
+            return warm
         }
     }
 

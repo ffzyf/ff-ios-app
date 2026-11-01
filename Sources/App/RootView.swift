@@ -102,6 +102,12 @@ struct RootView: View {
         .task {
             await rock.loadSchedule()
         }
+        // 截图模式（仅 Debug 构建，见 `openPreviewSkyRoomIfNeeded`）
+        .task {
+            #if DEBUG
+            await openPreviewSkyRoomIfNeeded()
+            #endif
+        }
         // 天气定位（3.7.0）：进 App 时补一次。
         //
         // 这里**只挂一个 `.task`**（视图出现时跑一次），不放进任何按帧 / 按秒的路径：
@@ -299,6 +305,30 @@ struct RootView: View {
     private func openArticle(_ article: ArticleSummary) {
         openedArticle = article
     }
+
+    // MARK: - 截图模式（仅 Debug 构建）
+
+    #if DEBUG
+    /// 让 CI 的模拟器截图直接落在天光页。
+    ///
+    /// **为什么需要它**：`xcrun simctl launch` 只能把 App 拉到首页，而天光页是一个
+    /// `fullScreenCover`（只能靠点按或深链进入）。workflow 的截图步骤没有 `openurl`，
+    /// 于是截图永远只有首页 —— 天光页的改动只能靠"发版后让用户在手机上看"来验证，
+    /// 那正是 3.14.0 翻车的流程。
+    ///
+    /// 判据是 bundle 里有没有 `preview-skyroom.json`：这个文件只在"准备截图"的那次
+    /// 构建里提交，发版前删除。整段代码在 `#if DEBUG` 里，Release 包中不存在。
+    @MainActor
+    private func openPreviewSkyRoomIfNeeded() async {
+        guard Bundle.main.url(forResource: "preview-skyroom", withExtension: "json") != nil else {
+            return
+        }
+        // 等首页那几发请求把首帧渲染完，否则转场会和首次布局抢同一帧
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard !showsSkyRoom, openedArticle == nil else { return }
+        showsSkyRoom = true
+    }
+    #endif
 
     // MARK: - 深链
 

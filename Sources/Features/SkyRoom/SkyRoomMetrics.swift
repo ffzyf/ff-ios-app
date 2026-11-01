@@ -135,23 +135,43 @@ enum SkyRoomMetrics {
         static let midRow: Float = 0.46
         /// 天顶（第 1 行）的基准位置
         static let zenithRow: Float = 0.16
-        /// 地平线暖色带在天幕里的不透明度（贴着地平线那一行）
-        static let horizonWarmth: Double = 0.92
-        /// 中间行往地平线暖色过渡的比例（0.30 = 只染 30%，保住"天顶冷"）
-        static let midWarmth: Double = 0.34
-        /// 天顶那一行保留的天顶色不透明度（1.0 = 完全冷色，不掺暖）
-        static let zenithAlpha: Double = 0.96
+
+        // ── 四行的颜色权重（3.15.0 起全部改**实色混合**，不再用 opacity）──────────
+        //
+        // 三个数都是 `Color.blend(sky.top, 目标, 权重)` 的权重：
+        //   0 = 完全是天顶色，1 = 完全是目标色。
+        //
+        // 为什么这么分：天空的亮度沿高度是非线性的 ——
+        // 天顶到 40% 高度只掉一点点色，40%→地平线那一段才是暖色爆发区。
+        // 均分四行会让"上半屏一片死平"，这也是 3.14.0 看起来像一块灰布的原因之一。
+
+        /// 天顶行的压深权重（× `zenithDepth`，夜里更深、白天更浅）
+        static let zenithMix: Double = 0.42
+        /// 第二行往地平线暖色走多少
+        static let row1Warmth: Double = 0.34
+        /// 第三行往地平线暖色走多少（再往下就是纯暖色）
+        static let row2Warmth: Double = 0.74
     }
 
     enum Ground {
         /// 地平线两端比弧顶低多少（占屏高）。0.07 ≈ 60pt @852：缓坡而不是圆边。
         static let sag: CGFloat = 0.07
-        /// 地面渐变的最底端不透明度（留住一点天空的透，才像玻璃）
-        static let bottomAlpha: Double = 0.90
-        /// 地面渐变中段的位置：地平线以下先在**天色**里停一下，再压向深色。
-        static let midStop: CGFloat = 0.42
-        /// 地平线一带仍然是天空色的比例（从 1 落到 0 的那段起点）
-        static let skyBleed: Double = 0.55
+
+        // ── 地面渐变（3.15.0：全部改实色混合）──────────────────────────────
+        //
+        // 3.14.0 是「horizon 55% 透明 → ground 实色」，两层叠在灰白天上，
+        // 结果地平线以下是一大片暧昧的橙 —— 既不像大地，也不像天。
+        // 现在是三段实色：地平线处的暖大地 → 中段的大地本色 → 底部再压深一档。
+
+        /// 弧顶处混入大地的比例（0 = 纯天色，1 = 纯大地）。0.22 = 地平线上还留着夕阳的余温
+        static let crestMix: Double = 0.22
+        /// 过渡带结束的位置（相对地面自身高度）
+        static let midStop: CGFloat = 0.30
+        /// 过渡带末端混入大地的比例
+        static let midMix: Double = 0.82
+        /// 最底端再压深一档的比例（让卡片区有一个"安静的底"）
+        static let bottomDarken: Double = 0.32
+
         /// 地平线亮边：雾化层（粗而淡）
         static let edgeHazeWidth: CGFloat = 3.6
         static let edgeHazeAlpha: Double = 0.30
@@ -181,16 +201,17 @@ enum SkyRoomMetrics {
     }
 
     enum Sun {
-        /// 核心实心圆直径。16pt（3.14.0 报告定版：太阳要有"主角感"，12pt 太缩着）
-        static let coreDiameter: CGFloat = 16
+        /// 核心实心圆直径。20pt（3.15.0：16pt 在真机上只是一粒橙点，
+        /// 太阳是这一页的主角之一，得看得出是"一个球"）
+        static let coreDiameter: CGFloat = 20
         /// 内晕直径。贴着核心的亮边，把核心从天幕里"托"出来
-        static let innerGlowDiameter: CGFloat = 96
+        static let innerGlowDiameter: CGFloat = 110
         /// 内晕中心不透明度
-        static let innerGlowAlpha: Double = 0.60
-        /// 外晕直径（报告 §二：420px 光晕 → 折算到 pt 取 340，太阳坐进地平线的辉光里）
-        static let outerGlowDiameter: CGFloat = 340
-        /// 外晕中心不透明度（报告的黄昏光晕中心 0.85 太满，取 0.28 保住各档天色的层次）
-        static let outerGlowAlpha: Double = 0.28
+        static let innerGlowAlpha: Double = 0.68
+        /// 外晕直径（报告 §二：420px 光晕 → 折算到 pt 取 380）
+        static let outerGlowDiameter: CGFloat = 380
+        /// 外晕中心不透明度（0.42：实色天幕上再淡就只剩一个点，再浓会糊掉天色层次）
+        static let outerGlowAlpha: Double = 0.42
         /// 核心外面那圈高光环线宽（内晕之上再压一圈，让核心"立"起来）
         static let ringWidth: CGFloat = 1.2
         /// 高光环的不透明度
@@ -240,25 +261,34 @@ enum SkyRoomMetrics {
     /// 远山：三层山脊，每层用 `Path` 的 `quadCurve` 画起伏（正弦叠加 → 至少 4 个波峰），
     /// 峰高由**固定种子**决定（同一台设备每次进来看见的山完全一样）。
     enum Ridges {
-        /// 层数（远 / 中 / 近）
+        /// 山脚的**埋入深度**（相对屏高）：地平线之下再埋这么深，保证山体下缘被地面盖住。
+        ///
+        /// 3.14.0 的山是**悬空**的：远山矩形底落在 0.535H，而地面弧顶在 0.58H ——
+        /// 中间那条 4.5% 的缝隙直接露出天空，真机上表现为"山脚下面还有一条橙色的天"。
+        /// 现在三层山脚统一埋在 `horizon + buryDepth`，比地面最外端（0.65H）还低。
+        static let buryDepth: CGFloat = 0.10
+
+        /// 层数（远 / 中 / 近）。
+        ///
+        /// 峰高由 `heightRatio × amplitude` 推出来，三层分别落在 0.47H / 0.51H / 0.53H ——
+        /// **远山最高、近山最低**，这是视距造成的（远山能看到更高的山脊）。
+        /// 谷底三层都在 0.61H 左右，全部被地面吃掉，所以看不见"山的底边"。
         static let layers: [RidgeSpec] = [
-            // 远山：宽、扁、最淡（混入最多的天空色）
-            RidgeSpec(crests: 4.0, amplitude: 0.55, widthRatio: 1.24,
-                      centerX: 0.50, heightRatio: 0.10, rise: 0.045,
-                      haze: 0.62, density: 0.34, parallaxDepth: 0.15, seed: 0x11_0001),
-            // 中山：错开半个波长，峰顶比远山高一点
-            RidgeSpec(crests: 5.0, amplitude: 0.62, widthRatio: 1.10,
-                      centerX: 0.42, heightRatio: 0.085, rise: 0.028,
-                      haze: 0.40, density: 0.58, parallaxDepth: 0.25, seed: 0x22_0002),
-            // 近山：最窄的最高、最实
-            RidgeSpec(crests: 6.5, amplitude: 0.50, widthRatio: 0.96,
-                      centerX: 0.58, heightRatio: 0.065, rise: 0.012,
-                      haze: 0.18, density: 0.82, parallaxDepth: 0.40, seed: 0x33_0003)
+            // 远山：宽、高、最淡（混入最多的天空色）
+            RidgeSpec(crests: 3.4, amplitude: 0.40, widthRatio: 1.26,
+                      centerX: 0.50, heightRatio: 0.50,
+                      haze: 0.58, density: 0.30, parallaxDepth: 0.15, seed: 0x11_0001),
+            // 中山：错开半个波长，峰顶比远山矮一档
+            RidgeSpec(crests: 4.2, amplitude: 0.50, widthRatio: 1.12,
+                      centerX: 0.42, heightRatio: 0.32,
+                      haze: 0.36, density: 0.55, parallaxDepth: 0.25, seed: 0x22_0002),
+            // 近山：最窄、最实、峰最低
+            RidgeSpec(crests: 5.2, amplitude: 0.64, widthRatio: 0.98,
+                      centerX: 0.58, heightRatio: 0.22,
+                      haze: 0.14, density: 0.85, parallaxDepth: 0.40, seed: 0x33_0003)
         ]
         /// 曲线采样点数（72 段足够平滑，又不会在每帧重建时变贵）
         static let sampleCount: Int = 72
-        /// 层间错位（pt）：三层加起来错开 16pt，山脊不会"叠成一条线"
-        static let layerOffset: CGFloat = 8
     }
 
     /// 一层山脊的形状参数
@@ -271,10 +301,8 @@ enum SkyRoomMetrics {
         let widthRatio: CGFloat
         /// 水平中心（0…1 相对舞台宽）
         let centerX: CGFloat
-        /// 层高（相对屏高）
+        /// 层高（相对屏高）—— 与 `amplitude` 相乘得到山峰高度
         let heightRatio: CGFloat
-        /// 相对地平线基线往上抬多少（相对屏高）
-        let rise: CGFloat
         /// 大气透视：混入天空色的比例（越远越大）
         let haze: Double
         /// 本体密度（不透明度）

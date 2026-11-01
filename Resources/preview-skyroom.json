@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "code": 3,
+  "text": "阴",
+  "temp": 15,
+  "tMax": 16,
+  "tMin": 10,
+  "cloud": 96,
+  "isDay": true,
+  "wind": 9.7,
+  "windDirText": "西南"
+}
