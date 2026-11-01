@@ -54,8 +54,9 @@ struct EarningsView: View {
     /// 当前选中的平台名。与 `showsPlatformDetail` 成对：先写名字再置 true，
     /// 弹页读到的永远是刚点的那一张卡（而不是上一张留下的名字）。
     @State private var selectedPlatformName: String = ""
-    /// 「最近活动」是否已展开到全部（默认 12 条，与服务端一次返回的量级匹配）
-    @State private var showsAllActivities: Bool = false
+    /// 「最近活动」的本地分页页码（0 起，3.10.0 替换原「全部 / 收起」展开态）。
+    /// 翻页纯切片、不发请求；数据变化（下拉刷新 / 记一笔）时回第 1 页。
+    @State private var activityPage: Int = 0
     @FocusState private var isPasswordFocused: Bool
 
     /// hero 卡最小高度。
@@ -87,8 +88,8 @@ struct EarningsView: View {
     ]
     /// 活动行高度（报告 §4.4：72pt）。名称 15 + 元信息 12 两行文字需要的最小呼吸量。
     private let activityRowHeight: CGFloat = 72.0
-    /// 默认展示的活动条数（超过才给「全部」动作）
-    private let recentActivityLimit: Int = 12
+    /// 每页条数（3.10.0 用户反馈：一次 12 条太长，翻页找某一天更快）。本地分页，翻页不发请求
+    private let activityPageSize: Int = 5
 
     let scrollPosition: Binding<ScrollPosition>
 
@@ -503,19 +504,26 @@ struct EarningsView: View {
 
     // MARK: - 最近活动
 
+    /// 活动总页数（≥ 1，由数据量决定；与切片共用一个分母，不会漂）
+    private var activityPageCount: Int {
+        return max(1, Int(ceil(Double(store.activities.count) / Double(max(activityPageSize, 1)))))
+    }
+
+    /// 当前页的活动切片。页码越界（数据变少）时夹到最后一页 ——
+    /// 否则删数据后停在一个空页上，"下一页"灰着、"上一页"也没内容。
+    private var visibleActivities: [EarningsActivity] {
+        let page = min(max(activityPage, 0), activityPageCount - 1)
+        let start = page * activityPageSize
+        let end = min(start + activityPageSize, store.activities.count)
+        guard start < end else { return [] }
+        return Array(store.activities[start..<end])
+    }
+
     @ViewBuilder
     private var activitySection: some View {
         if store.activities.isEmpty == false {
             VStack(alignment: .leading, spacing: 0) {
-                SectionHeader(
-                    title: "最近活动",
-                    actionTitle: activitiesActionTitle,
-                    action: {
-                        withAnimation(Motion.expand) {
-                            showsAllActivities.toggle()
-                        }
-                    }
-                )
+                SectionHeader(title: "最近活动")
 
                 GlassCard {
                     VStack(alignment: .leading, spacing: 0) {
@@ -527,23 +535,79 @@ struct EarningsView: View {
                                     .frame(height: 1)
                             }
                         }
+
+                        // 多于一页才给翻页器：一页装得下时它只是噪音
+                        if activityPageCount > 1 {
+                            activityPager
+                        }
                     }
                     .padding(.horizontal, Spacing.cardPadding)
                     .padding(.vertical, 4)
+                }
+                // 数据变化（下拉刷新 / 记一笔新增 / 切登录态）回第 1 页：
+                // 页码是"当时那份数组的下标"，数组换了内容旧页码只会指向错误的位置。
+                // 用条数当信号：条数不变但内容整体翻新的场景（换账号）极少，
+                // 漏一次的代价只是"停在第 2 页"，不值得一提一个更重的 identity。
+                .onChange(of: store.activities.count) { _, _ in
+                    activityPage = 0
                 }
             }
         }
     }
 
-    /// 「全部 / 收起」——活动不足一页时不给动作：一个点了没反应的按钮比没有更糟
-    private var activitiesActionTitle: String? {
-        guard store.activities.count > recentActivityLimit else { return nil }
-        return showsAllActivities ? "收起" : "全部"
-    }
+    /// 翻页器：「上一页 / 第 x / y 页 / 下一页」。首页禁上一页、末页禁下一页。
+    ///
+    /// 为什么是本地切片而不是接着拉接口：服务端一次就把全部活动给回来了
+    /// （`store.activities`），翻页只是"看哪一段"，再发请求是纯浪费；
+    /// 样式沿用工程里的玻璃胶囊按钮（`CapsuleGlassButton` 的形态），不新造一套。
+    private var activityPager: some View {
+        HStack(spacing: 12) {
+            Button {
+                Haptics.light()
+                withAnimation(Motion.press) {
+                    activityPage = max(0, min(activityPage, activityPageCount - 1) - 1)
+                }
+            } label: {
+                Text("上一页")
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .glassSurface(.floating, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(activityPage <= 0)
+            .opacity(activityPage > 0 ? 1 : 0.4)
 
-    private var visibleActivities: [EarningsActivity] {
-        guard showsAllActivities == false else { return store.activities }
-        return Array(store.activities.prefix(recentActivityLimit))
+            Spacer(minLength: 0)
+
+            Text("第 \(min(max(activityPage, 0), activityPageCount - 1) + 1) / \(activityPageCount) 页")
+                .font(Typography.footnote)
+                .foregroundStyle(Theme.textTertiary)
+                .monospacedDigit()
+
+            Spacer(minLength: 0)
+
+            Button {
+                Haptics.light()
+                withAnimation(Motion.press) {
+                    activityPage = min(activityPage + 1, activityPageCount - 1)
+                }
+            } label: {
+                Text("下一页")
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .glassSurface(.floating, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(activityPage >= activityPageCount - 1)
+            .opacity(activityPage < activityPageCount - 1 ? 1 : 0.4)
+        }
+        .padding(.vertical, 8)
     }
 
     private func activityRow(_ activity: EarningsActivity) -> some View {

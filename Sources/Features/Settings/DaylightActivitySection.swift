@@ -1,36 +1,53 @@
 import ActivityKit
 import SwiftUI
 
-/// 设置页的「天光」组（设计文档 §1.5）。
+/// 设置页的「天光」组（设计文档 §1.5；3.10.0 重做为**状态跟随型按钮**）。
 ///
-/// 结构与 `LiveActivitySection` **逐行对齐**（同间距、同玻璃底、同行高、同 `.lineLimit(2)`）：
-/// 两个开关在同一个页面里上下相邻，形状必须一致 —— 一个 48pt 高一个 52pt 高，
-/// 用户不会说"行高不一致"，只会觉得"这个页面做得糙"。那里的注释已经把理由写完，这里不抄第二遍。
+/// ## 这一行不再是开关，而是「监控 / 切换」二合一
 ///
-/// 与红石的三处差别，都是"要让用户看得懂"的那一类：
-/// 1. **默认关闭**（`@AppStorage` 初值 false）：天光是**常驻型**活动，白天一直占着
-///    灵动岛 / 锁屏，不替用户做主；红石是事件型的，默认开启才合理；
-/// 2. 多第三段说明"与红石同时只显示红石那一个"：天光会**自己消失**（被红石挤掉），
-///    不给这句话，用户只会以为它坏了 —— 这是两种活动最容易被误判的区别；
-/// 3. 降级态的替代方案指向桌面「天光」小组件：那个组件不依赖实时活动，落点是真实的。
+/// 3.8.0~3.9.0 的那一版是纯 Toggle：`@AppStorage` 记"用户的意图"，
+/// Toggle 拨到哪边就是哪边 —— 哪怕活动其实已经被红石挤掉、被系统收掉、窗口已经过期，
+/// 开关仍然闭着眼说"开着"。用户看到的字与屏幕上的事实分叉，就会以为"它坏了"。
+///
+/// 3.10.0 起（用户反馈：灵动岛到底显没显示，在设置里看不见）：
+/// - **副标题实时跟随 `DaylightActivityCoordinator.isIslandActive`**：
+///   「灵动岛与锁屏显示中」/「未显示」，红石占用时明确写「红石活动占用中」（按钮禁用）；
+/// - **右侧是一个按钮**：显示中 → 文案「关闭」（动作 = 记住关闭 + `endAll()`）；
+///   未显示 → 文案「开启」（动作 = 记住开启 + `startNow()`）。
+///   注意动作里仍要**写存储键**：不写的话 60 秒 tick 会按旧意图把活动重新拉起来（或再次收掉），
+///   "关了又自己回来"比旧版 Toggle 更糟。写键 + 动作合在同一处，语义才闭环；
+/// - **`.task` + scenePhase 回前台时 `refreshActivityState()`**：前台回来状态要跟上
+///   （系统 / 红石在后台动过活动，App 不刷新就读旧态）。
+///
+/// 结构与 `LiveActivitySection`（红石，仍是真开关）**逐行对齐**（同间距、同玻璃底、同行高）：
+/// 两个相邻行的形状必须一致，一个 48pt 一个 52pt，用户只会觉得"这个页面做得糙"。
 struct DaylightActivitySection: View {
 
-    /// 与 `DaylightSettings.storageKey` 同一个键；**默认关闭**（理由见类型注释）
+    /// 与 `DaylightSettings.storageKey` 同一个键。**默认关闭**（天光是常驻型活动，
+    /// 不替用户做主）。注意：它只表达"用户的意图"，**不驱动按钮的显示状态** ——
+    /// 显示状态只看 `coordinator.isIslandActive`（见文件头）。
     @AppStorage(DaylightSettings.storageKey) private var isEnabled: Bool = false
 
-    /// 前台/后台切换时重读能力：用户可能刚在系统设置里把实时活动关掉或打开
+    /// 活动状态的唯一来源（观察单例：`isIslandActive` 变化即重算副标题与按钮文案）
+    @ObservedObject private var coordinator = DaylightActivityCoordinator.shared
+
+    /// 前台/后台切换时重读能力 + 刷新活动状态
     @Environment(\.scenePhase) private var scenePhase
 
     /// 能力判定结果。**初值直接在声明处读**，不在 `onAppear` 里补 ——
-    /// 否则首帧会先画出一个可点的开关、第二帧再跳成灰的，那一下闪烁比降级本身更可疑
+    /// 否则首帧会先画出一个可点的按钮、第二帧再跳成灰的，那一下闪烁比降级本身更可疑
     @State private var activitiesEnabled: Bool = ActivityAuthorizationInfo().areActivitiesEnabled
+
+    /// 切换动作是否在跑（防连点：动作是同步的，但 endAll 的收尾是异步的，
+    /// 连点会在系统还没摘完旧活动时又发一个相反动作）
+    @State private var isToggling: Bool = false
 
     /// 显式空 init：`@AppStorage` / `@State` 是 private 存储属性，避免 memberwise init 被降级
     init() {}
 
     var body: some View {
         VStack(spacing: 8) {
-            toggleRow
+            actionRow
 
             Text(detailParagraph)
                 .font(Typography.captionXS)
@@ -44,29 +61,35 @@ struct DaylightActivitySection: View {
                 .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
                 .padding(.horizontal, 4)
         }
+        // 回前台：能力与活动状态都要跟上（系统设置里可能刚关/开了实时活动，
+        // 红石 / 系统也可能在后台动过天光活动）
         .onChange(of: scenePhase) { _, phase in
-            // 只在回到前台时读，且**值真变才写** `@State`：写同样的值也会多一次 body 重算，
-            // 而这里没有任何东西需要跟着重算（与 `LayoutMetricsScope` 同一条纪律）
             guard phase == .active else { return }
             let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
             if enabled != activitiesEnabled {
                 activitiesEnabled = enabled
             }
+            coordinator.refreshActivityState()
+        }
+        // 首次出现也刷一次：进设置页之前活动状态可能已经变了（60 秒 tick 已兜一层，
+        // 这里是即时性兜底）
+        .task {
+            coordinator.refreshActivityState()
         }
     }
 
-    // MARK: - 开关行
+    // MARK: - 行
 
-    private var toggleRow: some View {
+    private var actionRow: some View {
         HStack(spacing: 12) {
             Image(systemName: "sun.horizon.fill")
                 .font(.system(size: 15, weight: .medium))
-                // 能力不可用时图标一并退到中性色：否则会出现"灰开关 + 青柠图标"的矛盾态
-                .foregroundStyle(isEnabled && activitiesEnabled ? Theme.limeInk : Theme.textTertiary)
+                // 能力不可用 / 未显示时图标退到中性色：青柠图标配「未显示」，会读成"已经生效了"
+                .foregroundStyle(coordinator.isIslandActive && activitiesEnabled ? Theme.limeInk : Theme.textTertiary)
                 .frame(width: 22, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("天光实时活动")
+                Text("天光灵动岛")
                     .font(Typography.callout)
                     .foregroundStyle(Theme.textPrimary)
                 Text(subtitle)
@@ -79,35 +102,68 @@ struct DaylightActivitySection: View {
 
             Spacer(minLength: 8)
 
-            Toggle("", isOn: $isEnabled)
-                .labelsHidden()
-                .tint(Theme.lime)
-                // 置灰而不是隐藏：iPad 上实时活动不可用，但这一行仍要解释"为什么不能用 +
-                // 还有什么能用"。同理这里不判 `widthClass`（Slide Over 里 iPad 也是 compact）
-                .disabled(!activitiesEnabled)
-                .accessibilityLabel("天光实时活动")
+            toggleButton
         }
         .padding(.horizontal, Spacing.cardPadding)
         .padding(.vertical, 10)
         // 行高与「红石」组那一行完全相同：无论行文折几行，这一行的盒子高度不变
         .frame(minHeight: Spacing.listItemMinHeight)
         .glassSurface(.card, in: RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
-        .onChange(of: isEnabled) { _, newValue in
-            Haptics.light()
-            if newValue {
-                // 用户点开关就是要"立马出现在灵动岛上"——等下一次 60 秒 tick 等于假开关。
-                // `startNow()` 是同步的 @MainActor 方法，直接调即可，不需要包 Task。
-                // 它保留硬守卫（开关 / 系统能力 / 红石优先），但刻意跳过两条自动启动守卫：
-                // "夜里不启动"——夜里手动开就是要看那张夜间卡；
-                // "距日落不足 10 分钟不启动"——那是自动启动省 request 的规则，
-                // 用户手点的每一次 request 都是明确要花的。守卫的推导在 Coordinator 侧。
-                DaylightActivityCoordinator.shared.startNow()
-            } else {
-                // 关掉即收尾：不等下一次 60 秒评估（与红石同一纪律）
-                DaylightActivityCoordinator.shared.endAll()
-            }
-        }
     }
+
+    /// 右侧的单个按钮：显示中 → 「关闭」；未显示 → 「开启」。
+    ///
+    /// 置灰的三种情况：动作在跑（防连点）、系统能力不可用、红石占用中
+    ///（占用时 Coordinator 的 startNow 也会拒，但按钮先禁用更诚实）。
+    private var toggleButton: some View {
+        Button {
+            applyToggle()
+        } label: {
+            Text(buttonTitle)
+                .font(Typography.footnoteMedium)
+                .foregroundStyle(Theme.onLime)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background { Capsule().fill(Theme.lime) }
+                .overlay { Capsule().strokeBorder(Theme.glassStrokeTop, lineWidth: 1) }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(!canTap)
+        // 置灰而不是隐藏：iPad 上实时活动不可用，但这一行仍要解释"为什么不能用 +
+        // 还有什么能用"。同理这里不判 `widthClass`（Slide Over 里 iPad 也是 compact）
+        .opacity(canTap ? 1 : 0.4)
+        .accessibilityLabel(buttonTitle)
+    }
+
+    // MARK: - 动作
+
+    private var canTap: Bool {
+        return activitiesEnabled && !isToggling && !DaylightActivityCoordinator.isRockOccupying()
+    }
+
+    private var buttonTitle: String {
+        return coordinator.isIslandActive ? "关闭" : "开启"
+    }
+
+    /// 按下按钮：写意图键 + 执行对应动作，最后刷新一次状态。
+    ///
+    /// 为什么动作里要写存储键（文件头已述）：60 秒 tick 只认存储键。
+    /// `endAll` / `startNow` 内部都会 `refreshActivityState()`，这里不必再刷。
+    private func applyToggle() {
+        Haptics.light()
+        isToggling = true
+        if coordinator.isIslandActive {
+            isEnabled = false
+            DaylightActivityCoordinator.shared.endAll()
+        } else {
+            isEnabled = true
+            DaylightActivityCoordinator.shared.startNow()
+        }
+        isToggling = false
+    }
+
+    // MARK: - 文案
 
     /// 第一段说明：可用时说"开启后会怎样"，不可用时说"这台设备上没有这件事"，
     /// **两段行数一致**（iPhone 上都是 2 行）——避免"降级态比正常态高出 16pt"这种
@@ -119,11 +175,14 @@ struct DaylightActivitySection: View {
         return "开启后立刻出现在锁屏与灵动岛：此刻的太阳位置、天色与天气。日落或 8 小时后自动消失，回到 App 会重新出现。"
     }
 
-    /// 副标题：可用时说"能做什么"，不可用时说"为什么不能用 + 还有什么能用"
+    /// 副标题：**实时状态**（不是存储里的意图）。优先级：能力缺失 > 红石占用 > 实际显示状态。
     private var subtitle: String {
-        guard !activitiesEnabled else {
-            return "锁屏与灵动岛显示此刻的天光"
+        guard activitiesEnabled else {
+            return "此设备不支持锁屏实时活动，可用桌面小组件"
         }
-        return "此设备不支持锁屏实时活动，可用桌面小组件"
+        if DaylightActivityCoordinator.isRockOccupying() {
+            return "红石活动占用中"
+        }
+        return coordinator.isIslandActive ? "灵动岛与锁屏显示中" : "未显示"
     }
 }

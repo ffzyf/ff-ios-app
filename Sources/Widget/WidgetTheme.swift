@@ -255,3 +255,105 @@ extension WidgetTheme {
         static let tintedSunAlpha: Double = 0.55
     }
 }
+
+// MARK: - 锁屏 accessory 档（3.10.0：天光与月相的紧凑形态）
+//
+// accessory（锁屏 / 灵动岛旁的环形与长条）没有 158pt 的画布，字号、行距都是另一套
+// 尺度 —— 塞桌面档的 10~28pt 会直接溢出。三档集中在这里，与桌面档同一个取值纪律：
+// **颜色一个都不放**（走 Theme token），只放尺寸与字号。
+extension WidgetTheme {
+
+    /// accessory 档的字号与行高
+    enum Accessory {
+
+        /// 环形（circular）里的主字： illumination 百分比、图标下的短数值
+        static let circularValue = Font.system(size: 12, weight: .bold, design: .rounded)
+        /// 长条（rectangular）的第一行：阶段名 / 月名
+        static let linePrimary = Font.system(size: 13, weight: .semibold)
+        /// 长条的第二行：时刻 / 百分比
+        static let lineSecondary = Font.system(size: 11, weight: .medium, design: .monospaced)
+        /// 一行（inline）形态：全部内容只有一行，字略小于长条主行
+        static let inlineText = Font.system(size: 12, weight: .semibold)
+        /// 长条行距
+        static let lineSpacing: CGFloat = 2
+    }
+}
+
+// MARK: - 天气三卡（日弧 / 月相 / 风，3.10.0）
+//
+// 三张新卡的常量集中处（与 `SkyLight` / `BriefMetrics` 同一个纪律：尺寸 / 字号住表里，
+// View 里零字面量；颜色一个都不进这张表 —— 全部走 `Theme.sky(phase)` 等 token）。
+extension WidgetTheme {
+
+    /// 日弧卡（SunArc）
+    enum SunArc {
+        /// WidgetKit 的 kind（改名会让已上桌的实例失效）
+        static let kind = "SunArcWidget"
+        static let displayName = "日弧"
+        static let description = "今天的日出日落与太阳在弧上的位置，倒数到日落。"
+
+        /// 弧顶高度（占卡高）。比天光卡的 0.62 更高：这张卡的中段要给太阳点与倒计时留净空
+        static let arcCrestY: CGFloat = 0.46
+        /// 弧两端高度（占卡高）
+        static let arcEdgeY: CGFloat = 0.64
+
+        /// 太阳辉光点本体直径
+        static let sunCoreDiameter: CGFloat = 10
+        /// 辉光点外面那圈高光环的线宽
+        static let sunRingWidth: CGFloat = 1.5
+        /// 辉光点半径占比（画布宽 × 该值 = 光晕半径）
+        static let glowFactor: CGFloat = 0.30
+        /// 辉光中心不透明度
+        static let glowAlpha: Double = 0.42
+
+        /// 大字时刻字号（左下日出 / 右下日落）
+        static let sunTimeSize: CGFloat = 15
+        /// 中号底部倒计时的字号
+        static let countdownSize: CGFloat = 12
+
+        static let sunTime = Font.system(size: sunTimeSize, weight: .semibold, design: .monospaced)
+        static let countdown = Font.system(size: countdownSize, weight: .semibold, design: .monospaced)
+        /// 9pt 小标签（"日出"/"日落"）
+        static let tagLabel = Font.system(size: 9, weight: .semibold)
+    }
+
+    /// 月相卡（MoonPhase）
+    enum Moon {
+        /// WidgetKit 的 kind
+        static let kind = "MoonPhaseWidget"
+        static let displayName = "月相"
+        static let description = "今晚的月亮：月名与照明度，纯天文计算，不联网。"
+
+        /// 月盘直径（占小号画布短边的比例）
+        static let discRatio: CGFloat = 0.46
+        /// 月名字号
+        static let nameSize: CGFloat = 11
+        /// 照明度百分比的字号
+        static let percentSize: CGFloat = 10
+
+        static let name = Font.system(size: nameSize, weight: .semibold)
+        static let percent = Font.system(size: percentSize, weight: .medium, design: .monospaced)
+        /// 月盘阴影的描边（亮面 / 暗面分界不画线，靠两圆交叠的自然边界）
+        static let discStrokeWidth: CGFloat = 0.8
+    }
+
+    /// 风卡（Wind）
+    enum Wind {
+        /// WidgetKit 的 kind
+        static let kind = "WindWidget"
+        static let displayName = "风"
+        static let description = "现在的风速与 16 方位风向，来自天气实况。"
+
+        /// 风速大字字号
+        static let speedSize: CGFloat = 26
+        /// 单位 / 方位字号
+        static let unitSize: CGFloat = 11
+        /// 风向箭头字号（SF Symbol 尺寸）
+        static let arrowSize: CGFloat = 20
+
+        static let speed = Font.system(size: speedSize, weight: .bold, design: .rounded)
+        static let unit = Font.system(size: unitSize, weight: .semibold)
+        /// 底部注脚
+        static let footnote = Font.system(size: 9, weight: .medium)
+    }
+}

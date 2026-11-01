@@ -4,10 +4,14 @@ import Foundation
 import UIKit
 #endif
 
-/// 设置 / 关于（PRD §3.6），以 sheet 形式从概览右上角的齿轮打开。
+/// 设置（PRD §3.6），以 sheet 形式从概览右上角的齿轮打开。
 ///
-/// 刻意保持「四组静态信息」的体量：本版无账号、无同步、无推送开关，
-/// 唯一会改本地状态的动作只有「清空缓存」，所以没有 ViewModel —— 多一层只为搬运两个字符串不值得。
+/// 3.10.0 起的原则：**设置只留可操作项**（开关、选择、动作），说明性 / 只读内容
+/// （版本展示、数据来源、边界说明）已全部挪到「更多 → 关于」（`MoreAboutSheet`）——
+/// 同一句话在两处各写一份，迟早有一份过期。
+///
+/// 刻意保持薄：本版无账号、无同步、无推送开关，会改本地状态的动作只有
+/// 「清空缓存」与各组的开关/登录，所以没有 ViewModel —— 多一层只为搬运两个字符串不值得。
 /// 域名一律取自 `API` 常量，页面里不出现任何协议前缀字面量（T09 静态审查会 grep 这一条）。
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -27,15 +31,11 @@ struct SettingsView: View {
                     group("天气") { WeatherLocationSection() }
                     // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
                     group("红石") { LiveActivitySection() }
-                    // 3.8.0：天光实时活动开关（第二个实时活动，与红石互斥、红石优先）
+                    // 3.8.0：天光实时活动（3.10.0 起是"状态跟随"按钮，见 DaylightActivitySection）
                     group("天光") { DaylightActivitySection() }
                     // 批次 3：问卷管理（登录 / 退出）。单例观察，不依赖环境对象注入
                     group("问卷管理") { AccountSection() }
-                    group("版本") { versionRow }
-                    group("数据来源") { sourceRows }
                     group("缓存") { cacheRow }
-                    group("关于") { SettingsAboutCard() }
-                    SettingsFooterLine()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Spacing.page)
@@ -71,7 +71,8 @@ struct SettingsView: View {
                     .font(Typography.titleL)
                     .tracking(Typography.trackingLarge)
                     .foregroundStyle(Theme.textPrimary)
-                Text("关于这个 App 的一切")
+                // 副标题跟着页面职责改：这里只剩开关与动作，只读信息在「关于」
+                Text("开关与动作都在这里；版本与数据来源见「更多 → 关于」")
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.textTertiary)
             }
@@ -100,44 +101,6 @@ struct SettingsView: View {
 
     // MARK: - 各组内容
 
-    private var versionRow: some View {
-        GlassListRow(
-            icon: "app.badge",
-            title: "当前版本",
-            detail: appVersion,
-            showsChevron: false
-        ) {
-            // 版本号没有可点的动作，留空实现即可（不弹假提示）
-        }
-    }
-
-    @ViewBuilder
-    private var sourceRows: some View {
-        VStack(spacing: 8) {
-            GlassListRow(
-                icon: "globe",
-                title: "博客内容",
-                detail: displayHost(API.blogHost),
-                showsChevron: false
-            ) {
-                copyToPasteboard(API.blogHost)
-            }
-            GlassListRow(
-                icon: "cloud",
-                title: "光遇版本与简报",
-                detail: displayHost(API.briefHost),
-                showsChevron: false
-            ) {
-                copyToPasteboard(API.briefHost)
-            }
-            Text("点一下域名可以复制。App 只读这些数据，不会改动任何一篇内容。")
-                .font(Typography.captionXS)
-                .foregroundStyle(Theme.textTertiary)
-                .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
-                .padding(.horizontal, 4)
-        }
-    }
-
     private var cacheRow: some View {
         GlassListRow(
             icon: "trash",
@@ -151,35 +114,11 @@ struct SettingsView: View {
 
     // MARK: - 数据
 
-    private var appVersion: String {
-        let info = Bundle.main.infoDictionary ?? [:]
-        // 读不到就给「—」而不是写死一个版本号：写死的话每次升版都要记得回来改这一行，
-        // 漏一次就会在设置页显示一个过期的旧版本，比显示「—」更容易误导。
-        let short = info["CFBundleShortVersionString"] as? String ?? "—"
-        let build = info["CFBundleVersion"] as? String ?? "—"
-        return "\(short) (\(build))"
-    }
-
-    /// 列表里只显示域名（`API` 常量带协议前缀，用户不需要看那一截）
-    private func displayHost(_ raw: String) -> String {
-        return URL(string: raw)?.host ?? raw
-    }
-
     // MARK: - 动作
 
     private func refreshCacheSize() {
         let bytes = URLCache.shared.currentDiskUsage + URLCache.shared.currentMemoryUsage
         cacheText = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
-
-    private func copyToPasteboard(_ value: String) {
-        #if canImport(UIKit)
-        UIPasteboard.general.string = value
-        #endif
-        Haptics.success()
-        withAnimation(Motion.glassIn) {
-            toast = "已复制 \(value)"
-        }
     }
 
     private func clearCache() {

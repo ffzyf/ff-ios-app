@@ -19,14 +19,32 @@ enum BriefMetrics {
     static let tag = Font.system(size: 9, weight: .semibold)
     /// 标题字号。`title` 与 `titleScaled(_:)` **共用这一个数**：两处各写一个字面量，
     /// 将来调字号时必然有一处被忘掉，而"忘掉"的表现是"iPad 上只有一半的字变大"。
+    /// 3.10.0 起标题只在**无天气兜底态**出现（有天气时主视觉换成温度大字），字号不动。
     static let titleSize: CGFloat = 20
-    /// 正文字号（同上）
+    /// 正文字号（同上）。3.10.0 起降格为"弱化正文"，仍是这段字的唯一字号出处
     static let bodySize: CGFloat = 13
+    /// 弱化正文字号（3.10.0）：天气升为主视觉后，简报首句降一档、再压一档透明度 ——
+    /// "今天天气怎么样"是第一眼要答的，"今天有什么事"退到第二眼。
+    static let weakBodySize: CGFloat = 11
+    /// 温度大字字号（3.10.0 主视觉）。参考图 IMG_9275 的"21°C"与"22° 19°"层级：
+    /// 温度是卡上最大的数字，但 158pt 高的画布放不下 44pt 那种 hero，
+    /// 30pt 是"一眼读出今天多少度"与"不挤压上下文行"的平衡点
+    static let tempSize: CGFloat = 30
+    /// 天气现象文字字号（"小雨"、"晴间多云"…）
+    static let weatherTextSize: CGFloat = 15
+    /// 高低温字号（"22° 19°"）。等宽：两个数字要对齐，分钟位之间不跳
+    static let hiLoSize: CGFloat = 11
 
     /// 20pt bold：卡名「每日简报」。一句话的卡不需要 28pt，但必须明显高于正文
     static let title = Font.system(size: titleSize, weight: .bold)
-    /// 13pt：正文首句（中号 2 行 / 小号 1 行）
+    /// 13pt：正文首句（中号 2 行 / 小号 1 行）。**只在无天气兜底态使用**
     static let body = Font.system(size: bodySize, weight: .regular)
+    /// 30pt rounded bold：温度大字（3.10.0 主视觉）
+    static let temp = Font.system(size: tempSize, weight: .bold, design: .rounded)
+    /// 15pt semibold：天气现象文字
+    static let weatherText = Font.system(size: weatherTextSize, weight: .semibold)
+    /// 11pt 等宽：高低温
+    static let hiLo = Font.system(size: hiLoSize, weight: .medium, design: .monospaced)
 
     /// 标题（按画布短边缩放，见 `WidgetCanvas`）。
     ///
@@ -40,6 +58,21 @@ enum BriefMetrics {
     /// 正文（按画布短边缩放）
     static func bodyScaled(_ scale: CGFloat) -> Font {
         return Font.system(size: bodySize * scale, weight: .regular)
+    }
+
+    /// 弱化正文（按画布短边缩放）
+    static func weakBodyScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: weakBodySize * scale, weight: .regular)
+    }
+
+    /// 温度大字（按画布短边缩放）。数字必须等宽走时稳定，rounded 保持与红石大字同一气质
+    static func tempScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: tempSize * scale, weight: .bold, design: .rounded)
+    }
+
+    /// 天气现象（按画布短边缩放）
+    static func weatherTextScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: weatherTextSize * scale, weight: .semibold)
     }
     /// 正文行距：中文字面高、行距为 0 会糊成一团
     static let bodyLineSpacing: CGFloat = 2
@@ -81,6 +114,11 @@ enum BriefMetrics {
     static let titleLineHeight: CGFloat = 24
     /// 13pt regular 的行高
     static let bodyLineHeight: CGFloat = 16
+    /// 温度大字块的行高（3.10.0）：30pt rounded bold 的实测行高 ≈ 36，
+    /// 再加 2pt 给同排"天气现象 + 高低温"两行的溢出余量
+    static let heroLineHeight: CGFloat = 38
+    /// 弱化正文（11pt）的行高。3.10.0 起正文恒 1 行（中号 / 小号同此）
+    static let weakBodyLineHeight: CGFloat = 14
 
     // MARK: 轨迹
 
@@ -233,24 +271,30 @@ enum BriefMetrics {
         return family == .systemSmall ? smallDotCount : mediumDotCount
     }
 
-    /// 正文行数：小号只放得下 1 行（2 行会把轨迹顶出画布）
+    /// 正文行数：弱化正文恒 1 行（3.10.0 起正文降格，中号也只给 1 行 ——
+    /// 多出来的高度全部让给天气主视觉；小号整行不画）
     static func bodyLineLimit(_ family: WidgetFamily) -> Int {
-        return family == .systemSmall ? 1 : 2
+        return 1
     }
 
-    /// 正文块的**顶边**到卡顶的距离（行高逐项相加，见「行高」一节的理由）
+    /// 正文块的**顶边**到卡顶的距离（行高逐项相加，见「行高」一节的理由）。
+    ///
+    /// 3.10.0 起按新版式推导：眉题 → 天气主视觉（heroLineHeight）→ 弱化正文。
+    /// 无天气兜底态里这一行数与实际文字块略有出入（那边是标题 + 正文），
+    /// 但它的消费方只有降水/云的粒子带 —— 装饰层的 ±6pt 误差换算过来是
+    /// "雨从正文底下多一点或少一点开始落"，方向安全，不值得为兜底态再算一套。
     static func bodyTop(_ family: WidgetFamily) -> CGFloat {
         return verticalPadding(family)
             + eyebrowLineHeight
             + titleGap
-            + titleLineHeight
+            + heroLineHeight
             + bodyGap
     }
 
     /// 正文块的**底边**到卡顶的距离
     static func bodyBottom(_ family: WidgetFamily) -> CGFloat {
         let lines = CGFloat(bodyLineLimit(family))
-        let bodyHeight = bodyLineHeight * lines + bodyLineSpacing * max(lines - 1, 0)
+        let bodyHeight = weakBodyLineHeight * lines
         return bodyTop(family) + bodyHeight
     }
 
@@ -301,14 +345,19 @@ enum BriefMetrics {
 /// ```
 /// ┌─────────────────────────────────────────┐
 /// │ 10月31日 周六                     简报   │ ← 11pt semibold + 9pt 胶囊
-/// │                                          │
-/// │ 每日简报                                 │ ← 20pt bold
-/// │ 今天的第一句正文，最多 2 行，超出截断……    │ ← 13pt，行距 2
-/// │                                          │
+/// │ 21°  小雨                  22° 19°      │ ← 3.10.0 主视觉：温度 + 现象 + 高低温
+/// │ 今天的第一句正文（弱化，1 行）……          │ ← 11pt 弱化辅行
 /// │  · · · · · · · · ● · · · · · · · · ·     │ ← 24 颗 2pt 刻度 + 1 颗 5pt 光点
 /// │ 宜 打猎          忌 店铺开业   06:44 17:33│ ← 11pt，两端对齐
 /// └─────────────────────────────────────────┘
 /// ```
+///
+/// 3.10.0 用户原话："我不是想看太阳等级，我是想看今天的天气怎么样" —— 所以主视觉
+/// 从"每日简报标题"换成**今日天气**（温度大字 + 现象 + 高低温，数据同源
+/// `entry.weather` = `GET /api/app/weather`，简报 Provider 本来就在并发拉）；
+/// 简报首句保留但弱化（11pt + 再压一档透明度）。天气没拉到时不编内容：
+/// 整卡退回 3.9.0 的"每日简报 + 首句"形态，温度行整个不画。
+/// 雨滴 / 云 / 雾 / 闪电粒子带原样保留，只跟随真实天气（下雨才出）。
 ///
 /// V3.7 起，**底色与粒子跟着当天的真实天气走**（用户原话："把拉到的天气对应放到对应的效果上"）；
 /// 3.7.1 起，**纸面跟着系统的浅色 / 深色走**（用户第二次反馈"背景还是黑的"）。
@@ -430,16 +479,31 @@ struct BriefFace: View {
     }
 
     // MARK: - 版式骨架
-
+    //
+    // 3.10.0 重排（用户原话："我不是想看太阳等级，我是想看今天的天气怎么样"）：
+    // **主视觉 = 今日天气**（大号温度 + 天气现象 + 高低温），简报首句降格为弱化的辅行，
+    // 轨迹与宜忌 / 日出日落注脚原样保留 —— 天气是第一眼要答的，"今天有什么事"是第二眼。
+    // 天气没拉到（nil）时**不编内容**：整卡退回原来的"每日简报 + 首句"形态，
+    // 温度行整个不画，绝不显示 "—°" 或 "0°"。
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            titleRow
-                .padding(.top, BriefMetrics.titleGap)
+            if hasWeather {
+                weatherHero
+                    .padding(.top, BriefMetrics.titleGap)
 
-            bodyRow
-                .padding(.top, BriefMetrics.bodyGap)
+                weakenedBody
+                    .padding(.top, BriefMetrics.bodyGap)
+            } else {
+                // 无天气兜底态：沿用 3.9.0 的版式（标题 + 正文首句），
+                // 这是"不知道天气"的诚实形态，不是错误态
+                titleRow
+                    .padding(.top, BriefMetrics.titleGap)
+
+                bodyRow
+                    .padding(.top, BriefMetrics.bodyGap)
+            }
 
             // 唯一的弹性留白：把小号也"钉"成上文字下轨迹的两段式，
             // 其余间距全是固定 PT —— 正文多少都不会把轨迹挤出画布。
@@ -457,6 +521,81 @@ struct BriefFace: View {
         .padding(.horizontal, BriefMetrics.sidePadding(family))
         .padding(.vertical, BriefMetrics.verticalPadding(family))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 有没有天气可当主视觉：`ok` 且温度或现象至少有一头（两头全缺就不摆 hero）。
+    private var hasWeather: Bool {
+        guard let weather = entry.weather, weather.ok else { return false }
+        return weather.temp != nil || weather.text != nil
+    }
+
+    // MARK: - 天气主视觉（3.10.0）
+
+    /// 大号温度 + 天气现象 + 高低温（参考 IMG_9275 右上的"22° 19°"层级）。
+    ///
+    /// 温度取整显示（`Int` 截断而非四舍五入）：天气数字约定俗成不带小数，
+    /// 而截断保证 21.9° 显示 21° —— 读起来永远"不低于实际"，不会反向夸大暖度。
+    private var weatherHero: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            if let temp = entry.weather?.temp {
+                Text("\(Int(temp))°")
+                    .font(BriefMetrics.tempScaled(s))
+                    .foregroundStyle(ink)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    // 温度是这张卡的关键数字：着色模式下进 accent 组（与 3.9.0 标题同一理由）
+                    .widgetAccentable()
+            }
+
+            if let text = entry.weather?.text, text.isEmpty == false {
+                Text(text)
+                    .font(BriefMetrics.weatherTextScaled(s))
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            Spacer(minLength: 4)
+
+            if let hiLo = hiLoText {
+                Text(hiLo)
+                    .font(BriefMetrics.hiLo)
+                    .foregroundStyle(inkDim)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+    }
+
+    /// 高低温文案："22° 19°"（照参考图样式）。两头都拿不到就 nil（整段不画），
+    /// 只有一头也 nil —— 半对半错的高低温比不显示更让人怀疑数据。
+    private var hiLoText: String? {
+        guard let tMax = entry.weather?.tMax, let tMin = entry.weather?.tMin else { return nil }
+        return "\(Int(tMax))° \(Int(tMin))°"
+    }
+
+    // MARK: - 弱化正文（3.10.0）
+
+    /// 简报首句：字号降一档（13 → 11）、颜色再压一档（inkDim），
+    /// 内容与 3.9.0 的 `bodyText` 完全同源（同一套"滤栏目头"规则）。
+    @ViewBuilder
+    private var weakenedBody: some View {
+        if let text = bodyText {
+            Text(text)
+                .font(BriefMetrics.weakBodyScaled(s))
+                .foregroundStyle(inkDim.opacity(0.85))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            // 早上简报还没生成是**正常业务状态**，不是错误：说清楚"还没有"，不吓人、不编内容
+            Text("今天还没有简报")
+                .font(BriefMetrics.weakBodyScaled(s))
+                .foregroundStyle(inkDim)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: - 顶行：日期 · 星期 · 胶囊
@@ -497,7 +636,7 @@ struct BriefFace: View {
         }
     }
 
-    // MARK: - 标题
+    // MARK: - 标题（无天气兜底态）
 
     private var titleRow: some View {
         Text("每日简报")

@@ -45,10 +45,13 @@ struct BriefWidget: Widget {
         }
         .configurationDisplayName("每日简报")
         .description("每天一份：日期、首句，以及今日进度、宜忌与日出日落。")
-        // 小号（158×158）只留「日期 + 每日简报 + 正文 1 行 + 轨迹」；
-        // 中号（338×158）是完整版式，多出宜忌与日出日落。两种尺寸共用同一个卡面
-        // （`BriefFace` 按 `widgetFamily` 收版式），不拆两个 View —— 拆开必然会有两套字号。
-        .supportedFamilies([.systemSmall, .systemMedium])
+        // 小号（158×158）：「日期 + 天气主视觉（温度/现象/高低温）+ 轨迹」，弱化正文整行不画；
+        // 中号（338×158）是完整版式；大号（329×345 起）复用中号的同一套卡面 ——
+        // 版式是"上下两段式 + Spacer"，画布变高由 Spacer 吸收，字号走 WidgetCanvas 缩放，
+        // 不会出现"拉宽就空"的问题，所以三个系统档全部支持（#8 审计）。
+        // 两种尺寸/三档共用同一个卡面（`BriefFace` 按 `widgetFamily` 收版式），
+        // 不拆多个 View —— 拆开必然会有两套字号。
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         // 关掉系统默认内容边距：底色要**通到卡片四边**，默认的 16pt 边距会在纸面外面
         // 留一圈系统色，看起来像"卡里又嵌了一张卡"。边距改由 `BriefFace` 自己给
         // （中号 14 / 12，小号 11 / 12），比默认更紧凑，适合 158pt 高的画布。

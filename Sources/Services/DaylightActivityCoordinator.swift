@@ -22,8 +22,14 @@ import WidgetKit
 /// `.after(endAt)` 的收尾策略，那之后活动**仍留在 `Activity.activities` 里**直到系统真的
 /// 把它从锁屏撤下。只判 `isEmpty` 会让天光被一个"已经结束但还没被撤下"的活动**永久阻塞**。
 /// （同理适用于自己：只处理 `.active` / `.stale`。）
+///
+/// 3.10.0 追加：`isIslandActive` / `refreshActivityState()` —— 设置页的「天光灵动岛」
+/// 从纯 Toggle 改成**状态跟随型按钮**后的状态源（见 `DaylightActivitySection`）：
+/// 按钮文案读的是"活动此刻是否真的在屏幕上"（红石占用 / 系统收掉 / 窗口过期都会让
+/// 实际状态偏离存储里的开关意图），不是"用户上次把开关拨到了哪边"。
+/// 因此它必须可观察（`ObservableObject`），且在每个改活动生命的出口顺手刷新。
 @MainActor
-final class DaylightActivityCoordinator {
+final class DaylightActivityCoordinator: ObservableObject {
 
     /// 全 App 唯一实例（`FFWangApp` 的 `.task` 与设置页直接读同一个）
     static let shared = DaylightActivityCoordinator()
@@ -49,6 +55,15 @@ final class DaylightActivityCoordinator {
 
     /// 是否在前台。由 `monitorForeground` 自己维护
     private(set) var isForeground: Bool = false
+
+    /// 天光活动此刻是否真的显示在灵动岛 / 锁屏上（3.10.0，设置页按钮的状态源）。
+    ///
+    /// 判据与 `runningActivities()` 同源：列表里有 `.active` / `.stale` 的活动才算"显示中"
+    /// —— `.ended` / `.dismissed` 的残影不算（理由见文件头"为什么不用 isEmpty"）。
+    /// 它跟随**实际状态**而不是存储里的开关：红石占用、窗口过期、系统收掉，
+    /// 都会让"开关是开的"与"屏幕上没有"同时成立 —— 按钮必须说真话的那一边。
+    @Published private(set) var isIslandActive: Bool = false
+
     /// 最近一次启动 / 更新失败的原因（只用于内部诊断，不上屏）
     private(set) var lastErrorDescription: String?
 
@@ -71,7 +86,30 @@ final class DaylightActivityCoordinator {
     /// 隔离成员，而 `static let shared` 的惰性初始化发生在**非隔离上下文**里
     /// （`Swift` 的全局 / 静态属性惰性求值带 `@MainActor` 时会在调用点 hop，
     /// 显式标 `nonisolated` 才能避免 Xcode 报 "cannot be constructed because ..."）。
-    nonisolated init() {}
+    nonisolated init() {
+        // 冷启动也刷一次状态（3.10.0）：设置页按钮第一次出现之前，
+        // `isIslandActive` 就该是对的（App 被杀重启后残留的活动仍可能显示着）。
+        // init 是 nonisolated，所以借 Task 跳回主线程；Task 在 init 返回之后才跑，
+        // 那时 `shared` 已初始化完成，不会递归。
+        Task { @MainActor in
+            DaylightActivityCoordinator.shared.refreshActivityState()
+        }
+    }
+
+    // MARK: - 活动状态（3.10.0）
+
+    /// 按 `Activity<DaylightActivityAttributes>.activities` 重算 `isIslandActive`。
+    ///
+    /// 为什么用**查询**而不是在 start / end 处手工置位：ActivityKit 的状态由系统管理
+    /// （系统可以自己收掉活动、红石可以让位），任何"只在我们的代码里改标志"的写法
+    /// 都会出现标志与真实状态分叉的那一刻 —— 查询是唯一不会说谎的来源。
+    /// 成本可忽略（一次进程内列表读）。
+    ///
+    /// 调用点：init（冷启动）、`evaluate`（60 秒 tick 尾部）、`startNow`、`endAll`，
+    /// 以及设置页 `.task` / scenePhase 回前台（前台回来状态要跟上）。
+    func refreshActivityState() {
+        isIslandActive = !Self.runningActivities().isEmpty
+    }
 
     /// 设置里的「天光实时活动」开关。
     ///
@@ -125,7 +163,18 @@ final class DaylightActivityCoordinator {
     // MARK: - 评估
 
     /// 评估一次「现在该不该有天光活动」。纯前台同步动作，可被循环反复调用。
+    ///
+    /// 3.10.0：`defer` 顺手刷新 `isIslandActive` —— evaluate 的每条分支
+    /// （收掉已有 / 启动新活动 / 什么都不做）都可能改变活动集合，包装层统一刷新，
+    /// 就不必在每个 return 前各补一句（漏一处就是一次状态失真）。
     func evaluate(now: Date = Date()) {
+        defer { refreshActivityState() }
+        evaluateRules(now: now)
+    }
+
+    /// evaluate 的规则本体（3.10.0 从 `evaluate` 拆出，逻辑一字未改 ——
+    /// 拆是为了让外层统一挂"结束后刷新状态"这一件事）。
+    private func evaluateRules(now: Date) {
         // 规则 1：仅前台
         guard isForeground else { return }
 
@@ -209,8 +258,17 @@ final class DaylightActivityCoordinator {
     ///   2. "距日落不足 10 分钟不启动"：那条是为了**自动启动**省一次 request——
     ///      即将过期的窗口不值得常驻；而用户手点的每一次 request 都是明确要花的。
     ///
-    /// 同步方法（无 await）：设置页的 `.onChange` 直接调，不需要包 `Task { }`。
+    /// 同步方法（无 await）：设置页的按钮动作直接调，不需要包 `Task { }`。
+    ///
+    /// 3.10.0：`defer` 顺手刷新 `isIslandActive`（与 `evaluate` 同一包装手法）——
+    /// startNow 的每条出口（心跳已有 / 红石占用返回 / 真启动）之后按钮状态都要跟上。
     func startNow() {
+        defer { refreshActivityState() }
+        startNowRules()
+    }
+
+    /// `startNow` 的规则本体（3.10.0 从 `startNow` 拆出，逻辑一字未改）。
+    private func startNowRules() {
         // 硬规则 2：开关 / 系统能力。任一不满足就什么都不做
         //（与 evaluate 不同：evaluate 会顺手收掉已有活动，这里是"打开"方向的意图，
         // 能力不存在时活动也不存在，无事可收）
@@ -279,6 +337,17 @@ final class DaylightActivityCoordinator {
         lastPhase = nil
         if !running.isEmpty {
             reloadWidgets()
+        }
+        // 3.10.0：收完立刻刷新状态 —— 设置页按钮的「关闭」动作就是这里，
+        // 不刷的话按钮会显示"关闭中"的旧态直到下一次 60 秒 tick。
+        // 但 `activity.end` 本身是异步的（活动要等系统处理完才从列表摘掉），
+        // 立刻刷新仍可能读到旧态 —— 所以再延迟 1 秒补刷一次，按钮最迟一秒内跟上。
+        refreshActivityState()
+        if !running.isEmpty {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                self.refreshActivityState()
+            }
         }
     }
 

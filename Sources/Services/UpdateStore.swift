@@ -253,6 +253,29 @@ final class UpdateStore: ObservableObject {
         return version + " (" + build + ")"
     }
 
+    /// 「更多」页「检查更新」行的行内副标题（3.10.0）。nil = 还没查过，右侧留白。
+    ///
+    /// 为什么放 Store 而不是 View：这个文案是 `state` 状态机（idle / checking /
+    /// upToDate / available / failed）的直接投影 —— 在 View 里照着 state 再写一遍
+    /// switch，迟早和 `canCheckNow` 的判定漂成两套口径。View 只负责把它摆出来。
+    ///
+    /// 「被限频」不在里面：那是 `checkNow()` 的**返回值**（false = 60 秒内点过），
+    /// 不是持久状态 —— 它由调用方给一条 2 秒即逝的瞬时提示，不属于这张状态机的账。
+    var lastCheckSummaryText: String? {
+        switch state {
+        case .idle:
+            return nil
+        case .checking:
+            return "检查中…"
+        case .upToDate:
+            return "已是最新"
+        case .available(let release):
+            return release.version.isEmpty ? "有新版本" : "有新版本 " + release.version
+        case .failed:
+            return "检查失败"
+        }
+    }
+
     // MARK: 检查入口
 
     /// 三个**自动**时机（冷启动 / 进监控页 / 回前台）的统一入口。

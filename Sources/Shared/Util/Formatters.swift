@@ -85,6 +85,31 @@ enum Formatters {
         return "\(month)月\(day)日 \(weekdayCN(date))"
     }
 
+    /// 解析天气接口的 ISO **本地时刻串**（`"2026-11-01T06:58"`，无时区后缀）。
+    ///
+    /// 为什么不能交给 `ISO8601DateFormatter` / `Date.ISO8601FormatStyle`：
+    /// 那两者对无时区后缀的串会按 **GMT**（或格式器默认时区）解释，而上游请求里钉了
+    /// `timezone=Asia/Shanghai` —— 这串是北京时间的钟面值。按 GMT 解释的结果会让
+    /// 日落瞬间漂 8 小时（20:00 的日落被算成 12:00，倒计时全部错位）。
+    /// 所以这里把时区**显式钉成 UTC+8**：钟面值 + 钉死的时区 = 唯一确定的时刻。
+    ///
+    /// 与 `versionDateText`（date-only 串不转 Date）是同一族问题的两种解法：
+    /// 那边只需要"几月几号"所以不转；这边要参与倒计时运算，必须转，但时区必须钉。
+    ///
+    /// - Parameter raw: 服务端透传的 ISO 本地时刻串；nil / 空串 / 解析失败都返回 nil
+    ///                  （调用方整段缺省，绝不拿 `Date()` 兜底）
+    static func weatherLocalTime(_ raw: String?) -> Date? {
+        guard let raw = raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 16 else { return nil }   // "yyyy-MM-ddTHH:mm" 最短 16 位
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = beijing
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        return formatter.date(from: String(trimmed.prefix(16)))
+    }
+
     /// 周四
     static func weekdayCN(_ date: Date) -> String {
         let calendar = makeCalendar()

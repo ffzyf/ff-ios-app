@@ -61,28 +61,79 @@ struct SkyLightFace: View {
     }
 
     var body: some View {
-        content
-            // 画布测量（§5.2）：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
-            // 只在 `onAppear` / 尺寸真变时写 `@State`，15 分钟换一帧的重绘不会触发 body 重算。
-            .background {
-                canvasProbe
-            }
-            // 着色 / 透明模式（accented / vibrant）专用的一层：系统会拿掉 `containerBackground`
-            // 换成玻璃 —— "开了透明就只能看见字"正是这么来的。但**内容层里的半透明内容**
-            // 不会被拿掉：保留不透明度、整体染白。所以这里给 content 背后再垫一层
-            // 低不透明度的天空（`SkyLightSky` 在着色模式下自会把实心层换成半透明版），
-            // 玻璃上仍读得出"天幕渐变 + 地平线弧"的层次。fullColor 下不垫（有真背景）。
-            .background {
-                if renderMode != .fullColor {
+        if isAccessory {
+            accessoryContent
+                // accessory 的背景由系统提供，透明底即"融入锁屏"
+                .containerBackground(for: .widget) { Color.clear }
+                .widgetURL(WidgetDeepLink.brief)
+        } else {
+            content
+                // 画布测量（§5.2）：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
+                // 只在 `onAppear` / 尺寸真变时写 `@State`，15 分钟换一帧的重绘不会触发 body 重算。
+                .background {
+                    canvasProbe
+                }
+                // 着色 / 透明模式（accented / vibrant）专用的一层：系统会拿掉 `containerBackground`
+                // 换成玻璃 —— "开了透明就只能看见字"正是这么来的。但**内容层里的半透明内容**
+                // 不会被拿掉：保留不透明度、整体染白。所以这里给 content 背后再垫一层
+                // 低不透明度的天空（`SkyLightSky` 在着色模式下自会把实心层换成半透明版），
+                // 玻璃上仍读得出"天幕渐变 + 地平线弧"的层次。fullColor 下不垫（有真背景）。
+                .background {
+                    if renderMode != .fullColor {
+                        SkyLightSky(entry: entry, renderMode: renderMode)
+                    }
+                }
+                // 整卡可点：落到简报页（复用 `WidgetProvider` 里已有的深链常量，不新造 URL）
+                .widgetURL(WidgetDeepLink.brief)
+                // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
+                .containerBackground(for: .widget) {
                     SkyLightSky(entry: entry, renderMode: renderMode)
                 }
+        }
+    }
+
+    /// accessory 档（3.10.0）：rectangular = 阶段名 + 倒计时两行；
+    /// inline = 一行紧凑文本。没有图形（锁屏长条容不下"天空 + 地平线 + 太阳"的
+    /// 任何一种可读缩放，参考图的紧凑形态就是纯文字）。
+    @ViewBuilder
+    private var accessoryContent: some View {
+        if family == .accessoryInline {
+            Text(inlineText)
+                .font(WidgetTheme.Accessory.inlineText)
+                .widgetAccentable()
+        } else {
+            VStack(alignment: .leading, spacing: WidgetTheme.Accessory.lineSpacing) {
+                Text(entry.phase.label)
+                    .font(WidgetTheme.Accessory.linePrimary)
+                    .widgetAccentable()
+                Text(accessoryCountdownText)
+                    .font(WidgetTheme.Accessory.lineSecondary)
             }
-            // 整卡可点：落到简报页（复用 `WidgetProvider` 里已有的深链常量，不新造 URL）
-            .widgetURL(WidgetDeepLink.brief)
-            // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
-            .containerBackground(for: .widget) {
-                SkyLightSky(entry: entry, renderMode: renderMode)
-            }
+        }
+    }
+
+    /// accessory 里的倒计时文案：秒级走时交不了（accessory 不渲染走时文本的稳妥形态
+    /// 见桌面档），这里用静态文案（与桌面档 ≥1 小时同一规则）；
+    /// 算不出（deadline 缺失）整段不画。
+    private var accessoryCountdownText: String {
+        guard let deadline = entry.deadline, deadline > entry.date else {
+            return entry.countdownText ?? ""
+        }
+        return SkyPhase.countdownText(to: deadline, now: entry.date)
+    }
+
+    private var inlineText: String {
+        let countdown = accessoryCountdownText
+        return countdown.isEmpty ? entry.phase.label : entry.phase.label + " " + countdown
+    }
+
+    private var isAccessory: Bool {
+        switch family {
+        case .accessoryCircular, .accessoryRectangular, .accessoryInline:
+            return true
+        default:
+            return false
+        }
     }
 
     /// 量画布**短边**。为什么不是宽度：medium 是 338×158（iPad 364×170），按宽度算会得到 2.14

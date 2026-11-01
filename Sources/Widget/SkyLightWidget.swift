@@ -56,9 +56,19 @@ struct SkyLightWidget: Widget {
         }
         .configurationDisplayName(WidgetTheme.SkyLight.displayName)
         .description(WidgetTheme.SkyLight.description)
-        // 小号放"阶段名 + 倒计时 + 地平线 + 太阳 + 两个时刻"（字号降一档、仍在安全区内）；
-        // 大号是参考图的完整版式。不支持大号：把这张版式拉成 4×2 只会让天空变空。
-        .supportedFamilies([.systemSmall, .systemMedium])
+        // 家族表（#8 审计，3.10.0）：
+        // - systemSmall / systemMedium：既有两档（字号已按画布调校）；
+        // - systemLarge：版式是"上文字 + 满屏天空 + 下时刻"的三段式，画布变高由
+        //   Spacer 吸收、天空本来就以"整块天"为主体 —— Large 恰是这张卡最舒展的形态；
+        // - accessoryRectangular / accessoryInline：天光加锁屏紧凑形态（参考图的
+        //   "紧凑一行"），走 `SkyLightFace` 的极简分支；
+        // - 不加 accessoryCircular：环形里"阶段名 + 倒计时 + 两个时刻"任何一项的
+        //   可读形态都放不下，硬塞是不可读的噪点。
+        .supportedFamilies([.systemSmall,
+                            .systemMedium,
+                            .systemLarge,
+                            .accessoryRectangular,
+                            .accessoryInline])
         // 关掉系统默认边距：天空与地面必须铺到卡片四边，否则外围会留一圈底色，
         // 看起来像"卡里又嵌了一张卡"。内边距由 `SkyLightFace` 自己给。
         .contentMarginsDisabled()

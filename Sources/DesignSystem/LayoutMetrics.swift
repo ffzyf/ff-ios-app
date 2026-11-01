@@ -174,6 +174,26 @@ struct LayoutMetrics: Equatable {
     /// 两处共用一个布尔，才不会出现"高度换了字号没换"这种一半一半的状态。
     var usesWideCards: Bool { widthClass != .compact }
 
+    /// 卡片立体倾斜（`CardTilt`）的最大角度（3.10.0 起窄档也启用）。
+    ///
+    /// 为什么窄档要收一档（5.5° → 4°）：窄档是**单列全宽卡片**（393pt 屏上卡片约 353pt 宽），
+    /// 同样的旋转角在更宽的卡上，远端边缘的透视位移（弧长 ∝ 半宽 × sin θ）按比例放大，
+    /// 视觉幅度明显大于 iPad 分栏里 ~340pt 的卡 —— 标题字形更容易被拉斜，
+    /// 观感从"卡在转"滑向"字变形"。收 1.5° 把远端位移拉回与宽档同级，
+    /// 手感（拖动行程 `Tilt.travel` 不变）与层次（视差 / 高光 / 阴影）都不动。
+    ///
+    /// 常量集中在这里而不是 `CardTilt.swift`：角度是"版式档位的属性"（跟卡宽走），
+    /// 不是"手势的属性"；`CardTiltModifier` 已经读 `@Environment(\.layoutMetrics)`，
+    /// 顺路取值，不再维护第二份与 `widthClass` 平行的判断。
+    var cardTiltMaxAngle: Double {
+        return widthClass == .compact ? Self.tiltAngleCompact : Self.tiltAngleWide
+    }
+
+    /// 宽档（iPad 分栏）最大倾角：3.9.0 及之前的既有值，一字未动
+    static let tiltAngleWide: Double = 5.5
+    /// 窄档（iPhone 单列全宽）最大倾角：理由见 `cardTiltMaxAngle` 的注释
+    static let tiltAngleCompact: Double = 4.0
+
     /// 卡片高度：窄档给今天的值，宽档给同比例放大后的值（设计文档 §5.1）。
     ///
     /// 页面**不许**再直接写 `CardTier.xxx.height` —— 那个值只服务窄档，

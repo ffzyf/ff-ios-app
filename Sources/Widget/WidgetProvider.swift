@@ -143,6 +143,10 @@ enum WidgetSnapshot {
     static let redstoneKey = "widget.redstone.snapshot.v1"
     /// 简报快照
     static let briefKey = "widget.brief.snapshot.v1"
+    /// 天光"实际日出日落"缓存（3.10.0，无 App Group，用 Widget 进程自己的 `UserDefaults.standard`）
+    static let skylightSunTimesKey = "widget.skylight.sunTimes.v1"
+    /// 天气三卡（日弧 / 月相 / 风）的载荷缓存（3.10.0）
+    static let weatherCardKey = "widget.weathercard.snapshot.v1"
 
     static func save<T: Encodable>(_ value: T, key: String) {
         guard let data = try? WidgetJSON.cacheEncoder.encode(value) else { return }
@@ -160,6 +164,21 @@ struct RedstoneCachePayload: Codable {
     let days: [RedstoneDay]
     /// 服务端 `updated`（毫秒）
     let updated: Int
+    let savedAt: Date
+}
+
+/// 天光"实际日出日落"的缓存内容（3.10.0）。
+///
+/// 为什么只存这一对值：天光卡的主视觉（阶段 / 倒计时 / 太阳位置）由 `SunClock`
+/// 纯函数现算（±3 分钟，足够驱动颜色），**只有"显示给用户看的两个时刻"值得落盘** ——
+/// 用户原话："每天的日落时间都不一样，天光小组件应该显示当天实际的日落时间"。
+/// 网络失败时先用它顶上（PRD §5.3：失败不显示错误，保留旧值）；
+/// `dayKey` 保证跨天后旧值作废（宁可回退 SunClock，也不把昨天的日落标成今天的）。
+struct SunTimesCachePayload: Codable {
+    /// `"2026-11-01"`（北京时间，与 `RedstoneClock.dayKey` 同一格式）
+    let dayKey: String
+    let sunrise: Date
+    let sunset: Date
     let savedAt: Date
 }
 

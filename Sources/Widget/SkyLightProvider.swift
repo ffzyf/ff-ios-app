@@ -74,9 +74,19 @@ struct SkyLightEntry: TimelineEntry {
     ///   - date: 这一帧代表的时刻
     ///   - weather: 这一轮拉到的天气。默认 nil：`placeholder` / `getSnapshot` 不发请求，
     ///     所以它们在组件库里露出的就是"纯天光"那一版（也正是无数据时的退化形态）。
-    static func make(date: Date, weather: WeatherNow? = nil) -> SkyLightEntry {
+    ///   - sunTimes: 当天**实际**日出日落（3.10.0，来自天气接口，见 `SunTimesOverride`）。
+    ///     nil = 回退 `SunClock` 计算值（±3 分钟）—— 兜底语义写在 `SunTimesOverride.resolve`。
+    static func make(date: Date,
+                     weather: WeatherNow? = nil,
+                     sunTimes: SunTimesOverride? = nil) -> SkyLightEntry {
         let phase = SunClock.phase(at: date)
-        let times = sunTimes(for: date, phase: phase)
+        var times = sunTimes(for: date, phase: phase)
+        // 实际值只驱动**同一天**的帧：这一轮 timeline 铺 24 小时，明天的帧拿不到
+        // 天气接口的值（上游只给今天），让它们继续用 SunClock —— 跨天时刻略偏 ±3 分钟，
+        // 但绝不会出现"用今天的日落顶替明天的"这种张冠李戴。
+        if let sunTimes = sunTimes, RedstoneClock.dayKey(date) == sunTimes.dayKey {
+            times = (sunTimes.sunrise, sunTimes.sunset)
+        }
         return SkyLightEntry(
             date: date,
             phase: phase,
@@ -119,6 +129,54 @@ struct SkyLightEntry: TimelineEntry {
         guard phase == .night, date >= today.sunset else { return today }
         let tomorrow = date.addingTimeInterval(86_400)
         return SunClock.times(on: tomorrow) ?? today
+    }
+}
+
+// MARK: - 实际日出日落（3.10.0）
+
+/// 当天**实际**日出日落（来自 `/api/app/weather` 的 `sunrise` / `sunset` 字段）。
+///
+/// 用户原话："每天的日落时间都不一样，天光小组件应该显示当天实际的日落时间……直接读（天气接口）"。
+/// `SunClock` 是天文近似（±3 分钟，驱动**颜色与阶段**绰绰有余），但把 "06:58" 写在
+/// 卡片左下角给用户看时，3 分钟就是"和我手机天气 App 对不上"。
+/// 所以显示值优先取接口，`SunClock` 只做兜底。
+///
+/// 只覆盖 `dayKey` 那一天的帧（上游 `forecast_days=1` 只有今天），
+/// 其余帧继续用 `SunClock` —— 见 `SkyLightEntry.make` 的注释。
+struct SunTimesOverride: Equatable {
+    /// `"2026-11-01"`（北京时间）
+    let dayKey: String
+    let sunrise: Date
+    let sunset: Date
+
+    /// 从一轮天气响应里解析实际日出日落，并维护缓存。
+    ///
+    /// 兜底链（逐级降级，每一级都诚实）：
+    /// 1. **网络值**：接口给了合法的 sunrise/sunset 串（`Formatters.weatherLocalTime`
+    ///    按 UTC+8 解析无时区后缀的本地时刻串）→ 采用并写缓存；
+    /// 2. **缓存值**：这轮没拿到（失败 / 字段缺省）→ 读上次成功的缓存，
+    ///    但仅当缓存就是**今天**的（跨天后旧值作废，回退 SunClock ——
+    ///    把昨天的日落标成今天，比退回 ±3 分钟的计算值糟得多）；
+    /// 3. **都拿不到** → nil：`SkyLightEntry.make` 里整条走 `SunClock` 计算值，
+    ///    与 3.9.0 及之前的行为逐点一致。
+    static func resolve(from weather: WeatherNow?, now: Date) -> SunTimesOverride? {
+        let dayKey = RedstoneClock.dayKey(now)
+
+        if let sunrise = weather?.sunriseDate, let sunset = weather?.sunsetDate {
+            let override = SunTimesOverride(dayKey: dayKey, sunrise: sunrise, sunset: sunset)
+            WidgetSnapshot.save(
+                SunTimesCachePayload(dayKey: dayKey, sunrise: sunrise, sunset: sunset, savedAt: now),
+                key: WidgetSnapshot.skylightSunTimesKey
+            )
+            return override
+        }
+
+        if let cached = WidgetSnapshot.load(SunTimesCachePayload.self, key: WidgetSnapshot.skylightSunTimesKey),
+           cached.dayKey == dayKey {
+            return SunTimesOverride(dayKey: cached.dayKey, sunrise: cached.sunrise, sunset: cached.sunset)
+        }
+
+        return nil
     }
 }
 
@@ -214,9 +272,13 @@ struct SkyLightProvider: TimelineProvider {
             let stamps = SkyLightProvider.stamps(now: now)
             let weather = await pendingWeather
 
+            // 实际日出日落（3.10.0）：与天气同一次响应，**零额外请求**；
+            // 失败时内部走缓存、再失败走 SunClock —— 见 `SunTimesOverride.resolve`。
+            let sunTimes = SunTimesOverride.resolve(from: weather, now: now)
+
             // 每一帧带**同一个**天气（理由见 `SkyLightEntry.weather` 的注释）。
             // 天气为 nil 时这里什么都不特殊处理：entry 带着 nil 下去，渲染层不画叠加层。
-            let entries = stamps.map { SkyLightEntry.make(date: $0, weather: weather) }
+            let entries = stamps.map { SkyLightEntry.make(date: $0, weather: weather, sunTimes: sunTimes) }
 
             // 下一个边界 + 1 秒再回来重排：+1 秒是为了让 `SunClock.phase(at:)` 真的跨过阈值，
             // 否则在边界那一瞬重算，新阶段的第一帧会因为"还差 0.4 秒"被判回上一档。

@@ -48,6 +48,21 @@ struct WeatherNow: Decodable, Equatable, Sendable {
     /// 风速（m/s）
     let wind: Double?
 
+    /// 风向的 16 方位中文（"东北"、"北西北"…）。
+    ///
+    /// 3.10.0 新增：**服务端已经把度数换算成中文**（见后端 weather.js 的 `windDirTextOf`），
+    /// 这里只透传显示，不再在 Swift 侧换算一遍 —— 三端各换算一份迟早出现「App 说东北、
+    /// 小组件说东东北」的分叉。需要角度（画箭头）时用 `windDirectionDegrees` 反查。
+    let windDirText: String?
+
+    /// 今日日出：ISO **本地时刻串**（如 `"2026-11-01T06:58"`，无时区后缀）。
+    /// 上游请求钉了 `timezone=Asia/Shanghai`，解析必须用 `Formatters.weatherLocalTime`
+    ///（把时区钉成 UTC+8）—— 用系统默认策略会把钟面值当成 GMT，日落漂 8 小时。
+    let sunrise: String?
+
+    /// 今日日落：同上
+    let sunset: String?
+
     /// 上游观测时间（服务端给 ISO 字符串）。与"我们何时拉取"是两件事，
     /// 卡片要显示"几分钟前"应当用它，而不是 `Date()`。
     let updatedAt: Date?
@@ -55,6 +70,38 @@ struct WeatherNow: Decodable, Equatable, Sendable {
     /// WMO 代码 → 8 组视觉类型。代码缺失或未知一律 nil（理由见 `WeatherKind.from(code:)`）
     var kind: WeatherKind? {
         return WeatherKind.from(code: code)
+    }
+
+    /// 16 方位表（与后端 weather.js 的 `COMPASS_16_CN` 逐字一致，索引 0 = 正北）。
+    /// 为什么在 Swift 侧再留一份：后端只给中文不给度数，画风向箭头需要反查角度；
+    /// 改任何一边都必须两边同步，否则文案对不上。
+    static let compassNames: [String] = [
+        "北", "北东北", "东北", "东东北",
+        "东", "东东南", "东南", "南东南",
+        "南", "南西南", "西南", "西西南",
+        "西", "西西北", "西北", "北西北"
+    ]
+
+    /// 风向来向的角度（0 = 正北、顺时针，meteorological：风**从**这个方向来）。
+    ///
+    /// 由 `windDirText` 反查（后端换算时的取整不可逆，±11.25° 对"画个箭头"足够）。
+    /// 需要表示"风吹向哪"时再加 180°。
+    var windDirectionDegrees: Double? {
+        guard let text = windDirText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.isEmpty == false,
+              let index = Self.compassNames.firstIndex(of: text) else { return nil }
+        return Double(index) * 22.5
+    }
+
+    /// 今日日出的 `Date`。解析失败 / 字段缺省返回 nil —— 绝不拿 `Date()` 兜底
+    ///（那会把"不知道日出几点"伪装成"现在"，是比缺字段更糟的错）。
+    var sunriseDate: Date? {
+        return Formatters.weatherLocalTime(sunrise)
+    }
+
+    /// 今日日落的 `Date`。同上
+    var sunsetDate: Date? {
+        return Formatters.weatherLocalTime(sunset)
     }
 
     /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
@@ -69,6 +116,9 @@ struct WeatherNow: Decodable, Equatable, Sendable {
         case cloud
         case isDay
         case wind
+        case windDirText
+        case sunrise
+        case sunset
         case updatedAt
     }
 
@@ -86,6 +136,9 @@ struct WeatherNow: Decodable, Equatable, Sendable {
         cloud = try? container.decode(Double.self, forKey: .cloud)
         isDay = try? container.decode(Bool.self, forKey: .isDay)
         wind = try? container.decode(Double.self, forKey: .wind)
+        windDirText = try? container.decode(String.self, forKey: .windDirText)
+        sunrise = try? container.decode(String.self, forKey: .sunrise)
+        sunset = try? container.decode(String.self, forKey: .sunset)
         updatedAt = try? container.decode(Date.self, forKey: .updatedAt)
     }
 }

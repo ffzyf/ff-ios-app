@@ -1,24 +1,27 @@
 import SwiftUI
 
-/// iPad 立体卡（伪 3D 视差）—— 手指拖动时卡片随视角倾斜 + 分层深度 + 高光随动。
+/// iPad **与 iPhone** 的立体卡（伪 3D 视差）—— 手指拖动时卡片随视角倾斜 + 分层深度 + 高光随动。
 ///
 /// 为什么是"伪 3D"（`rotation3DEffect`）而不是 SceneKit / RealityKit + usdz，
 /// 见设计报告 §3.1 的四条。最硬的一条是：本机没有 Xcode、CI 只做 `xcodebuild build`，
 /// 真 3D 的材质 / 光照 / 相机角全是**编译期零信号**，改一次参数要拿一轮 CI（8 分钟起）
 /// 赌一个看不见的结果。而这个实现最坏也只是"难看"，不会崩。
 ///
-/// ## 本文件唯一的硬约定：iPhone 上**不挂 modifier**
-/// 不是"角度恒 0"，而是窄档时这个 `ViewModifier` **整体不挂载**（见 `body` 的 else 分支）。
-/// 挂上去即使角度永远是 0，`@State tilt` + `DragGesture` 依然存在，而 `DragGesture`
-/// 会与 `ScrollView` 竞争竖直拖拽 —— 用户在卡片上竖直拖 30pt 页面不动 = "App 卡死了"，
-/// 这是这个 App 里最严重的一类回归，且模拟器里极难重现（必须恰好拖在卡片区域内）。
-/// 不挂 = 手势在这个平台上物理上不存在，回归在物理上不可能发生。
+/// ## 挂载条件（3.10.0 从"仅宽档"下放到全部档位）
+/// 旧版只在宽档（iPad）挂载，理由是 `DragGesture` 会与 `ScrollView` 竞争竖直拖拽。
+/// 但这个风险**已经被轴向锁（`axisLock`）彻底解决**：判出纵向拖拽就整轮不倾斜、
+/// 把手势整个让给滚动 —— "iPhone 卡片区页面滚不动"在物理上不可能发生，
+/// 真正剩下的挂载条件只有前庭安全这一条。所以现在的条件是：
 ///
-/// 同理 `accessibilityReduceMotion` 为真也走 else 分支：前庭敏感的用户是"拖一下晃一下"
-/// 比"完全不动"糟得多，同样不是"角度归零"能解决的。
+/// 1. **`accessibilityReduceMotion` 为真 → 整个 modifier 不挂载**（不是角度归零）：
+///    前庭敏感的用户是"拖一下晃一下"比"完全不动"糟得多；
+/// 2. 全部档位都挂载（iPhone 单列全宽卡同样有玻璃厚度感）；
+///    iPhone 的最大倾角收一档（4° vs iPad 5.5°），理由见
+///    `LayoutMetrics.cardTiltMaxAngle` 的注释 —— 单列全宽卡同样的角度视觉幅度更大。
 extension View {
 
-    /// 给卡片挂伪 3D 倾斜。**只在宽档（iPad）生效**；窄档返回原视图，逐像素不变。
+    /// 给卡片挂伪 3D 倾斜。**减弱动态效果时不挂载**；其余档位生效
+    ///（窄档角度由 `LayoutMetrics.cardTiltMaxAngle` 收敛到 4°）。
     ///
     /// 调用点必须挂在卡片**最外层**（`.glassSurface` 之外）：旋转要作用在玻璃的外层，
     /// 玻璃才能继续采样它背后的页面背景；塞进玻璃内部会被离屏渲染，采样到透明 §3.4。
@@ -33,9 +36,12 @@ extension View {
 
 private struct CardTiltModifier: ViewModifier {
 
-    /// 减弱动态效果 → 整个 modifier 不挂载（见文件头的理由，不是角度归零）
+    /// 减弱动态效果 → 整个 modifier 不挂载（见文件头的理由，不是角度归零）。
+    /// **这是唯一的挂载条件**（3.10.0 起）：轴向锁已经兜住了"卡 vs ScrollView"的
+    /// 手势竞争，宽窄档都能安全挂载。
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 宽档判据：`widthClass != .compact`，覆盖 iPad 全屏 / 1/2 分屏 / Stage Manager 宽窗
+    /// 档位与最大倾角：窄档 4° / 宽档 5.5°，判据与常量都在 `LayoutMetrics`
+    ///（角度跟卡宽走，是版式档位的属性，见那里的注释）
     @Environment(\.layoutMetrics) private var metrics
 
     /// 每轴 −1…1 的归一化倾斜量。用 `CGSize` 装两个轴而不是开两个 `@State`：
@@ -65,12 +71,13 @@ private struct CardTiltModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        // ⚠️ 两个条件缺一不可。少了 `metrics.usesWideCards` 就会给 iPhone 的 hero 卡
-        // 挂上 DragGesture → 卡片区域页面滚不动（设计报告 §5 T5 点名的唯一高危写法）。
-        if metrics.usesWideCards && !reduceMotion {
+        // 挂载条件只剩前庭安全这一条（3.10.0 起 iPhone 也挂载）：
+        // 轴向锁（axisLock）已保证"纵向拖 = 滚动赢"，DragGesture 不再吞掉卡片区滚动；
+        // 角度由 `metrics.cardTiltMaxAngle` 按档位收敛（窄 4° / 宽 5.5°）。
+        if !reduceMotion {
             decorated(content)
         } else {
-            // 与 3.7.0 逐像素相同：连一个 modifier 都不多
+            // 与"减弱动态效果"的用户设置逐像素一致：连一个 modifier 都不多
             content
         }
     }
@@ -171,11 +178,12 @@ private struct CardTiltModifier: ViewModifier {
 
     // MARK: - 派生量
 
-    /// 绕 X 轴：上下拖。负号让"往下拖"读作"上缘朝观者抬起来"
-    private var pitch: Double { -Double(tilt.height) * Tilt.maxAngle }
+    /// 绕 X 轴：上下拖。负号让"往下拖"读作"上缘朝观者抬起来"。
+    /// 角度来自 `LayoutMetrics.cardTiltMaxAngle`（窄档收敛到 4°，理由见那边）
+    private var pitch: Double { -Double(tilt.height) * metrics.cardTiltMaxAngle }
 
     /// 绕 Y 轴：左右拖
-    private var yaw: Double { Double(tilt.width) * Tilt.maxAngle }
+    private var yaw: Double { Double(tilt.width) * metrics.cardTiltMaxAngle }
 
     /// 倾斜强度 0…1：高光透明度与阴影半径都只看这一维，不同方向同强度应当长得一样
     private var magnitude: CGFloat {
@@ -214,9 +222,8 @@ private struct CardTiltModifier: ViewModifier {
 /// 每一条的取值依据见设计报告 §3.2 的表，这里只写"量纲"：角度是 `Double`（喂 `Angle.degrees`），
 /// 位移与透视是 `CGFloat`（与 SwiftUI 的 pt 参数天然同类型，省掉满屏的显式转换）。
 private enum Tilt {
-    /// 最大倾角（度）。再大，344pt 宽卡的远端边缘透视缩短会把标题字形拉斜，
-    /// 观感从"卡在转"变成"字变形"
-    static let maxAngle: Double = 5.5
+    // 最大倾角已下沉到 `LayoutMetrics.tiltAngleWide / tiltAngleCompact`
+    //（角度跟版式档位走，不跟手势走；两个档的取值理由见 `LayoutMetrics.cardTiltMaxAngle`）。
     /// 透视强度。0.45 时近/远边的长度差约 8%，玻璃描边还看不出破绽
     static let perspective: CGFloat = 0.45
     /// 手势行程（pt）：拖满 260pt 才到角度上限，这就是阻尼（软映射，不是 1:1 跟手）

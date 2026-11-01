@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 更多（Tab 5，PRD P13）。
 ///
@@ -16,6 +19,11 @@ struct MoreView: View {
     /// 批次 4：监控行的右侧状态字来自这里（有新版本 / 已是最新 / 检查失败）。
     /// 单例观察，与问卷那一行同款写法 —— 少一层环境注入，少一处运行期崩溃面。
     @ObservedObject private var monitor = MonitorStore.shared
+    /// 3.10.0：「检查更新」行。观察单例让 `lastCheckSummaryText`（状态机投影）即时上屏。
+    @ObservedObject private var update = UpdateStore.shared
+    /// 限频时的瞬时提示（2 秒即逝）。它不是状态机的账（理由见 `UpdateStore.lastCheckSummaryText`），
+    /// 所以只留在 View 的 `@State` 里，不复写 Store 的任何字段。
+    @State private var rateLimitedHint: String? = nil
     /// 尺寸模型（设计文档 §4.6）：rail 档把两张状态 tile 搬到右侧 368，
     /// 四行工具列表留在主列 —— 这一页原来最"空"（内容 752 高、只占 57% 的宽度）。
     @Environment(\.layoutMetrics) private var metrics
@@ -66,6 +74,12 @@ struct MoreView: View {
         // 监控行的状态字是"顺带"信息：进页面时补一次，失败也只是右侧留白
         .task {
             await monitor.load()
+        }
+        // 限频提示 2 秒即逝：提示挂太久会让人以为每次点都被拦
+        .task(id: rateLimitedHint) {
+            guard rateLimitedHint != nil else { return }
+            try? await Task.sleep(for: .seconds(2))
+            rateLimitedHint = nil
         }
         // 工作台是全屏接管：里面要看答卷明细、要填答，底部 Tab 栏不该参与
         .fullScreenCover(isPresented: $showsWorkspace) {
@@ -191,6 +205,17 @@ struct MoreView: View {
                 ) {
                     showsMonitor = true
                 }
+
+                MoreRow(
+                    icon: "arrow.down.circle",
+                    title: "检查更新",
+                    // 限频提示优先（它最"新"），否则显示状态机投影（检查中… / 已是最新 / 有新版本）；
+                    // idle 时右侧留白，与监控行同一口径
+                    detail: rateLimitedHint ?? update.lastCheckSummaryText,
+                    isMuted: (rateLimitedHint ?? update.lastCheckSummaryText) == nil
+                ) {
+                    checkForUpdate()
+                }
             }
         }
     }
@@ -299,6 +324,30 @@ struct MoreView: View {
 
     // MARK: - 动作
 
+    /// 「检查更新」行的动作（3.10.0）。
+    ///
+    /// 行为：`checkNow()`（3.9.0 已有的 60 秒限频入口）→ 有更新走 `present()`
+    /// （弹层挂在 `FFWangApp` 的全局 `.sheet(item:)` 上，这里只管置值）；
+    /// 被限频给一条 2 秒即逝的提示；已在检查中就什么都不加（副标题已经写着「检查中…」）。
+    private func checkForUpdate() {
+        Haptics.light()
+        Task { @MainActor in
+            let started = await UpdateStore.shared.checkNow()
+            if started {
+                // 检查完成后再看一次：有可用更新就弹层（present() 内部判 release 非空）
+                if UpdateStore.shared.release != nil {
+                    UpdateStore.shared.present()
+                }
+            } else if case .checking = UpdateStore.shared.state {
+                // 上一发还在飞：副标题已经在走「检查中…」，不再叠一条提示
+                return
+            } else {
+                // 60 秒内刚查过：瞬时提示，不复写状态机
+                rateLimitedHint = "刚检查过，稍等一分钟"
+            }
+        }
+    }
+
     private func openWorkspace() {
         Haptics.light()
         // 未登录也直接进工作台：它会显示登录引导页（PRD P08 要的是"引导页"而不是"弹窗"）
@@ -388,12 +437,21 @@ struct MoreRow: View {
 
 // MARK: - 关于
 
-/// 关于：版本、构建号、数据来源、一句边界说明。
+/// 关于（3.10.0 起按「软件信息 / 数据来源 / 边界说明」三组组织）。
 ///
+/// 3.10.0 的调整：设置页按「只留可操作项」瘦身，**只读的说明性内容全部挪到这里** ——
+/// 版本 / 构建号（原设置「版本」组）、三个站点域名（原「数据来源」组，点击复制的行为一并带来）、
+/// 以及原设置页「关于」卡与页脚的定位 / 边界说明。设置页从此只剩开关与动作，
+/// 「它是什么、数据从哪来」只在这一个地方回答，不再两处维护同一句话。
+///
+/// 行组件复用两套既有件：键值行用本页的 `infoRow`（纯展示），可点复制的域名行用
+/// `GlassListRow`（设置页原来那行的同款组件，`showsChevron: false`）—— 不复制样式。
 /// 不写"开源库列表"（本工程零第三方依赖，写了反而像凑数）；
 /// 域名一律取自 `API` / `Endpoint`，页面里不出现协议前缀字面量。
 struct MoreAboutSheet: View {
     @Environment(\.dismiss) private var dismiss
+    /// 复制成功后的瞬时提示（与设置页同款：1.8 秒即逝）
+    @State private var toast: String?
 
     init() {}
 
@@ -403,26 +461,76 @@ struct MoreAboutSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.sectionGap) {
                     header
+
+                    // MARK: 软件信息
                     GlassCard {
                         VStack(alignment: .leading, spacing: 10) {
                             infoRow(title: "版本", value: appVersion)
                             Rectangle().fill(Theme.divider).frame(height: 1)
                             infoRow(title: "构建号", value: buildNumber)
-                            Rectangle().fill(Theme.divider).frame(height: 1)
-                            infoRow(title: "博客站", value: hostOf(API.blogHost))
-                            Rectangle().fill(Theme.divider).frame(height: 1)
-                            infoRow(title: "简报站", value: hostOf(API.briefHost))
-                            Rectangle().fill(Theme.divider).frame(height: 1)
-                            infoRow(title: "问卷站", value: hostOf(API.surveyHost))
                         }
                         .padding(Spacing.cardPadding)
                     }
 
-                    Text("问卷与推送监控都是只读入口：创建问卷、编辑题目、导出数据都留在网页端。App 不上传任何使用数据，也没有第三方统计 SDK。")
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.6))
-                        .padding(.horizontal, 4)
+                    // MARK: 数据来源
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("数据来源")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textTertiary)
+                        VStack(spacing: 8) {
+                            GlassListRow(
+                                icon: "globe",
+                                title: "博客内容",
+                                detail: hostOf(API.blogHost),
+                                showsChevron: false
+                            ) {
+                                copyToPasteboard(API.blogHost)
+                            }
+                            GlassListRow(
+                                icon: "cloud",
+                                title: "光遇版本与简报",
+                                detail: hostOf(API.briefHost),
+                                showsChevron: false
+                            ) {
+                                copyToPasteboard(API.briefHost)
+                            }
+                            GlassListRow(
+                                icon: "list.bullet.rectangle.portrait",
+                                title: "问卷工作台",
+                                detail: hostOf(API.surveyHost),
+                                showsChevron: false
+                            ) {
+                                copyToPasteboard(API.surveyHost)
+                            }
+                        }
+                        Text("点一下域名可以复制。App 只读这些数据，不会改动任何一篇内容。")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+                            .padding(.horizontal, 4)
+                    }
+
+                    // MARK: 边界说明（原设置页「关于」卡 + 页脚署名 + 只读边界，原句未改）
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("一个安静的阅读入口")
+                                .font(Typography.titleS)
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("只放三样东西：博客文章、光遇版本、每天一份简报。没有账号，没有推荐，没有广告位。")
+                                .font(Typography.footnote)
+                                .foregroundStyle(Theme.textSecondary)
+                                .lineSpacing(Typography.lineSpacing(fontSize: 13, multiple: 1.6))
+                            Text("问卷与推送监控都是只读入口：创建问卷、编辑题目、导出数据都留在网页端。App 不上传任何使用数据，也没有第三方统计 SDK。")
+                                .font(Typography.captionXS)
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.6))
+                            Text("浅色和深色都做好了。在「外观」里三选一：跟随系统、始终浅色、始终深色，选了立刻生效。")
+                                .font(Typography.captionXS)
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+                        }
+                        .padding(Spacing.cardPadding)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Spacing.page)
@@ -430,6 +538,17 @@ struct MoreAboutSheet: View {
                 .padding(.bottom, Spacing.page)
             }
             .scrollIndicators(.hidden)
+
+            if let toast = toast {
+                SettingsToast(text: toast)
+            }
+        }
+        .task(id: toast) {
+            guard toast != nil else { return }
+            try? await Task.sleep(for: .seconds(1.8))
+            withAnimation(Motion.glassOut) {
+                toast = nil
+            }
         }
     }
 
@@ -479,5 +598,16 @@ struct MoreAboutSheet: View {
     /// 只显示域名：协议前缀对用户没有信息量
     private func hostOf(_ raw: String) -> String {
         return URL(string: raw)?.host ?? raw
+    }
+
+    /// 复制域名（与设置页原「数据来源」行同一行为：复制的是完整 URL，粘贴即用）
+    private func copyToPasteboard(_ value: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = value
+        #endif
+        Haptics.success()
+        withAnimation(Motion.glassIn) {
+            toast = "已复制 \(value)"
+        }
     }
 }
