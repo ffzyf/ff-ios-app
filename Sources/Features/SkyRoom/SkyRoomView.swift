@@ -1110,19 +1110,47 @@ private struct SkyRoomDome: View, Equatable {
                 let baseX = Float(column) / Float(columns - 1)
                 let baseY = rowY(row)
 
-                // 角点固定：整块网靠四个角"钉"在画布上（角一动整块网就"扭"）
-                let isCorner = (row == 0 || row == rows - 1)
-                    && (column == 0 || column == columns - 1)
-                if isCorner {
-                    points.append(SIMD2<Float>(baseX, baseY))
+                // 越靠近地平线、太阳越低 → 位移越大（暖色团跟着太阳走）
+                let rowWeight: Float = row == 0 ? 0.25 : (row == rows - 1 ? 0.15 : 1.0)
+                let pull = (sunX - baseX) * SkyRoomMetrics.SkyDome.sway * rowWeight
+                let rise = (0.5 - sunHeight) * SkyRoomMetrics.SkyDome.bob * rowWeight
+
+                // ── 3.15.1：边界点只能**沿边滑动**，法向必须钉死 ─────────────────
+                //
+                // `MeshGradient` 只在 16 个点围出的网格**内部**着色，网格外面什么都不画
+                // —— 露出来的是视图背后的底色。3.15.0 只钉了四个角，四条边上的中间点
+                // 照样被 `pull` / `rise` 推离画布边缘，于是整块网格比画布小一圈：
+                // 左边缘被推右 3.6%（440pt 上 16pt）、上边缘中间被推下 3.5%。
+                // 真机就是"天空左右各一条黑边、正上方凹进去一口"（截图实测左侧 48px /
+                // 右侧 24px，正好等于 `sway × 画布宽`）—— 跟安全区、跟 fullScreenCover
+                // 都无关，纯粹是网格自己缩了。
+                //
+                // 现在：顶/底边的点只动 x（沿边滑），左右边的点只动 y（沿边滑），
+                // 四个角完全不动 —— 四条边界永远是直线，网格严丝合缝铺满整块画布。
+                // 暖色团跟着太阳走的效果一点没丢：它靠内圈那 4 个点 + 边界点的滑移实现。
+                let onTopOrBottom = row == 0 || row == rows - 1
+                let onLeftOrRight = column == 0 || column == columns - 1
+
+                let pointX: Float
+                let pointY: Float
+                if onTopOrBottom && onLeftOrRight {
+                    // 角点：完全固定
+                    pointX = baseX
+                    pointY = baseY
+                } else if onTopOrBottom {
+                    // 顶 / 底边：只沿边横向滑动
+                    pointX = min(max(baseX + pull, 0.02), 0.98)
+                    pointY = baseY
+                } else if onLeftOrRight {
+                    // 左 / 右边：只沿边纵向滑动
+                    pointX = baseX
+                    pointY = min(max(baseY + rise, 0.01), 0.97)
                 } else {
-                    // 越靠近地平线、太阳越低 → 位移越大（暖色团跟着太阳走）
-                    let rowWeight: Float = row == 0 ? 0.25 : (row == rows - 1 ? 0.15 : 1.0)
-                    let pull = (sunX - baseX) * SkyRoomMetrics.SkyDome.sway * rowWeight
-                    let rise = (0.5 - sunHeight) * SkyRoomMetrics.SkyDome.bob * rowWeight
-                    points.append(SIMD2<Float>(min(max(baseX + pull, 0.02), 0.98),
-                                               min(max(baseY + rise, 0.01), 0.97)))
+                    // 内圈：二维自由
+                    pointX = min(max(baseX + pull, 0.02), 0.98)
+                    pointY = min(max(baseY + rise, 0.01), 0.97)
                 }
+                points.append(SIMD2<Float>(pointX, pointY))
                 colors.append(color(row: row, warm: warm, depth: depth))
             }
         }
