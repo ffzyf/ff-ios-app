@@ -38,6 +38,16 @@ struct LayoutMetrics: Equatable {
         case regularWide
     }
 
+    /// 采信的容器宽度上限（pt）。
+    ///
+    /// 为什么需要这个数（3.12.0 P0 事故的兜底）：`containerSize` 是 `LayoutMetricsScope`
+    /// 用 `.background { GeometryReader }` 量出来的，而 GeometryReader 量的是**父视图最终被撑到的尺寸**。
+    /// 3.11.0 的 `PageBackground` 里有个固定 520×520 的氛围层，把根视图撑到 520 宽，
+    /// 于是这里量到的也是 520 —— 测量本身没错，错的是**被测量的容器已经不是屏幕了**。
+    /// 修好那个层之后测量自然恢复，但"测量跟着污染"这条路必须单独堵一次：
+    /// 真机最宽也就 1366pt（13 英寸 iPad 横屏），2000 是本工程永远不会出现的宽度。
+    static let saneMaxWidth: CGFloat = 2000
+
     /// 容器实际尺寸（不含安全区）。由 `LayoutMetricsScope` 的 GeometryReader 量一次
     var containerSize: CGSize
     var horizontalSizeClass: UserInterfaceSizeClass?
@@ -51,13 +61,28 @@ struct LayoutMetrics: Equatable {
         horizontalSizeClass: .compact
     )
 
+    /// **采信**的容器宽度：`> 0 且 <= saneMaxWidth` 才算量到过尺寸，否则退回 393。
+    ///
+    /// 这是 3.12.0 加的一道防御（见 `saneMaxWidth`）：既然本工程的所有宽档判定
+    /// 都从这一个数派生（`widthClass` / `pageTier` / `canvasWidth` / `railPageWidth` …），
+    /// 那就在**源头**判一次合理性 —— 只要有一个子视图把根容器撑宽，
+    /// 尺寸测量就会跟着被污染，而污染的后果是"手机被判成 iPad 档"（用户这次看到的正是这个）。
+    /// 判据只有上下两条：0（还没量到）与被撑大的值（> 2000）都不采信。
+    var saneWidth: CGFloat {
+        let width = containerSize.width
+        guard width > 0, width <= Self.saneMaxWidth else {
+            return LayoutMetrics.compact.containerSize.width
+        }
+        return width
+    }
+
     /// 档位判定。顺序不能反：`.compact` 的尺寸类优先于宽度阈值 ——
     /// iPad 1⁄3 分屏约 400pt（宽度已 < 500，两条都成立），但 Stage Manager 里
     /// 一个 520pt 的窗口也可能是 `.compact`，那种情况必须跟着系统给的尺寸类走。
     var widthClass: WidthClass {
         if horizontalSizeClass == .compact { return .compact }
-        if containerSize.width < Layout.compactWidthThreshold { return .compact }
-        if containerSize.width < Layout.wideWidthThreshold { return .regularNarrow }
+        if saneWidth < Layout.compactWidthThreshold { return .compact }
+        if saneWidth < Layout.wideWidthThreshold { return .regularNarrow }
         return .regularWide
     }
 
@@ -219,8 +244,11 @@ struct LayoutMetrics: Equatable {
     /// 用 `.compact` 的值兜底，才能让文档里那句"首帧按 iPhone 版式"对**宽度**也成立，
     /// 而不只是对 `widthClass` 成立。真机宽度最小 320（Slide Over），永远不会是 0，
     /// 所以这个兜底只在"还没量到"的那一帧生效。
+    ///
+    /// 3.12.0：取值改走 `saneWidth` —— 除了"没量到"，"被撑大的错误值"（> 2000）
+    /// 也在这里一并退回 393，避免一处污染扩散到全部派生宽（详见 `saneMaxWidth`）。
     private var effectiveWidth: CGFloat {
-        containerSize.width > 0 ? containerSize.width : LayoutMetrics.compact.containerSize.width
+        return saneWidth
     }
 
     /// 列宽被限住（= 屏幕比列宽宽）时，横向 rail 不允许出血（§4.3）。
@@ -228,7 +256,7 @@ struct LayoutMetrics: Equatable {
     /// 出血的前提是"列宽 = 屏宽"：卡片滑到屏幕边才有意义。
     /// 宽屏下列宽 720 < 1194，出血会让卡片滑到列外、压在空白上。
     /// 未测量时 `0 <= 720` 成立 → 出血 = `.compact` 的行为（今天的样子），方向正确。
-    var allowsRailBleed: Bool { containerSize.width <= Layout.contentMaxWidth }
+    var allowsRailBleed: Bool { saneWidth <= Layout.contentMaxWidth }
 }
 
 private struct LayoutMetricsKey: EnvironmentKey {
@@ -263,6 +291,12 @@ extension EnvironmentValues {
 /// 为什么不是"每个页面自己写 GeometryReader"：6 个一级页 + 5 个二级页 + 3 个弹层，
 /// 各写一份就有 14 个"设备判定"入口，其中任意一个漏改就是一处只在 iPad 上错位的 bug。
 /// **一份环境值，一个判定函数。**
+///
+/// **3.12.0 追加（P0 事故的第二道闸）**：本 Scope 量到的是"父视图最终被撑到的尺寸"，
+/// 而不是"屏幕尺寸" —— 只要有子视图（当时的元凶是 `PageBackground` 里 520pt 的氛围层）
+/// 把根容器撑宽，这里就会忠实地量回一个 520，于是 `railPageWidth` 跟着变成 520，
+/// 形成"测量自身自洽的错误闭环"。宽度是否可信由 `LayoutMetrics.saneWidth` 统一判，
+/// 本 Scope 不做第二次判断（一处规则、一处实现）。
 struct LayoutMetricsScope<Content: View>: View {
     /// 尺寸类从系统读（它已经跟随窗口变化，不需要我们量）
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass

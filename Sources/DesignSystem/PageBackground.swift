@@ -25,12 +25,31 @@ struct PageBackground: View {
             if glow {
                 lightLayer
             }
-            // 3.11.0：氛围层（极慢氛围漂移）。**排在滚动光影之后** ——
-            // 它比光影更"远"，压在下面只能被光影盖住一半，反过来就没有层次可言。
-            // 它不参与滚动（不读 `scrollLight`），所以 `ScrollLightLayer` 的语义一个字没变。
-            ambientDrift
             footerShadow
         }
+        // 3.12.0 修「手机版整页横向溢出」（P0 事故）：
+        //
+        // 3.11.0 把 `ambientDrift` 写成 `ZStack` 的**兄弟节点**，而 `AmbientDriftLayer`
+        // 内部是固定 520×520 的圆（`blobDiameter = 520`）。`ZStack` 的尺寸 = 子视图最大尺寸，
+        // 于是整个 `PageBackground` 被撑到 **520pt 宽**；它又是 `RootView.pageContent` 那个
+        // `ZStack` 的最底层，于是根视图一起被撑到 520 —— 在 393pt 的 iPhone 上居中后
+        // 左右各溢出 63.5pt（用户截图里左边"11月1日"的 `11` 被切、右边卡片被切）。
+        //
+        // `.overlay` 与 `ZStack` 的本质区别：overlay 的**尺寸由父视图决定**，
+        // 它自己画多大都**不参与父级布局**（会溢出，但不会反过来撑大父视图）。
+        // 氛围层本来就该"铺满一屏、画到屏幕外也没关系"，这正是 overlay 的语义。
+        //
+        // 顺序也保住了：原来是 base → light → ambient → footerShadow，
+        // 现在 footerShadow 在 ZStack 里、ambient 叠在**最上面**。
+        // footerShadow 在深色下是全透明、浅色下是 5% 灰蓝，氛围层（≤0.05）压在它之上
+        // 像素级不可辨；而"氛围层在光影之上"这条原先的层次关系一字未变。
+        .overlay {
+            ambientDrift
+        }
+        // 3.12.0 第二层保险：**即使将来某一层又引入了一个固定大尺寸子视图**，
+        // 这一句也把背景钉回"父视图给的 proposal"（全屏），而不是让 `ZStack` 去取最大值。
+        // 只有 `maxWidth/maxHeight`，没有写死的数字 —— 旋转 / 分屏 / Stage Manager 全都跟着走。
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
         .allowsHitTesting(false)
     }
@@ -273,6 +292,10 @@ private struct AmbientDriftLayer: View {
                 .offset(x: (drifted ? -16 : 16) + 104,
                         y: (drifted ? -12 : 12) + 240)
         }
+        // 3.12.0：这一层现在挂在 `PageBackground` 的 `.overlay` 上（不再参与父级布局），
+        // 但它仍然是"背景"，不该吃任何触摸。外层虽然已经 `allowsHitTesting(false)`，
+        // 这里再写一次是**局部自洽**：把这一层单独搬进别的容器时它也不会变成一个隐形挡板。
+        .allowsHitTesting(false)
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.linear(duration: Self.tripDuration).repeatForever(autoreverses: true)) {

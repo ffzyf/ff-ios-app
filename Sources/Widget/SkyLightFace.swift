@@ -52,8 +52,35 @@ struct SkyLightFace: View {
         return WidgetCanvas.textScale(minSide: canvasMinSide)
     }
 
-    private var isSmall: Bool {
-        return family == .systemSmall
+    /// 大号（338×354，3.12.0）。
+    ///
+    /// 与中号的差别（任务书逐条）：天空区域更大（地平线压低 0.62 → 0.52）、
+    /// 顶部阶段名与倒计时各升一档（13 / 15pt）、**底部新增今日天气摘要**
+    /// （温度 + 现象 + 高低温）并保留日出日落。
+    private var isLarge: Bool {
+        return family == .systemLarge
+    }
+
+    /// 这一档的地平线弧顶高度：大号把天压得更低（= 天空更大）
+    private var crestY: CGFloat {
+        return isLarge ? WidgetTheme.SkyLight.largeCrestY : HorizonSky.crestY
+    }
+
+    /// 这一档的地平线两端高度
+    private var edgeY: CGFloat {
+        return isLarge ? WidgetTheme.SkyLight.largeEdgeY : HorizonSky.edgeY
+    }
+
+    /// 这一档的四周内边距
+    private var sidePadding: CGFloat {
+        switch family {
+        case .systemSmall:
+            return WidgetTheme.SkyLight.smallSidePadding
+        case .systemLarge:
+            return WidgetTheme.SkyLight.largeSidePadding
+        default:
+            return WidgetTheme.SkyLight.mediumSidePadding
+        }
     }
 
     /// 这一帧的天色（六个 token 的唯一入口）
@@ -82,7 +109,10 @@ struct SkyLightFace: View {
                 // 玻璃上仍读得出"天幕渐变 + 地平线弧"的层次。fullColor 下不垫（有真背景）。
                 .background {
                     if renderMode != .fullColor {
-                        SkyLightSky(entry: entry, renderMode: renderMode)
+                        SkyLightSky(entry: entry,
+                                    crestY: crestY,
+                                    edgeY: edgeY,
+                                    renderMode: renderMode)
                     }
                 }
                 // 整卡可点：落到沉浸式天光页 `SkyRoomView`（3.11.0 起天光 / 日弧 / 月相 / 风
@@ -91,7 +121,10 @@ struct SkyLightFace: View {
                 .widgetURL(WidgetDeepLink.sky)
                 // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
                 .containerBackground(for: .widget) {
-                    SkyLightSky(entry: entry, renderMode: renderMode)
+                    SkyLightSky(entry: entry,
+                                crestY: crestY,
+                                edgeY: edgeY,
+                                renderMode: renderMode)
                 }
         }
     }
@@ -153,20 +186,51 @@ struct SkyLightFace: View {
         }
     }
 
-    /// 文字层：只有上下两行，中间全留给天空 —— 参考图里没有任何元素压在地平线上
+    /// 文字层：上排（阶段名 + 倒计时）+ 弹性留白 + 下排（大号多一行天气摘要，再接日出日落）。
+    /// 中间那片留给天空 —— 参考图里没有任何元素压在地平线上。
     private var content: some View {
         VStack(spacing: 0) {
             header
             Spacer(minLength: 0)
+            if isLarge {
+                largeWeatherSummary
+                    .padding(.bottom, 8)
+            }
             footer
         }
-        .padding(.horizontal, isSmall
-                 ? WidgetTheme.SkyLight.smallSidePadding
-                 : WidgetTheme.SkyLight.mediumSidePadding)
-        .padding(.vertical, isSmall
-                 ? WidgetTheme.SkyLight.smallSidePadding
-                 : WidgetTheme.SkyLight.mediumSidePadding)
+        .padding(.horizontal, sidePadding)
+        .padding(.vertical, sidePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 大号底部那行「今日天气摘要」：现象 + 温度 + 高低温（3.12.0）。
+    ///
+    /// 数据来自 `entry.weather`（`SkyLightEntry` 本来就带着它，见 `SkyLightProvider`）——
+    /// 三头全缺就整行不画。**绝不写 "—°" 或 "0°"**：缺数据就少一行，
+    /// 这是这张卡从 3.5.0 起一贯的诚实策略。
+    @ViewBuilder
+    private var largeWeatherSummary: some View {
+        if let summary = weatherSummaryText {
+            Text(summary)
+                .font(WidgetTheme.SkyLight.summary(family))
+                .foregroundStyle(sky.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .monospacedDigit()
+                .widgetAccentable()
+        }
+    }
+
+    /// 天气摘要文案：`晴 21° 12°/24°`（缺项少写，全缺 nil）
+    private var weatherSummaryText: String? {
+        guard let weather = entry.weather, weather.ok else { return nil }
+        var parts: [String] = []
+        if let text = weather.text, text.isEmpty == false { parts.append(text) }
+        if let temp = weather.temp { parts.append("\(Int(temp))°") }
+        if let tMax = weather.tMax, let tMin = weather.tMin {
+            parts.append("\(Int(tMin))°/\(Int(tMax))°")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     // MARK: - 上排：阶段名 + 倒计时

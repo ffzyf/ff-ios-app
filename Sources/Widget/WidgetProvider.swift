@@ -380,11 +380,15 @@ enum WidgetFetch {
         return result.sorted { $0.date < $1.date }
     }
 
-    /// 从简报正文里切出前 2 段。
+    /// 从简报正文里切出前 N 段（N = `WidgetTheme.largeParagraphLimit`，3.12.0 起是 4）。
     ///
     /// 服务端的 `body` 是**一整段纯文本**，段落之间空行分隔，中间还夹着 `——————————` 这种分隔线。
-    /// 这里做三件事：按空行切段 → 丢掉纯分隔线 → 取前 2 段。
+    /// 这里做三件事：按空行切段 → 丢掉纯分隔线 → 取前 N 段。
     /// 取不到（`available == false` 的早上）就返回空数组，小组件显示「今天还没有简报」。
+    ///
+    /// **为什么从 2 段提到 4 段**：中号只渲染首句，2 段本来就够；但大号要 **4–5 行正文**
+    /// （用户原话："大的小组件因为它大也可以显示更多内容啊"），2 段拼起来常常只有 2 行，
+    /// 下半张卡就空了。切段上限提高后，渲染层各取所需：小/中号取首句，大号取前 4 段。
     static func paragraphs(from body: String?) -> [String] {
         guard let body = body else { return [] }
         let normalized = body.replacingOccurrences(of: "\r\n", with: "\n")
@@ -398,7 +402,7 @@ enum WidgetFetch {
             }
             guard !isSeparator else { continue }
             result.append(trimmed)
-            if result.count >= 2 { break }
+            if result.count >= WidgetTheme.largeParagraphLimit { break }
         }
         return result
     }
@@ -502,6 +506,66 @@ extension RedstoneEntry {
             needsCheck: false,
             daylight: SkyLightEntry.make(date: date),
             weekRows: []
+        )
+    }
+
+    /// 组件库 / 占位专用的**样例帧**（3.12.0，修「红石小组件没有最大版」）。
+    ///
+    /// ## 为什么必须有它（这是 3.11.0 那个 bug 的真正根因）
+    ///
+    /// 3.11.0 的 `placeholder(in:)` 与 `getSnapshot(in:)` 都返回 `RedstoneEntry.empty(date:)`，
+    /// 而 `empty` 的 `focus` 恒为 `nil` —— 于是 `RedstoneWidgetView` 走进"空窗期整卡换天光面"
+    /// 那条分支，**三个尺寸的预览全部画成天光卡**。
+    /// 用户在组件库里看到的是：小/中/大 三张都长成天光（大号更是与"天光"组件完全同款），
+    /// 结论自然就是"红石没有最大版"。也就是说 —— 版式代码是对的（`largeFace` 一直在），
+    /// 但**组件库从来没让他看见过它**。
+    ///
+    /// 所以占位路径必须给一帧"有场次"的样例：三档各自走自己的版式，
+    /// 大号就能看到 hero 倒计时 + 本周排期。样例**不是真实数据**（Apple 对 placeholder 的定义
+    /// 就是"sample data"），它只出现在组件库预览与系统占位窗口里；桌面上真正渲染的永远是
+    /// `getTimeline` 产出的真实 entry（没数据就诚实地切天光面）。
+    ///
+    /// ## 为什么按 family 造
+    ///
+    /// 大号下半部是「本周排期」4 行、小/中号只有 1–2 行位子。让样例帧按 family 决定行数，
+    /// 三个尺寸的预览才各自"长得对"（DESIGN-RULES §3：一档一版式，不是一套硬缩放）。
+    static func preview(date: Date, family: WidgetFamily) -> RedstoneEntry {
+        // 场次放在 90 分钟后：倒计时一定为正（`Text(timerInterval:)` 的区间必须合法）
+        let start = date.addingTimeInterval(90 * 60)
+        let sample = Occurrence(date: RedstoneClock.dayKey(start),
+                                startAt: start,
+                                endAt: start.addingTimeInterval(52 * 60),
+                                time: Formatters.timeHHmm(start),
+                                map: "暮土·失落方舟",
+                                rate: 2.5,
+                                needsCheck: false,
+                                type: "红石")
+        let todayKey = RedstoneClock.dayKey(date)
+        let rowLimit = family == .systemLarge ? WidgetTheme.Redstone.largeRowLimit : 2
+        // 四行样例的时刻串：形状与真实数据一致（`"11:08 · 17:08"`），值本身是示例
+        let sampleTimes = ["11:08", "11:08 · 17:08", "07:08 · 15:08 · 23:08", "09:08 · 21:08"]
+        let rows = (0..<max(1, rowLimit)).map { offset -> RedstoneWeekRow in
+            let dayKey = offset == 0
+                ? todayKey
+                : RedstoneClock.dayKey(date.addingTimeInterval(86_400 * Double(offset)))
+            return RedstoneWeekRow(
+                dayKey: dayKey,
+                dayLabel: dayLabel(dayKey: dayKey, todayKey: todayKey),
+                timesLabel: sampleTimes[offset % sampleTimes.count],
+                map: sample.map
+            )
+        }
+
+        return RedstoneEntry(
+            date: date,
+            hasData: true,
+            updatedAt: date,
+            phase: .upcoming(sample, seconds: 90 * 60),
+            todayOccurrences: [sample],
+            todayCount: 1,
+            needsCheck: false,
+            daylight: SkyLightEntry.make(date: date),
+            weekRows: rows
         )
     }
 
@@ -671,14 +735,39 @@ struct BriefEntry: TimelineEntry {
 /// 倒计时本身不靠刷新 —— View 里用 `Text(timerInterval:)` 让系统自绘走时，秒级在动但零刷新成本。
 struct RedstoneProvider: TimelineProvider {
 
-    /// 预览占位（Xcode 里点开 Widget 时先看到的东西）
+    /// 预览占位（组件库 / 系统占位窗口）。
+    ///
+    /// **3.12.0 修**：这里原来是 `RedstoneEntry.empty(date:)` —— `focus == nil` 于是整卡走
+    /// "空窗期换天光面"分支，三个尺寸的预览全画成天光卡（用户因此认为"红石没有最大版"）。
+    /// 现在给按 family 生成的**样例帧**：小 / 中 / 大各自渲染自己的版式，
+    /// 大号在组件库里就能看到 hero 倒计时 + 本周排期。理由详见 `RedstoneEntry.preview`。
     func placeholder(in context: Context) -> RedstoneEntry {
-        return RedstoneEntry.empty(date: Date())
+        return RedstoneEntry.preview(date: Date(), family: context.family)
     }
 
-    /// 组件库里的快照：不发请求，直接用空态，避免用户在库里翻组件时打一堆请求
+    /// 组件库里的快照。
+    ///
+    /// 三条路径，按"能给出多真实的内容"排序：
+    /// 1. `context.isPreview`（组件库预览）→ 样例帧（按 family 分档，三档都能看到自己的版式）；
+    /// 2. 本地有快照（用户确实用过，桌面上已有真实排期）→ 用快照算真实 entry；
+    /// 3. 什么都没有 → 同样退到样例帧（**不能**退到空态：空态会整卡变天光面，
+    ///    组件库里就会看起来"这个尺寸没有红石版式"）。
+    ///
+    /// 为什么不发网络请求：用户只是划组件库，为每一档预览打一次请求既慢又浪费预算；
+    /// 预览要的是"版式长什么样"，不是"此刻的数据对不对"。
     func getSnapshot(in context: Context, completion: @escaping (RedstoneEntry) -> Void) {
-        completion(RedstoneEntry.empty(date: Date()))
+        if context.isPreview {
+            completion(RedstoneEntry.preview(date: Date(), family: context.family))
+            return
+        }
+        if let payload = WidgetSnapshot.load(RedstoneCachePayload.self, key: WidgetSnapshot.redstoneKey),
+           !payload.days.isEmpty {
+            completion(RedstoneEntry.make(date: Date(),
+                                          days: payload.days,
+                                          updated: payload.updated))
+            return
+        }
+        completion(RedstoneEntry.preview(date: Date(), family: context.family))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<RedstoneEntry>) -> Void) {

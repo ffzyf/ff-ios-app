@@ -96,6 +96,13 @@ struct WindFace: View {
             if family == .accessoryRectangular || family == .accessoryInline {
                 accessoryContent
                     .containerBackground(for: .widget) { Color.clear }
+            } else if family == .systemLarge {
+                largeContent
+                    .containerBackground(for: .widget) {
+                        LinearGradient(colors: [sky.top, sky.horizon],
+                                       startPoint: .top,
+                                       endPoint: .bottom)
+                    }
             } else {
                 systemContent
                     .containerBackground(for: .widget) {
@@ -121,6 +128,120 @@ struct WindFace: View {
         }
         .padding(WidgetTheme.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    // MARK: 桌面大号（338×354，3.12.0 新增）
+    //
+    // 与中/小号的差别（任务书要求"承载更多内容"）：
+    // 1. 风速大字 26 → **56pt**，方位 16pt，箭头 44pt；
+    // 2. **新增**「风力刻度」：一条 0…60 KM/H 的轨道 + 指针 + 三档标签 ——
+    //    同一份当前风速，用"它在刻度的哪个位置"表达，这是**真实数据的第二种读法**；
+    // 3. 底部观测行（现在 + 观测时刻）。
+    //
+    // 为什么不是"未来 3 小时趋势"：上游 `/api/app/weather` 只给当前实况，
+    // `WeatherNow` 里没有 hourly、也没有 gust。按工程纪律"没有的数据整段不画"，
+    // 画一条编出来的趋势线是这个项目最不能做的事（`WeatherKind.from(code:)` 的注释里
+    // 已经踩过一次"把缺数据画成晴天"的坑）。所以用刻度表达当前值，不伪造时间序列。
+    private var largeContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let wind = entry.wind {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(Int(wind.rounded()))")
+                        .font(WidgetTheme.Wind.largeSpeed)
+                        .foregroundStyle(sky.ink)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .widgetAccentable()
+                    Text("KM/H")
+                        .font(WidgetTheme.Wind.largeUnit)
+                        .foregroundStyle(sky.inkDim)
+                    Spacer(minLength: 6)
+                    if let dir = entry.windDirText {
+                        Text(dir)
+                            .font(WidgetTheme.Wind.largeUnit)
+                            .foregroundStyle(sky.ink)
+                            .lineLimit(1)
+                            .widgetAccentable()
+                    }
+                }
+                .padding(.top, WidgetTheme.Wind.largePadding)
+
+                Spacer(minLength: 0)
+
+                if let degrees = entry.windDirectionDegrees {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: WidgetTheme.Wind.largeArrowSize, weight: .bold))
+                            .foregroundStyle(sky.edge)
+                            // meteorological 来向 + 180 = 风吹去的方向（与 `WindFace` 头注释同一套语义）
+                            .rotationEffect(.degrees(degrees + 180))
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                windScale(wind: wind)
+                    .padding(.bottom, 10)
+
+                footRow
+            } else {
+                // 没拿到数据：整卡静默（不显示 0 KM/H —— 0 是"无风"，不是"没拿到"）
+                Spacer(minLength: 0)
+                Text("暂无数据")
+                    .font(WidgetTheme.Wind.largeUnit)
+                    .foregroundStyle(sky.inkDim)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, WidgetTheme.Wind.largePadding)
+        .padding(.bottom, WidgetTheme.Wind.largePadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    /// 风力刻度：0…60 KM/H 的轨道 + 一个指针 + 三档标签。
+    ///
+    /// 指针位置是**纯几何**（`wind / scaleMax`），不参与动画、不重新计算颜色。
+    private func windScale(wind: Double) -> some View {
+        let fraction = min(max(CGFloat(wind / Double(WidgetTheme.Wind.scaleMax)), 0), 1)
+        let knob = WidgetTheme.Wind.scaleKnobDiameter
+
+        return VStack(alignment: .leading, spacing: 6) {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(sky.inkDim.opacity(0.20))
+                        .frame(height: WidgetTheme.Wind.scaleHeight)
+                    Capsule()
+                        .fill(sky.edge)
+                        .frame(width: max(0, width * fraction),
+                               height: WidgetTheme.Wind.scaleHeight)
+                    Circle()
+                        .fill(sky.ink)
+                        .frame(width: knob, height: knob)
+                        .offset(x: min(max(width * fraction - knob / 2, 0), max(0, width - knob)))
+                }
+                .frame(height: knob, alignment: .leading)
+            }
+            .frame(height: knob)
+
+            HStack(spacing: 0) {
+                Text("无风")
+                    .font(WidgetTheme.Wind.scaleLabel)
+                    .foregroundStyle(sky.inkDim)
+                Spacer(minLength: 0)
+                Text("微风")
+                    .font(WidgetTheme.Wind.scaleLabel)
+                    .foregroundStyle(sky.inkDim)
+                Spacer(minLength: 0)
+                Text("强风")
+                    .font(WidgetTheme.Wind.scaleLabel)
+                    .foregroundStyle(sky.inkDim)
+            }
+        }
     }
 
     /// 上行：风速大字 + 单位 / 方位。风速缺省时整行显示「暂无数据」——
@@ -234,12 +355,13 @@ struct WindFace: View {
 
 // MARK: - 组件注册
 
-/// 风卡（3.10.0 新组件）。
+/// 风卡（3.10.0 新组件，3.12.0 补大号）。
 ///
-/// **家族表（#8 审计）**：systemSmall / accessoryRectangular / accessoryInline。
-/// 不加 systemMedium / systemLarge：参考图里风卡就是一张竖向的方章
-/// （风速大字 + 一枚箭头），拉长没有第二排内容可填 —— medium/large 版式
-/// 需要逐小时预报列（上游未提供），在数据到位前不摆假适配。
+/// **家族表**：systemSmall / systemLarge / accessoryRectangular / accessoryInline。
+/// - 大号（3.12.0）= 56pt 风速大字 + 方位 + 44pt 箭头 + **风力刻度**（0…60 KM/H 轨道 + 指针）
+///   + 观测行 —— 刻度是这一档独有的内容，小号没有；
+/// - 仍然不加 systemMedium：中号 338×158 的横向空间放不下"刻度 + 箭头"两样，
+///   硬摆只会得到一个被压扁的大号（DESIGN-RULES §3 禁止一套布局硬缩放）。
 struct WindWidget: Widget {
 
     /// WidgetKit 用 kind 匹配已上桌的实例，改名等于让所有用户的小组件失效
@@ -251,7 +373,10 @@ struct WindWidget: Widget {
         }
         .configurationDisplayName(WidgetTheme.Wind.displayName)
         .description(WidgetTheme.Wind.description)
-        .supportedFamilies([.systemSmall, .accessoryRectangular, .accessoryInline])
+        .supportedFamilies([.systemSmall,
+                            .systemLarge,
+                            .accessoryRectangular,
+                            .accessoryInline])
         .contentMarginsDisabled()
     }
 }

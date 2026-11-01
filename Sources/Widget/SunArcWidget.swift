@@ -17,6 +17,18 @@ struct SunArcEntry: TimelineEntry {
     /// 当天实际日落（同上）
     let sunset: Date?
 
+    /// 当前气温（℃，3.12.0 为**大号**新增）。
+    ///
+    /// 大号下半部要多一句"今日天气"（任务书：底部今日天气一句）。数据来自同一份
+    /// `WeatherCardPayload`（这张卡本来就在拉它算日出日落），所以不新增任何请求。
+    /// nil = 没拿到 → 那一句整段不画（绝不写 "—°"）。
+    let temp: Double?
+    /// 天气现象中文（"小雨"），nil = 没拿到
+    let weatherText: String?
+    /// 今日高 / 低温
+    let tMax: Double?
+    let tMin: Double?
+
     /// 太阳在弧上的进度（0 = 日出、1 = 日落）；夜里 / 算不出时为 nil（不画太阳点）
     var dayProgress: Double? {
         guard let sunrise = sunrise, let sunset = sunset else { return nil }
@@ -38,6 +50,18 @@ struct SunArcEntry: TimelineEntry {
         return tomorrow.sunrise
     }
 
+    /// 大号底部那一句「晴 21° 12°/24°」。三头（现象 / 温度 / 高低温）全缺就返回 nil。
+    ///
+    /// 为什么允许"只有一部分"：这句是**辅助信息**，缺一项就少写一项，
+    /// 比整句消失更有用（口径与 `BriefFace.hiLoText` 不同：那个是主视觉，宁可整段不画）。
+    var weatherSummary: String? {
+        var parts: [String] = []
+        if let text = weatherText, text.isEmpty == false { parts.append(text) }
+        if let temp = temp { parts.append("\(Int(temp))°") }
+        if let tMax = tMax, let tMin = tMin { parts.append("\(Int(tMin))°/\(Int(tMax))°") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
     /// 用一份载荷 + 指定时刻造一帧（纯函数）。
     ///
     /// 实际日出日落只在**同一天**生效（载荷带 `dayKey`）；跨天的帧回退 `SunClock`
@@ -51,11 +75,17 @@ struct SunArcEntry: TimelineEntry {
             return (sunrise, sunset)
         }
         let computed = SunClock.times(on: date)
+        // 天气数值只在**同一天**采信（理由同上：`dayKey` 挡住跨天的旧值）
+        let weather = payload?.dayKey == dayKey ? payload : nil
         return SunArcEntry(
             date: date,
             phase: SunClock.phase(at: date),
             sunrise: actual?.0 ?? computed?.sunrise,
-            sunset: actual?.1 ?? computed?.sunset
+            sunset: actual?.1 ?? computed?.sunset,
+            temp: weather?.temp,
+            weatherText: weather?.text,
+            tMax: weather?.tMax,
+            tMin: weather?.tMin
         )
     }
 }
@@ -169,7 +199,27 @@ struct SunArcFace: View {
         }
     }
 
-    // MARK: 桌面档（小 / 中）
+    // MARK: 桌面档（小 / 中 / 大）
+
+    /// 大号（338×354，3.12.0 新增）。
+    ///
+    /// 与中号的差别**不是"放大"**，而是多了三样东西（任务书逐条）：
+    /// 1. 弧更长更粗（弧顶 0.46 → 0.40，线宽 1.6 → 2.4）；
+    /// 2. 太阳点更大（10 → 16pt），两端时刻 15 → 22pt；
+    /// 3. 底部**新增**一句今日天气（`weatherSummary`），中间那行倒计时放大到 17pt。
+    private var isLarge: Bool {
+        return family == .systemLarge
+    }
+
+    /// 弧顶高度（大号拉得更长）
+    private var crestY: CGFloat {
+        return isLarge ? WidgetTheme.SunArc.largeArcCrestY : WidgetTheme.SunArc.arcCrestY
+    }
+
+    /// 弧两端高度
+    private var edgeY: CGFloat {
+        return isLarge ? WidgetTheme.SunArc.largeArcEdgeY : WidgetTheme.SunArc.arcEdgeY
+    }
 
     private var systemContent: some View {
         ZStack {
@@ -184,14 +234,16 @@ struct SunArcFace: View {
     /// 雾化层（粗而淡）+ 实线层。
     private var arcLayers: some View {
         ZStack {
-            HorizonEdge(crestY: WidgetTheme.SunArc.arcCrestY,
-                        edgeY: WidgetTheme.SunArc.arcEdgeY)
+            HorizonEdge(crestY: crestY, edgeY: edgeY)
                 .stroke(sky.edge.opacity(0.22),
-                        lineWidth: WidgetTheme.SkyLight.edgeHazeWidth)
-            HorizonEdge(crestY: WidgetTheme.SunArc.arcCrestY,
-                        edgeY: WidgetTheme.SunArc.arcEdgeY)
+                        lineWidth: isLarge
+                            ? WidgetTheme.SkyLight.edgeHazeWidth * 1.6
+                            : WidgetTheme.SkyLight.edgeHazeWidth)
+            HorizonEdge(crestY: crestY, edgeY: edgeY)
                 .stroke(sky.edge.opacity(0.85),
-                        lineWidth: WidgetTheme.SkyLight.edgeWidth)
+                        lineWidth: isLarge
+                            ? WidgetTheme.SunArc.largeArcWidth
+                            : WidgetTheme.SkyLight.edgeWidth)
         }
     }
 
@@ -201,9 +253,10 @@ struct SunArcFace: View {
     @ViewBuilder
     private var sunGlow: some View {
         if let progress = entry.dayProgress {
-            let point = SunArcGeometry.point(at: progress,
-                                             crestY: WidgetTheme.SunArc.arcCrestY,
-                                             edgeY: WidgetTheme.SunArc.arcEdgeY)
+            let point = SunArcGeometry.point(at: progress, crestY: crestY, edgeY: edgeY)
+            let core = isLarge
+                ? WidgetTheme.SunArc.largeSunCoreDiameter
+                : WidgetTheme.SunArc.sunCoreDiameter
             GeometryReader { proxy in
                 let center = CGPoint(x: point.x * proxy.size.width,
                                      y: point.y * proxy.size.height)
@@ -222,33 +275,50 @@ struct SunArcFace: View {
 
                     Circle()
                         .fill(sky.edge)
-                        .frame(width: WidgetTheme.SunArc.sunCoreDiameter,
-                               height: WidgetTheme.SunArc.sunCoreDiameter)
+                        .frame(width: core, height: core)
                         .position(center)
 
                     Circle()
                         .strokeBorder(sky.edge.opacity(0.82), lineWidth: WidgetTheme.SunArc.sunRingWidth)
-                        .frame(width: WidgetTheme.SunArc.sunCoreDiameter + 2 * WidgetTheme.SunArc.sunRingWidth,
-                               height: WidgetTheme.SunArc.sunCoreDiameter + 2 * WidgetTheme.SunArc.sunRingWidth)
+                        .frame(width: core + 2 * WidgetTheme.SunArc.sunRingWidth,
+                               height: core + 2 * WidgetTheme.SunArc.sunRingWidth)
                         .position(center)
                 }
             }
         }
     }
 
-    /// 文字层：左下日出（暖亮）、右下日落（压暗）；中号加一行倒计时。
+    /// 文字层：左下日出（暖亮）、右下日落（压暗）；中号加一行倒计时；
+    /// 大号再加一行今日天气（最底）。
     private var textLayers: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: isLarge ? 8 : 4) {
             Spacer(minLength: 0)
             countdownRow
             timesRow
+            if isLarge {
+                largeWeatherRow
+            }
         }
-        .padding(.horizontal, WidgetTheme.padding)
-        .padding(.bottom, WidgetTheme.padding)
+        .padding(.horizontal, isLarge ? WidgetTheme.SunArc.largePadding : WidgetTheme.padding)
+        .padding(.bottom, isLarge ? WidgetTheme.SunArc.largePadding : WidgetTheme.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
-    /// 中号专属的倒计时（小号空间不够，整段不画）。
+    /// 大号底部：今日天气一句（温度 / 现象 / 高低温）。没有数据整段不画。
+    @ViewBuilder
+    private var largeWeatherRow: some View {
+        if let summary = entry.weatherSummary {
+            Text(summary)
+                .font(WidgetTheme.SunArc.largeWeather)
+                .foregroundStyle(sky.inkDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    /// 中/大号专属的倒计时（小号空间不够，整段不画）。
     ///
     /// `Text(timerInterval:)` 必须有区间合法性守卫：`entry.date < deadline` 不成立时
     /// （帧迟到、系统时钟回拨）这个 API 会渲染出负数或乱码 —— 守卫是硬要求，
@@ -261,7 +331,7 @@ struct SunArcFace: View {
                     .font(WidgetTheme.SunArc.tagLabel)
                     .foregroundStyle(sky.inkDim)
                 Text(timerInterval: entry.date...event, countsDown: true, showsHours: true)
-                    .font(WidgetTheme.SunArc.countdown)
+                    .font(isLarge ? WidgetTheme.SunArc.largeCountdown : WidgetTheme.SunArc.countdown)
                     .foregroundStyle(sky.ink)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -280,7 +350,7 @@ struct SunArcFace: View {
                         .font(WidgetTheme.SunArc.tagLabel)
                         .foregroundStyle(sky.inkDim)
                     Text(Formatters.timeHHmm(sunrise))
-                        .font(WidgetTheme.SunArc.sunTime)
+                        .font(isLarge ? WidgetTheme.SunArc.largeSunTime : WidgetTheme.SunArc.sunTime)
                         .foregroundStyle(sky.edge)
                         .monospacedDigit()
                         .lineLimit(1)
@@ -294,7 +364,7 @@ struct SunArcFace: View {
                         .font(WidgetTheme.SunArc.tagLabel)
                         .foregroundStyle(sky.inkDim)
                     Text(Formatters.timeHHmm(sunset))
-                        .font(WidgetTheme.SunArc.sunTime)
+                        .font(isLarge ? WidgetTheme.SunArc.largeSunTime : WidgetTheme.SunArc.sunTime)
                         .foregroundStyle(sky.inkDim)
                         .monospacedDigit()
                         .lineLimit(1)
@@ -335,12 +405,13 @@ struct SunArcFace: View {
 
 // MARK: - 组件注册
 
-/// 日弧卡（3.10.0 新组件）。
+/// 日弧卡（3.10.0 新组件，3.12.0 补大号）。
 ///
-/// **家族表（#8 审计）**：systemSmall / systemMedium / accessoryRectangular / accessoryInline。
-/// 不加 `.systemLarge`：这张卡的全部内容（弧 + 两个时刻 + 倒计时）在小 / 中号已构成
-/// 完整的视觉闭环，放大到大号只会得到"更空的天"—— 天光卡那种"整屏天空"才是
-/// Large 该有的样子，硬套这张卡是负收益（注释即文档，改动前先想清楚加什么内容）。
+/// **家族表**：systemSmall / systemMedium / systemLarge / accessoryRectangular / accessoryInline。
+/// - 中号 = 小号 + 一行倒计时（弧 + 两个时刻 + 倒计时，已是完整闭环）；
+/// - 大号（3.12.0，任务书要求）= 更长的弧 + 更大的太阳点 + 22pt 两端时刻 +
+///   17pt「距日落 x 小时」+ 底部「今日天气一句」。这三样**中号没有**，
+///   所以它不是"把小卡放大"，而是"多了一层内容"（DESIGN-RULES §3）。
 /// 不加 accessoryCircular：环形里放不下"两个时刻 + 弧"中任何一项的可读形态。
 struct SunArcWidget: Widget {
 
@@ -353,7 +424,11 @@ struct SunArcWidget: Widget {
         }
         .configurationDisplayName(WidgetTheme.SunArc.displayName)
         .description(WidgetTheme.SunArc.description)
-        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryInline])
+        .supportedFamilies([.systemSmall,
+                            .systemMedium,
+                            .systemLarge,
+                            .accessoryRectangular,
+                            .accessoryInline])
         // 底色铺到四边（与天光 / 简报卡同一纪律，否则外围一圈系统色像"卡中卡"）
         .contentMarginsDisabled()
     }

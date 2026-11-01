@@ -52,6 +52,21 @@ enum MoonPhaseMath {
         return age < synodicMonth / 2
     }
 
+    /// 距下一次满月还有几天（3.12.0，大号卡的那一行提示）。
+    ///
+    /// 满月出现在月龄 **14.765 天**（半周期）。两条路径：
+    /// - 月龄还没到半周期 → `14.765 − age`；
+    /// - 已经过了（亏月）→ 先走完这个周期，再加半个月：`(29.53 − age) + 14.765`。
+    ///
+    /// 取整用 `rounded()` 而不是 `ceil()`：差 0.4 天时说"还有 0 天"是对的（今晚就圆），
+    /// 说"还有 1 天"反而错得明显（用户当晚看到的就是满月）。
+    /// 纯天文本地计算，零网络 —— 这张卡本来就不联网。
+    static func daysToFullMoon(_ age: Double) -> Int {
+        let half = synodicMonth / 2
+        let remaining = age <= half ? half - age : (synodicMonth - age) + half
+        return max(0, Int(remaining.rounded()))
+    }
+
     /// 阴影圆的偏移量（相对月盘半径的比例，0…2）。
     ///
     /// 画法是"两个圆交叠 + 裁剪"：亮圆在上，同尺寸的阴影圆**横向偏移**盖上去，
@@ -97,6 +112,19 @@ struct MoonPhaseEntry: TimelineEntry {
     let illumination: Double
     /// 月名（朔 / 娥眉 / 上弦 / 盈凸 / 望 / 亏凸 / 下弦 / 残月）
     let name: String
+
+    /// 距下一次满月还有几天（3.12.0，大号卡的那一行提示）。
+    ///
+    /// `0` = 今晚就圆（差不到半天）。不是 Optional：纯天文函数永远算得出，
+    /// 没有"缺数据"这一说（这张卡零网络，`MoonPhaseMath.age` 只读 `date`）。
+    var daysToFullMoon: Int {
+        return MoonPhaseMath.daysToFullMoon(age)
+    }
+
+    /// 大号卡底部那行文案：`下次满月还有 3 天` / `今晚满月`
+    var fullMoonText: String {
+        return daysToFullMoon == 0 ? "今晚满月" : "下次满月还有 \(daysToFullMoon) 天"
+    }
 
     static func make(date: Date) -> MoonPhaseEntry {
         let age = MoonPhaseMath.age(on: date)
@@ -186,13 +214,13 @@ struct MoonDisc: View {
 /// 月相卡面 —— 参考图 IMG_9274 右3 的语言：深空渐变底 + 居中月盘，
 /// 上月名、下照明度百分比。
 ///
-/// 3.10.0 家族表（#8 审计）：
+/// 3.12.0 家族表：
 /// - `systemSmall`：完整版式（月名 / 月盘 / 百分比）；
+/// - `systemLarge`：**大月盘（148pt）+ 18pt 月名 + 15pt 照明度 + 新增一行「下次满月还有 N 天」**
+///   —— 这一行是大号独有的内容（任务书要求），纯天文计算，不需要网络；
 /// - `accessoryCircular`：只留月盘（环形里百分比与月名都是不可读的噪点）；
 /// - `accessoryRectangular`：月名 + 百分比两行；
 /// - `accessoryInline`：一行「上弦 52%」。
-/// 不加 systemMedium / systemLarge：这张卡的内容密度就是一个方章 ——
-/// 拉长后月盘两侧全是空天（参考图里它也只以小方卡形态出现），不做硬缩放的假适配。
 struct MoonPhaseFace: View {
 
     @Environment(\.widgetFamily) private var family
@@ -227,6 +255,8 @@ struct MoonPhaseFace: View {
                     Text("照明 \(Int(round(entry.illumination * 100)))%")
                         .font(WidgetTheme.Accessory.lineSecondary)
                 }
+            case .systemLarge:
+                largeFace
             default:
                 smallFace
             }
@@ -278,11 +308,45 @@ struct MoonPhaseFace: View {
         .padding(WidgetTheme.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// 桌面大号版式（3.12.0）：大月盘 + 月名 + 照明度 + **下一次满月**
+    ///
+    /// 纵向三段：月名（18pt）/ 月盘（148pt）/ 照明度（15pt）→ 底部一行提示（12pt）。
+    /// 与中/小号的关系不是"放大"：那两档没有「下次满月」这一行 —— 它是大号独有的内容。
+    private var largeFace: some View {
+        VStack(spacing: 10) {
+            Text(entry.name)
+                .font(WidgetTheme.Moon.largeName)
+                .foregroundStyle(nightSky.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .widgetAccentable()
+
+            MoonDisc(illumination: entry.illumination,
+                     isWaxing: MoonPhaseMath.isWaxing(entry.age),
+                     diameter: WidgetTheme.Moon.largeDiscDiameter)
+                .widgetAccentable()
+
+            Text("照明度 \(Int(round(entry.illumination * 100)))%")
+                .font(WidgetTheme.Moon.largePercent)
+                .foregroundStyle(nightSky.inkDim)
+                .monospacedDigit()
+
+            Spacer(minLength: 0)
+
+            Text(entry.fullMoonText)
+                .font(WidgetTheme.Moon.largeHint)
+                .foregroundStyle(nightSky.inkDim)
+                .lineLimit(1)
+        }
+        .padding(WidgetTheme.Moon.largePadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 // MARK: - 组件注册
 
-/// 月相卡（3.10.0 新组件）。纯本地计算（见 `MoonPhaseMath`），永不因网络失败而空白。
+/// 月相卡（3.10.0 新组件，3.12.0 补大号）。纯本地计算（见 `MoonPhaseMath`），永不因网络失败而空白。
 struct MoonPhaseWidget: Widget {
 
     /// WidgetKit 用 kind 匹配已上桌的实例，改名等于让所有用户的小组件失效
@@ -295,6 +359,7 @@ struct MoonPhaseWidget: Widget {
         .configurationDisplayName(WidgetTheme.Moon.displayName)
         .description(WidgetTheme.Moon.description)
         .supportedFamilies([.systemSmall,
+                            .systemLarge,
                             .accessoryCircular,
                             .accessoryRectangular,
                             .accessoryInline])

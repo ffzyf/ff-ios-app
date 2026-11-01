@@ -31,6 +31,14 @@ enum WidgetTheme {
     /// 组件内容内边距
     static let padding: CGFloat = 12
 
+    /// 简报正文最多切出几段（3.12.0）。
+    ///
+    /// 3.11.0 是硬编码的 2 段 —— 中号只显示首句，2 段够用；但**大号要 4–5 行正文**，
+    /// 2 段拼起来往往只有 2 行，大号的下半张卡就会空掉（用户原话：
+    /// "每日简报大的小组件因为它大也可以显示更多内容啊，把内容显出来啊"）。
+    /// 所以切段上限提到 4，由渲染层各取所需：小/中号取首句，大号取前 4 段。
+    static let largeParagraphLimit: Int = 4
+
     // MARK: - 天际线几何
     //
     // 3.11.0 清理：这里原有 `skyCrestY` / `skyEdgeY` 两个副本（0.62 / 0.74），靠注释
@@ -124,9 +132,14 @@ extension WidgetTheme {
         /// 阶段名字号（中号 / 小号）。`phaseLabel*` 与 `phaseLabelScaled(_:scale:)` 共用这两个数
         static let phaseLabelMediumSize: CGFloat = 10
         static let phaseLabelSmallSize: CGFloat = 9
+        /// 阶段名字号（大号 338×354，3.12.0）：天空比中号高出一倍，
+        /// 10pt 在 354pt 的画布上会被读成"注脚" —— 大号的标题必须一眼可读，取 13pt
+        static let phaseLabelLargeSize: CGFloat = 13
         /// 倒计时字号（中号 / 小号）。同上，缩放版共用
         static let countdownMediumSize: CGFloat = 12
         static let countdownSmallSize: CGFloat = 10
+        /// 倒计时字号（大号）：15pt 等宽，与 hero 化的阶段名同一档
+        static let countdownLargeSize: CGFloat = 15
 
         /// 10pt：中号左上「蓝调剩余」
         static let phaseLabelMedium = Font.system(size: phaseLabelMediumSize, weight: .semibold)
@@ -139,14 +152,52 @@ extension WidgetTheme {
         /// 9pt 等宽：小号地面区的日出 / 日落（11pt 在两个时刻并排时会顶到边）
         static let sunTimeSmall = Font.system(size: 9, weight: .medium, design: .monospaced)
 
-        /// 阶段名：按尺寸取档
+        /// 阶段名：按尺寸取档（小 / 中复用预置 Font，大号现造一支 —— 三档里只有它是新增的）
         static func phaseLabel(_ family: WidgetFamily) -> Font {
-            return family == .systemSmall ? phaseLabelSmall : phaseLabelMedium
+            switch family {
+            case .systemSmall:
+                return phaseLabelSmall
+            case .systemLarge:
+                return Font.system(size: phaseLabelLargeSize, weight: .semibold)
+            default:
+                return phaseLabelMedium
+            }
+        }
+
+        /// 阶段名的字号（三档：9 / 10 / 13）
+        static func phaseLabelSize(_ family: WidgetFamily) -> CGFloat {
+            switch family {
+            case .systemSmall:
+                return phaseLabelSmallSize
+            case .systemLarge:
+                return phaseLabelLargeSize
+            default:
+                return phaseLabelMediumSize
+            }
         }
 
         /// 倒计时：按尺寸取档
         static func countdown(_ family: WidgetFamily) -> Font {
-            return family == .systemSmall ? countdownSmall : countdownMedium
+            switch family {
+            case .systemSmall:
+                return countdownSmall
+            case .systemLarge:
+                return Font.system(size: countdownLargeSize, weight: .semibold, design: .monospaced)
+            default:
+                return countdownMedium
+            }
+        }
+
+        /// 倒计时的字号（三档：10 / 12 / 15）
+        static func countdownSize(_ family: WidgetFamily) -> CGFloat {
+            switch family {
+            case .systemSmall:
+                return countdownSmallSize
+            case .systemLarge:
+                return countdownLargeSize
+            default:
+                return countdownMediumSize
+            }
         }
 
         /// 阶段名（按画布短边缩放，见 `WidgetCanvas`）。
@@ -155,22 +206,30 @@ extension WidgetTheme {
         /// 缩放版必须和它读**同一个**尺寸数 —— 分居两个文件时，改字号的人只会看到一半。
         /// `textScale(158) == 1`，所以 iPhone 上与 `phaseLabel(_:)` 逐点相同。
         static func phaseLabelScaled(_ family: WidgetFamily, scale: CGFloat) -> Font {
-            let size = family == .systemSmall ? phaseLabelSmallSize : phaseLabelMediumSize
-            return Font.system(size: size * scale, weight: .semibold)
+            return Font.system(size: phaseLabelSize(family) * scale, weight: .semibold)
         }
 
         /// 倒计时（按画布短边缩放）。等宽必须保留：秒数每帧在走，非等宽会左右跳。
         static func countdownScaled(_ family: WidgetFamily, scale: CGFloat) -> Font {
-            let size = family == .systemSmall ? countdownSmallSize : countdownMediumSize
-            return Font.system(size: size * scale, weight: .semibold, design: .monospaced)
+            return Font.system(size: countdownSize(family) * scale,
+                               weight: .semibold,
+                               design: .monospaced)
         }
 
-        /// 地面区的日出 / 日落：中号复用 `WidgetTheme.sunTime`（11pt，与简报卡同一档）。
+        /// 地面区的日出 / 日落：中号复用 `WidgetTheme.sunTime`（11pt，与简报卡同一档）；
+        /// 大号升到 13pt（354pt 高的卡上 11pt 会被天空"吃掉"）。
         ///
         /// 这里必须写全 `WidgetTheme.sunTime`：`SkyLight` 自己也有一个 `sunTime(_:)` 方法，
         /// 不加限定名会解析到方法本身（函数不是 `Font`，编译期直接报类型不匹配）。
         static func sunTime(_ family: WidgetFamily) -> Font {
-            return family == .systemSmall ? sunTimeSmall : WidgetTheme.sunTime
+            switch family {
+            case .systemSmall:
+                return sunTimeSmall
+            case .systemLarge:
+                return Font.system(size: sunTimeLargeSize, weight: .medium, design: .monospaced)
+            default:
+                return WidgetTheme.sunTime
+            }
         }
 
         // MARK: 尺寸
@@ -183,6 +242,23 @@ extension WidgetTheme {
         static let mediumSidePadding: CGFloat = 14
         /// 小号内边距（方形画布更窄，收到 11pt 免得顶到圆角）
         static let smallSidePadding: CGFloat = 11
+        /// 大号内边距（338×354：四周各 18pt，天空仍占九成面积）
+        static let largeSidePadding: CGFloat = 18
+        /// 大号的地平线弧顶 / 两端高度（3.12.0）：0.62 → 0.52 是把天压低的唯一手段，
+        /// 「天空区域更大」这件事必须落在**几何**上，不能靠缩放文字假装
+        static let largeCrestY: CGFloat = 0.52
+        static let largeEdgeY: CGFloat = 0.66
+        /// 大号底部"今日天气摘要"的字号（3.12.0，13pt —— 与阶段名同档，低于倒计时一档）
+        static let largeSummarySize: CGFloat = 13
+        /// 大号日出 / 日落字号（3.12.0）
+        static let sunTimeLargeSize: CGFloat = 13
+
+        /// 大号底部那一行：`晴 21° 12°/24°`（温度 + 现象 + 高低温），
+        /// 没有天气数据时整行不画（绝不用"—°"占位）
+        static func summary(_ family: WidgetFamily) -> Font {
+            return Font.system(size: family == .systemLarge ? largeSummarySize : countdownSize(family),
+                               weight: .medium)
+        }
 
         // MARK: 地平线
         //
@@ -335,6 +411,35 @@ extension WidgetTheme {
         static let countdown = Font.system(size: countdownSize, weight: .semibold, design: .monospaced)
         /// 9pt 小标签（"日出"/"日落"）
         static let tagLabel = Font.system(size: 9, weight: .semibold)
+
+        // MARK: 大号（3.12.0）
+        //
+        // 大号 338×354：弧拉长、太阳点更大、两端时刻放大到 22pt，中间那行"距日落 3 小时"
+        // 是这一档**新增**的信息（中号放不下第三行）—— 这就是"比中号多出的内容"。
+
+        /// 大号的弧顶 / 两端高度：比中号更高（0.46 → 0.40），把弧拉长、把中间让给倒计时
+        static let largeArcCrestY: CGFloat = 0.40
+        static let largeArcEdgeY: CGFloat = 0.56
+        /// 大号太阳辉光点直径（中号 10 → 大号 16：画布高了一倍，10pt 会变成一个像素点）
+        static let largeSunCoreDiameter: CGFloat = 16
+        /// 大号两端时刻字号
+        static let largeSunTimeSize: CGFloat = 22
+        /// 大号中间倒计时字号
+        static let largeCountdownSize: CGFloat = 17
+        /// 大号底部"今日天气一句话"字号
+        static let largeWeatherSize: CGFloat = 13
+        /// 大号内边距
+        static let largePadding: CGFloat = 18
+        /// 大号弧线线宽（比中号粗一档：画布放大后 1.6pt 会显得"细得像划痕"）
+        static let largeArcWidth: CGFloat = 2.4
+
+        static let largeSunTime = Font.system(size: largeSunTimeSize,
+                                             weight: .semibold,
+                                             design: .monospaced)
+        static let largeCountdown = Font.system(size: largeCountdownSize,
+                                               weight: .semibold,
+                                               design: .monospaced)
+        static let largeWeather = Font.system(size: largeWeatherSize, weight: .medium)
     }
 
     /// 月相卡（MoonPhase）
@@ -355,6 +460,29 @@ extension WidgetTheme {
         static let percent = Font.system(size: percentSize, weight: .medium, design: .monospaced)
         /// 月盘阴影的描边（亮面 / 暗面分界不画线，靠两圆交叠的自然边界）
         static let discStrokeWidth: CGFloat = 0.8
+
+        // MARK: 大号（3.12.0）
+        //
+        // 大号 338×354：月盘放大到 148pt，月名 18pt、照明度 15pt，
+        // **新增**一行「下次满月还有 N 天」（中号没有这个位置）。
+        // 纯天文计算就能得到这个数（见 `MoonPhaseMath.daysToFullMoon`），不需要任何网络。
+
+        /// 大号月盘直径（pt）。354pt 高的卡放 148pt 的月盘，上下各留 ~100pt 给文字
+        static let largeDiscDiameter: CGFloat = 148
+        /// 大号月名字号
+        static let largeNameSize: CGFloat = 18
+        /// 大号照明度字号
+        static let largePercentSize: CGFloat = 15
+        /// 大号"下次满月"提示字号
+        static let largeHintSize: CGFloat = 12
+        /// 大号内边距
+        static let largePadding: CGFloat = 18
+
+        static let largeName = Font.system(size: largeNameSize, weight: .semibold)
+        static let largePercent = Font.system(size: largePercentSize,
+                                             weight: .medium,
+                                             design: .monospaced)
+        static let largeHint = Font.system(size: largeHintSize, weight: .medium)
     }
 
     /// 风卡（Wind）
@@ -375,5 +503,38 @@ extension WidgetTheme {
         static let unit = Font.system(size: unitSize, weight: .semibold)
         /// 底部注脚
         static let footnote = Font.system(size: 9, weight: .medium)
+
+        // MARK: 大号（3.12.0）
+        //
+        // 大号 338×354：风速大字 56pt + 方位 + 箭头（放大到 44pt）+
+        // **新增**「风力刻度」（0…60 KM/H 的分段轨道 + 一个指针）+ 底部观测行。
+        //
+        // 为什么用"风力刻度"代替"未来 3 小时趋势"：上游 `/api/app/weather` 只给**当前**实况，
+        // 没有逐小时预报也没有阵风（`WeatherNow` 里没有 hourly / gust 字段）。
+        // 按工程纪律"没有的数据整段不画"，趋势线就是不能画的东西 —— 那就把**已有的数**
+        // （当前风速）放进一个能读出"这是小风还是大风"的刻度里，这是真实数据的另一种表达，
+        // 不是编一条曲线出来。
+
+        /// 大号风速字号
+        static let largeSpeedSize: CGFloat = 56
+        /// 大号方位字号
+        static let largeUnitSize: CGFloat = 16
+        /// 大号箭头字号
+        static let largeArrowSize: CGFloat = 44
+        /// 大号内边距
+        static let largePadding: CGFloat = 18
+        /// 刻度轨道的总长对应的风速上限（km/h）。60 覆盖"清风～强风"，
+        /// 再往上（飓风）在光遇玩家的日常里没有意义
+        static let scaleMax: CGFloat = 60
+        /// 刻度轨道的高度
+        static let scaleHeight: CGFloat = 6
+        /// 刻度分档的标签字号
+        static let scaleLabelSize: CGFloat = 10
+        /// 指针直径
+        static let scaleKnobDiameter: CGFloat = 10
+
+        static let largeSpeed = Font.system(size: largeSpeedSize, weight: .bold, design: .rounded)
+        static let largeUnit = Font.system(size: largeUnitSize, weight: .semibold)
+        static let scaleLabel = Font.system(size: scaleLabelSize, weight: .medium)
     }
 }

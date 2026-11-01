@@ -71,16 +71,28 @@ enum SkyRoomMetrics {
     static let vignetteAlpha: Double = 0.34
 
     // MARK: - 视差（上滑时各层位移系数，× lift）
-
-    /// 每一层对 `lift`（天空扩张的绝对位移）的响应比例。
-    ///
-    /// 数字越大 = 动得越多 = 看起来越**近**。排序按"近大远小"：
-    /// 太阳（1.0，贴在地平线上）> 远山（0.55）> 云带（0.38）> 星点（0.18，最远）。
+    //
+    // 3.12.0 重排（用户原话："一塌糊涂，至少要不卡、流畅、好看、简约"）：
+    // 旧的四层是 1.0 / 0.55 / 0.38 / 0.18，层次够但**最远那层几乎不动**，
+    // 上滑时读起来像"整块天空贴在屏幕上"。现在按物理距离排成四档
+    // **天空 0.20 / 云 0.50 / 山 0.75 / 地面 1.00**（任务书给的系数），
+    // 太阳与地面同档（它贴着地平线落下去），星点跟天空同档（它们在最远的天球上）。
+    //
+    // 数字越大 = 动得越多 = 看起来越**近**。地面没有系数、也不该有：
+    // 它的顶边就是地平线（`HorizonGround(crestY: frame.horizon)`），**天然与地平线 1:1**
+    // —— 也就是任务书里的 1.0。给它再乘一个 offset 会变成 2 倍速，
+    // 上滑时地面会比地平线快一倍，两者之间裂开一条缝（`SkyRoomView.ground` 的注释写了这件事）。
     enum Parallax {
+        /// 天幕（含天顶冷色与地平线暖色）：只动 20%，是"最远的那层"
+        static let sky: CGFloat = 0.20
+        /// 星点：挂在天球上，与天幕同速
+        static let star: CGFloat = 0.20
+        /// 云：中景，比山远
+        static let cloud: CGFloat = 0.50
+        /// 远山：近景，只比地面慢一档
+        static let mountain: CGFloat = 0.75
+        /// 太阳：贴着地平线落下，与地平线同速
         static let sun: CGFloat = 1.0
-        static let mountain: CGFloat = 0.55
-        static let cloud: CGFloat = 0.38
-        static let star: CGFloat = 0.18
     }
 
     // MARK: - 动态（克制：只走 offset / opacity）
@@ -96,12 +108,48 @@ enum SkyRoomMetrics {
 
     // MARK: - 天空 / 地面几何
 
+    /// 天幕网格（3.12.0，`MeshGradient`）。
+    ///
+    /// ## 为什么从"一条线性渐变"换成 4×4 网格
+    ///
+    /// 线性渐变只有两个端点色，中间是**直线插值** —— 不管换多少档天色，
+    /// 看上去永远是"一条平直的双色带"（用户截图里的天空正是这个问题）。
+    /// 真实天空是**大气散射**：天顶冷、地平线暖、太阳附近最亮，亮度沿高度是非线性的。
+    /// `MeshGradient` 的 16 个控制点正好能表达这件事，而且是 GPU 一次画完（不卡）。
+    ///
+    /// ## 哪些点会动
+    ///
+    /// 16 个点里 **12 个**（第 1–3 行）随「太阳高度角 + 太阳横坐标」位移：
+    /// 太阳越接近地平线，中间两行越往太阳那一侧收（暖色团跟着太阳走）；
+    /// 四个角固定 —— 角点一旦动，整块网就会"扭"，观感从"天在呼吸"变成"布在抖"。
+    enum SkyDome {
+        /// 网格列数（4 列 × 4 行 = 16 个控制点）
+        static let columns: Int = 4
+        /// 网格行数
+        static let rows: Int = 4
+        /// 控制点横向位移幅度（相对画布宽度）。0.045 ≈ 393 屏上 18pt：
+        /// 再大就能看出"网格在挪"，再小等于没有。
+        static let sway: Float = 0.045
+        /// 控制点纵向位移幅度（相对画布高度）
+        static let bob: Float = 0.035
+        /// 第 2 行（中间偏上）上下浮动的基准位置
+        static let midRow: Float = 0.46
+        /// 天顶（第 1 行）的基准位置
+        static let zenithRow: Float = 0.16
+        /// 地平线暖色带在天幕里的不透明度（贴着地平线那一行）
+        static let horizonWarmth: Double = 0.92
+        /// 中间行往地平线暖色过渡的比例（0.30 = 只染 30%，保住"天顶冷"）
+        static let midWarmth: Double = 0.34
+        /// 天顶那一行保留的天顶色不透明度（1.0 = 完全冷色，不掺暖）
+        static let zenithAlpha: Double = 0.96
+    }
+
     enum Sky {
         /// 上滑时的"提亮一档"：在天幕之上叠一层 `sky.horizon`，不透明度随 expand 从 0 到 0.16。
         ///
         /// **为什么不是改渐变颜色**：设计铁律要求"只改 offset/scale/opacity，不逐帧改色"。
         /// 叠一层固定色的半透明面，颜色是常量、只有不透明度在动 —— 观感等价于"天亮了"，
-        /// 但每次重绘都不需要重新插值整块渐变。
+        /// 但每次重绘都不需要重新插值整块渐变（`MeshGradient` 更贵，这条纪律更重要了）。
         static let liftAlpha: Double = 0.16
     }
 
@@ -112,27 +160,153 @@ enum SkyRoomMetrics {
         static let sag: CGFloat = 0.07
         /// 地面渐变的最底端不透明度（留住一点天空的透，才像玻璃）
         static let bottomAlpha: Double = 0.90
-        /// 地平线亮边：雾化层（粗而淡）+ 实线层，与桌面小组件同一套"无 blur"配方
-        static let edgeWidth: CGFloat = 1.6
+        /// 地面渐变中段的位置（3.12.0）：地平线以下先在**天色**里停一下，再压向深色。
+        /// 0.42 是"一眼看不出分界、但确实有渐变"的位置 —— 一刀切正是用户说的"断面生硬"。
+        static let midStop: CGFloat = 0.42
+        /// 地平线一带仍然是天空色的比例（从 1 落到 0 的那段起点）
+        static let skyBleed: Double = 0.55
+        /// 地平线亮边：雾化层（粗而淡）。光带本体的线宽 / 不透明度在 `Horizon` 里
+        ///（3.12.0：原来这里还有 `edgeWidth` / `edgeCoreAlpha` 两个"实线层"参数，
+        /// 现在实线层就是那条渐隐光带，参数统一收进 `Horizon`，不留两份）
         static let edgeHazeWidth: CGFloat = 3.6
         static let edgeHazeAlpha: Double = 0.30
-        static let edgeCoreAlpha: Double = 0.88
         /// 夜里那条"极细的冷光"
         static let nightEdgeWidth: CGFloat = 1.0
         static let nightEdgeAlpha: Double = 0.55
+        /// 竖向纹理的等距（pt）。26 ≈ 一屏 15 条：再密就成网，再疏就成装饰线。
+        static let textureSpacing: CGFloat = 26
+        /// 竖向纹理的不透明度（0.02 —— 只在截图对比里看得见，这才是"质感"而不是"线条"）
+        static let textureAlpha: Double = 0.02
+        /// 纹理向上收窄的比例（模拟草地上窄下宽的透视）
+        static let textureSlant: CGFloat = 0.05
+    }
+
+    /// 地平线的"渐隐光带"（3.12.0 重做：旧版是一条纯白细线 + 一整块深色地面，断面生硬）
+    enum Horizon {
+        /// 光带厚度（pt）：2.5 是"读得出是一道光、又不是一条线"的厚度
+        static let bandWidth: CGFloat = 2.5
+        /// 光带本体（实线层）的不透明度
+        static let bandAlpha: Double = 0.95
+        /// 光带两端渐隐到的不透明度（横向 1 → 0，让地平线"消失在画面外"而不是断在屏幕边）
+        static let bandFadeAlpha: Double = 0.0
+        /// 地平线下方暖色辉光的高度（pt）
+        static let glowHeight: CGFloat = 20
+        /// 暖色辉光的不透明度
+        static let glowAlpha: Double = 0.42
     }
 
     enum Sun {
-        /// 辉光点本体直径（基准，随 expand 放大）
-        static let coreDiameter: CGFloat = 14
-        /// 光晕直径（基准）
-        static let glowDiameter: CGFloat = 190
-        /// 上滑到顶时，太阳本体与光晕一起放大的比例（1 + 0.45 = 1.45 倍）
+        /// 核心实心圆直径（基准，随 expand 放大）。12pt：手机屏上"一颗看得见的圆点"，
+        /// 不是 14pt 那种"像一个按钮"，也不是 9pt 那种"像一颗星"。
+        static let coreDiameter: CGFloat = 12
+        /// 内晕直径（半径 20pt → 直径 40）。三层结构里的"第二层"
+        static let innerGlowDiameter: CGFloat = 40
+        /// 内晕中心不透明度（任务书 0.55）
+        static let innerGlowAlpha: Double = 0.55
+        /// 外晕直径（半径 110pt → 直径 220）。这一层负责"整片天被照亮"的观感
+        static let outerGlowDiameter: CGFloat = 220
+        /// 外晕中心不透明度（任务书 0.18）
+        static let outerGlowAlpha: Double = 0.18
+        /// 上滑到顶时，三层一起放大的比例（1 + 0.45 = 1.45 倍）
         static let grow: CGFloat = 0.45
-        /// 光晕中心不透明度
-        static let glowAlpha: Double = 0.42
-        /// 高光环线宽
-        static let ringWidth: CGFloat = 1.5
+        /// 核心外面那圈高光环线宽（内晕之上再压一圈，让核心"立"起来）
+        static let ringWidth: CGFloat = 1.2
+        /// 高光环的不透明度
+        static let ringAlpha: Double = 0.55
+    }
+
+    /// 云（3.12.0 重做：旧版是两条圆角胶囊，形状假）
+    ///
+    /// 每朵云由 3–4 个**模糊椭圆**叠加成不规则形状：椭圆各自有不同的宽高比与不透明度，
+    /// 叠起来之后边缘互相吃掉，读起来才是一团云而不是几个胶囊。
+    /// `blur` 半径是**固定常量**（铁律：模糊是离屏渲染，逐帧变会掉帧）——
+    /// 这一页的模糊只在进场时算一次，之后所有动画只动 `offset` / `opacity`。
+    enum Clouds {
+        /// 每朵云 3–4 团椭圆
+        static let minBlobs: Int = 3
+        static let maxBlobs: Int = 4
+        /// 固定模糊半径（pt）。18 是"边缘化开但不糊成一团"的值
+        static let blur: CGFloat = 18
+        /// 单团椭圆的不透明度上限（叠 3–4 团之后整朵云的峰值 ≈ `CloudSpec.alpha`）
+        static let blobAlpha: Double = 0.55
+        /// 云列表：`centerX` / `centerY` 是相对舞台宽 / 屏高的位置，`width` 相对舞台宽。
+        /// 前两朵是远云（窄、淡、慢），后三朵是中近景 —— 远小近大是距离感的全部来源。
+        static let specs: [CloudSpec] = [
+            CloudSpec(centerX: 0.18, centerY: 0.17, width: 0.30, alpha: 0.10, drift: 0.35, seed: 0x5EED_0101),
+            CloudSpec(centerX: 0.72, centerY: 0.24, width: 0.36, alpha: 0.12, drift: 0.45, seed: 0x5EED_0202),
+            CloudSpec(centerX: 0.46, centerY: 0.34, width: 0.52, alpha: 0.16, drift: 0.75, seed: 0x5EED_0303),
+            CloudSpec(centerX: 0.86, centerY: 0.42, width: 0.44, alpha: 0.14, drift: 0.85, seed: 0x5EED_0404),
+            CloudSpec(centerX: 0.24, centerY: 0.47, width: 0.48, alpha: 0.18, drift: 1.0, seed: 0x5EED_0505)
+        ]
+    }
+
+    /// 一朵云的形状参数（位置 / 大小 / 不透明度 / 漂移 / 随机种子）
+    struct CloudSpec: Equatable {
+        /// 云心横向位置（0…1，相对舞台宽）
+        let centerX: CGFloat
+        /// 云心纵向位置（0…1，相对屏高）
+        let centerY: CGFloat
+        /// 云宽（相对舞台宽）；云高由 `Clouds.aspect` 推
+        let width: CGFloat
+        /// 整朵云的不透明度（远云更淡）
+        let alpha: Double
+        /// 漂移距离系数（× `driftDistance`）：远云漂得慢
+        let drift: CGFloat
+        /// 固定种子：同一朵云每次进场都长一样（绝不用 `random`）
+        let seed: UInt32
+    }
+
+    /// 云团椭圆的宽高比（宽 / 高）。云是横向拉长的 —— 1:1 的圆读起来像烟不像云。
+    static let cloudAspect: CGFloat = 3.4
+
+    /// 远山（3.12.0 重做：旧版是两个硬边三角形，像几何拼贴）
+    ///
+    /// 三层山脊，每层用 `Path` 的 `quadCurve` 画起伏（正弦叠加 → 至少 4 个波峰），
+    /// 峰高由**固定种子**决定（同一台设备每次进来看见的山完全一样）。
+    /// 颜色 = 天空色按距离混入地面色（越远越淡越蓝）—— 这就是大气透视。
+    enum Ridges {
+        /// 层数（远 / 中 / 近）
+        static let layers: [RidgeSpec] = [
+            // 远山：宽、扁、最淡（混入最多的天空色）
+            RidgeSpec(crests: 4.0, amplitude: 0.55, widthRatio: 1.24,
+                      centerX: 0.50, heightRatio: 0.10, rise: 0.045,
+                      haze: 0.62, density: 0.34, seed: 0x11_0001),
+            // 中山：错开半个波长，峰顶比远山高一点
+            RidgeSpec(crests: 5.0, amplitude: 0.62, widthRatio: 1.10,
+                      centerX: 0.42, heightRatio: 0.085, rise: 0.028,
+                      haze: 0.40, density: 0.58, seed: 0x22_0002),
+            // 近山：最窄的最高、最实
+            RidgeSpec(crests: 6.5, amplitude: 0.50, widthRatio: 0.96,
+                      centerX: 0.58, heightRatio: 0.065, rise: 0.012,
+                      haze: 0.18, density: 0.82, seed: 0x33_0003)
+        ]
+        /// 曲线采样点数（72 段足够平滑，又不会在每帧重建时变贵）
+        static let sampleCount: Int = 72
+        /// 层间错位（pt）：任务书要求 6–10pt，取 8 —— 三层加起来错开 16pt，
+        /// 山脊不会"叠成一条线"
+        static let layerOffset: CGFloat = 8
+    }
+
+    /// 一层山脊的形状参数
+    struct RidgeSpec: Equatable {
+        /// 主频（视野内大约几个波峰）
+        let crests: Double
+        /// 高差（相对自身高度）
+        let amplitude: CGFloat
+        /// 这一层宽度相对舞台宽的比例
+        let widthRatio: CGFloat
+        /// 水平中心（0…1 相对舞台宽）
+        let centerX: CGFloat
+        /// 层高（相对屏高）
+        let heightRatio: CGFloat
+        /// 相对地平线基线往上抬多少（相对屏高）
+        let rise: CGFloat
+        /// 大气透视：混入天空色的比例（越远越大）
+        let haze: Double
+        /// 本体密度（不透明度）
+        let density: Double
+        /// 固定种子
+        let seed: UInt32
     }
 
     enum Stars {
@@ -242,6 +416,15 @@ enum SkyRoomMetrics {
         /// 地面弧的地平线两端高度
         var arcEdgeY: CGFloat {
             return horizon + SkyRoomMetrics.Ground.sag
+        }
+
+        /// 地平线下方那层暖色辉光占屏高的比例（= 20pt / 屏高）。
+        ///
+        /// 为什么不在渐变里写死一个 0.05：852 屏上 20pt 是 0.023，iPad 横屏 834 上是 0.024，
+        /// 而分屏时高度可能只有 400pt（20pt = 0.05）—— 写死比例会让辉光在矮屏上突然变厚。
+        /// 这里恒定按 **20pt 的绝对高度**换算，夹到 0.16 防止极小窗口下整块地面都被染暖。
+        var horizonGlowFraction: CGFloat {
+            return min(0.16, SkyRoomMetrics.Horizon.glowHeight / height)
         }
 
         /// 天气面板宽度

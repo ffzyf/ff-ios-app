@@ -91,6 +91,55 @@ enum BriefMetrics {
     static let smallSidePadding: CGFloat = 11
     /// 小号上下内边距
     static let smallVerticalPadding: CGFloat = 12
+    /// 大号左右内边距（338×354，两侧各 18pt）
+    static let largeSidePadding: CGFloat = 18
+    /// 大号上下内边距
+    static let largeVerticalPadding: CGFloat = 16
+
+    // MARK: 大号档（3.12.0：large 必须"内容更多"，不是"把中号放大"）
+    //
+    // 用户原话："每日简报大的小组件因为它大也可以显示更多内容啊，把内容显出来啊"
+    // ——中号只给 1 行正文，大号给 **4–5 行**，并把宜 / 忌做成 chips、天气块整体加大。
+    // 这一档的每个数字都按 354pt 高重新配平过，不是把 158 的口径乘 2。
+
+    /// 大号温度字号（中号 30 → 大号 46）
+    static let largeTempSize: CGFloat = 46
+    /// 大号天气现象字号
+    static let largeWeatherTextSize: CGFloat = 18
+    /// 大号高低温字号
+    static let largeHiLoSize: CGFloat = 13
+    /// 大号正文字号（比中号的"弱化正文"回到 13pt —— 大号有地方给正文了）
+    static let largeBodySize: CGFloat = 13
+    /// 大号正文行数上限（任务书要求 4–5 行）
+    static let largeBodyLineLimit: Int = 5
+    /// 大号正文行距
+    static let largeBodyLineSpacing: CGFloat = 3
+    /// 大号风的字号
+    static let largeWindSize: CGFloat = 11
+    /// 大号宜 / 忌 chip 的字号
+    static let largeChipSize: CGFloat = 11
+    /// 大号区块之间的间距
+    static let largeSectionGap: CGFloat = 9
+    /// 大号 chip 之间的间距
+    static let largeChipGap: CGFloat = 6
+    /// 大号 chip 的内边距
+    static let largeChipHorizontalPadding: CGFloat = 8
+    static let largeChipVerticalPadding: CGFloat = 3
+    /// 大号 chip 描边线宽
+    static let largeChipStrokeWidth: CGFloat = 0.8
+
+    /// 大号温度
+    static let largeTemp = Font.system(size: largeTempSize, weight: .bold, design: .rounded)
+    /// 大号天气现象
+    static let largeWeatherText = Font.system(size: largeWeatherTextSize, weight: .semibold)
+    /// 大号高低温
+    static let largeHiLo = Font.system(size: largeHiLoSize, weight: .medium, design: .monospaced)
+    /// 大号正文
+    static let largeBody = Font.system(size: largeBodySize, weight: .regular)
+    /// 大号风
+    static let largeWind = Font.system(size: largeWindSize, weight: .medium, design: .monospaced)
+    /// 大号宜 / 忌 chip
+    static let largeChip = Font.system(size: largeChipSize, weight: .semibold)
 
     // MARK: 行距
 
@@ -256,25 +305,49 @@ enum BriefMetrics {
 
     // MARK: 按尺寸取档
 
-    /// 左右内边距
+    /// 左右内边距（三档：大号 18 / 中号 14 / 小号 11）
     static func sidePadding(_ family: WidgetFamily) -> CGFloat {
-        return family == .systemSmall ? smallSidePadding : mediumSidePadding
+        switch family {
+        case .systemSmall:
+            return smallSidePadding
+        case .systemLarge:
+            return largeSidePadding
+        default:
+            return mediumSidePadding
+        }
     }
 
-    /// 上下内边距
+    /// 上下内边距（三档：大号 16 / 中号 12 / 小号 12）
     static func verticalPadding(_ family: WidgetFamily) -> CGFloat {
-        return family == .systemSmall ? smallVerticalPadding : mediumVerticalPadding
+        switch family {
+        case .systemSmall:
+            return smallVerticalPadding
+        case .systemLarge:
+            return largeVerticalPadding
+        default:
+            return mediumVerticalPadding
+        }
     }
 
-    /// 刻度点数量
+    /// 刻度点数量（大号画布更宽，多点几颗才不显空）
     static func dotCount(_ family: WidgetFamily) -> Int {
-        return family == .systemSmall ? smallDotCount : mediumDotCount
+        switch family {
+        case .systemSmall:
+            return smallDotCount
+        case .systemLarge:
+            return mediumDotCount + 6
+        default:
+            return mediumDotCount
+        }
     }
 
     /// 正文行数：弱化正文恒 1 行（3.10.0 起正文降格，中号也只给 1 行 ——
-    /// 多出来的高度全部让给天气主视觉；小号整行不画）
+    /// 多出来的高度全部让给天气主视觉；小号整行不画）。
+    ///
+    /// 3.12.0 起**大号是 5 行**：大号有 354pt 高，1 行正文等于浪费半张卡
+    /// （任务书原话"正文从 1–2 行 → 4–5 行，按真实行数渲染"）。
     static func bodyLineLimit(_ family: WidgetFamily) -> Int {
-        return 1
+        return family == .systemLarge ? largeBodyLineLimit : 1
     }
 
     /// 正文块的**顶边**到卡顶的距离（行高逐项相加，见「行高」一节的理由）。
@@ -440,28 +513,40 @@ struct BriefFace: View {
     }
 
     var body: some View {
-        content
-            // 天气粒子层 = 正文的 `.background`：它因此天然待在"底色之上、文字之下"，
-            // 不必在 `content` 里插一层 ZStack（那会把版式骨架和天气耦合在一起）
-            .background {
-                if let today = kind {
-                    BriefWeatherLayer(kind: today,
-                                      date: entry.date,
-                                      family: family,
-                                      paper: paperMode)
-                }
+        // 3.12.0：大号走**另一套骨架**（`largeContent`），不是把中号拉高。
+        // 中/小号的 `content` 一个字节都没动 —— 那两档的验收线是"逐像素不变"。
+        Group {
+            if isLarge {
+                largeContent
+            } else {
+                content
             }
-            // 画布测量：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
-            // 只在 `onAppear` / 尺寸真变时写 `@State`（滚动、重绘都不会触发），
-            // 与 `LayoutMetricsScope` / `PageBackground` 用的是同一个手法。
-            .background {
-                canvasProbe
+        }
+        // 天气粒子层 = 正文的 `.background`：它因此天然待在"底色之上、文字之下"，
+        // 不必在 `content` 里插一层 ZStack（那会把版式骨架和天气耦合在一起）
+        .background {
+            if let today = kind {
+                BriefWeatherLayer(kind: today,
+                                  date: entry.date,
+                                  family: family,
+                                  paper: paperMode)
             }
-            // 整卡可点：落到 `skyapp://brief`（深链契约见 `WidgetDeepLink`）
-            .widgetURL(WidgetDeepLink.brief)
-            .containerBackground(for: .widget) {
-                BriefCanvas(kind: kind, paper: paperMode)
-            }
+        }
+        // 画布测量：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
+        // 只在 `onAppear` / 尺寸真变时写 `@State`（滚动、重绘都不会触发），
+        // 与 `LayoutMetricsScope` / `PageBackground` 用的是同一个手法。
+        .background {
+            canvasProbe
+        }
+        // 整卡可点：落到 `skyapp://brief`（深链契约见 `WidgetDeepLink`）
+        .widgetURL(WidgetDeepLink.brief)
+        .containerBackground(for: .widget) {
+            BriefCanvas(kind: kind, paper: paperMode)
+        }
+    }
+
+    private var isLarge: Bool {
+        return family == .systemLarge
     }
 
     /// 量画布**短边**。为什么不是宽度：medium 是 338×158（iPad 364×170），
@@ -527,6 +612,192 @@ struct BriefFace: View {
     private var hasWeather: Bool {
         guard let weather = entry.weather, weather.ok else { return false }
         return weather.temp != nil || weather.text != nil
+    }
+
+    // MARK: - 大号骨架（3.12.0）
+    //
+    // 大号 338×354 的纵向预算（内容高 354 − 16×2 = 322）：
+    // 顶行 14 + 9 + 天气块 52 + 9 + 正文 5×17 = 85 + 弹性 + chips 22 + 9 + 轨迹 12 + 6 + 注脚 14 ≈ 230
+    // → 还剩约 90pt 弹性留白，正文行数不足 5 行时也不会把轨迹挤出去。
+    //
+    // 与中号的四条差别（就是"内容更多"的全部内容）：
+    // 1. 正文 1 行 → **5 行**（`briefLines(limit: 5)`，按真实行数渲染，不截成一句）；
+    // 2. **宜 / 忌 chips** 一行（中号只有一行挤在一起的注脚文字）；
+    // 3. 天气块整体加大（温度 46pt / 现象 18pt / 高低温 13pt）+ 加风；
+    // 4. 左下右上保留日出日落（`largeSunRow`）。
+    private var largeContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+
+            if hasWeather {
+                largeWeatherHero
+                    .padding(.top, BriefMetrics.titleGap)
+            } else {
+                titleRow
+                    .padding(.top, BriefMetrics.titleGap)
+            }
+
+            largeBody
+                .padding(.top, BriefMetrics.largeSectionGap)
+
+            Spacer(minLength: 0)
+
+            ritualChips
+
+            BriefTrack(progress: dayProgress,
+                       dotCount: BriefMetrics.dotCount(family),
+                       ink: ink)
+                .padding(.top, BriefMetrics.largeSectionGap)
+
+            largeSunRow
+                .padding(.top, BriefMetrics.footerGap)
+        }
+        .padding(.horizontal, BriefMetrics.sidePadding(family))
+        .padding(.vertical, BriefMetrics.verticalPadding(family))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 大号天气块：温度大字 + （现象 / 高低温）两行 + 风
+    private var largeWeatherHero: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if let temp = entry.weather?.temp {
+                Text("\(Int(temp))°")
+                    .font(BriefMetrics.largeTemp)
+                    .foregroundStyle(ink)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .widgetAccentable()
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let text = entry.weather?.text, text.isEmpty == false {
+                    Text(text)
+                        .font(BriefMetrics.largeWeatherText)
+                        .foregroundStyle(ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                if let hiLo = hiLoText {
+                    Text(hiLo)
+                        .font(BriefMetrics.largeHiLo)
+                        .foregroundStyle(inkDim)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if let wind = windText {
+                Text(wind)
+                    .font(BriefMetrics.largeWind)
+                    .foregroundStyle(inkDim)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// 风速文案：`风 12 KM/H`。
+    ///
+    /// 单位用 km/h 而不是 m/s：`/api/app/weather` 没有指定 `windspeed_unit`，
+    /// Open-Meteo 的默认就是 km/h，桌面上「风」这张卡（`WindWidget`）显示的也是 KM/H ——
+    /// 两张卡必须同一个单位，否则用户会看到"桌面 12、简报 3.3"这种自相矛盾。
+    private var windText: String? {
+        guard let wind = entry.weather?.wind else { return nil }
+        return "风 " + String(Int(wind.rounded())) + " KM/H"
+    }
+
+    /// 大号正文：最多 5 行，按真实行数渲染（不足 5 行就画那么多，不留假空行）
+    @ViewBuilder
+    private var largeBody: some View {
+        let lines = bodyLines(limit: BriefMetrics.largeBodyLineLimit)
+        if lines.isEmpty {
+            // 早上简报还没生成是正常业务状态：说清楚"还没有"，不编内容
+            Text("今天还没有简报")
+                .font(BriefMetrics.largeBody)
+                .foregroundStyle(inkDim)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(lines.joined(separator: "\n"))
+                .font(BriefMetrics.largeBody)
+                .foregroundStyle(inkDim.opacity(0.9))
+                .lineLimit(BriefMetrics.largeBodyLineLimit)
+                .lineSpacing(BriefMetrics.largeBodyLineSpacing)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 宜 / 忌 chips（大号专属）。一条都没有就整行不画 —— 不摆"宜 —　忌 —"的假占位。
+    @ViewBuilder
+    private var ritualChips: some View {
+        if !entry.yi.isEmpty || !entry.ji.isEmpty {
+            HStack(spacing: BriefMetrics.largeChipGap) {
+                // 单参数形式（`pair.element`）而不是 `{ index, item in }`：
+                // 后者依赖闭包参数对元组的解构推断，写错一次就是一轮 CI。
+                ForEach(Array(entry.yi.prefix(2).enumerated()), id: \.offset) { pair in
+                    chip("宜 " + pair.element)
+                }
+                ForEach(Array(entry.ji.prefix(1).enumerated()), id: \.offset) { pair in
+                    chip("忌 " + pair.element)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// 一枚 chip：墨色 8% 面 + 24% 描边（不用新颜色，深浅纸都读得出）
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(BriefMetrics.largeChip)
+            .foregroundStyle(ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, BriefMetrics.largeChipHorizontalPadding)
+            .padding(.vertical, BriefMetrics.largeChipVerticalPadding)
+            .background { Capsule().fill(ink.opacity(0.08)) }
+            .overlay {
+                Capsule().strokeBorder(ink.opacity(0.24),
+                                       lineWidth: BriefMetrics.largeChipStrokeWidth)
+            }
+    }
+
+    /// 大号底部：左下日出 / 右上日落（宜忌已经做成 chips，这里不重复）
+    @ViewBuilder
+    private var largeSunRow: some View {
+        if sunTexts.rise != nil || sunTexts.set != nil {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let rise = sunTexts.rise {
+                    HStack(spacing: 4) {
+                        Text("日出")
+                            .font(BriefMetrics.footnote)
+                            .foregroundStyle(inkDim)
+                        Text(rise)
+                            .font(BriefMetrics.footnoteTime)
+                            .foregroundStyle(ink)
+                            .monospacedDigit()
+                            .widgetAccentable()
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                if let set = sunTexts.set {
+                    HStack(spacing: 4) {
+                        Text("日落")
+                            .font(BriefMetrics.footnote)
+                            .foregroundStyle(inkDim)
+                        Text(set)
+                            .font(BriefMetrics.footnoteTime)
+                            .foregroundStyle(ink)
+                            .monospacedDigit()
+                            .widgetAccentable()
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - 天气主视觉（3.10.0）
@@ -680,13 +951,21 @@ struct BriefFace: View {
     /// 所以先按行拆开、滤掉栏目头，剩下的第一行才是"今天的第一句"。
     /// 判据与 App 内 `TodayBriefTrackCard.bodyParts` 同一套（emoji 开头 / 过短无句读）。
     private var bodyText: String? {
+        return bodyLines(limit: 1).first
+    }
+
+    /// 正文候选行（按顺序，最多 `limit` 行）。
+    ///
+    /// 3.12.0 抽出来给大号用：中号要 1 行、大号要 4–5 行，**同一套"滤栏目头"规则**，
+    /// 只差一个 `limit`。分成两份实现是这类代码最常见的分叉点（滤法迟早不一致）。
+    private func bodyLines(limit: Int) -> [String] {
         let rows = entry.paragraphs
             .joined(separator: "\n")
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .filter { !BriefFace.isHeading($0) }
-        return rows.first
+        return Array(rows.prefix(max(limit, 1)))
     }
 
     /// 判断某一行是不是"栏目头"：emoji 开头，或短到不可能是一句话
