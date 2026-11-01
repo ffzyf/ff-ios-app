@@ -9,7 +9,13 @@ TOKEN = re.search(
     r'://[^:]+:([^@]+)@',
     subprocess.check_output(['git', '-C', '/workspace/blog', 'config', '--get', 'remote.origin.url']).decode()
 ).group(1)
-SKIP_PREFIX = '.github/'
+# 三个前缀永不入仓：
+#   .github/  —— 令牌无 workflow scope，推了必 403；
+#   _release/ —— 3.14.0 事故根源：本地校验的临时解包（_release/verify/Payload/SkyApp.app）
+#                被同步进仓库后，CI 的 `find . -maxdepth 6 -name '*.app'` 按字典序先撞上它，
+#                把这个只有 Info.plist 没有二进制的空壳打成了 ipa；
+#   build/    —— 本地若有编译中间产物同样不许入仓。
+SKIP_PREFIXES = ('.github/', '_release/', 'build/')
 
 
 def api(path, method='GET', body=None):
@@ -36,7 +42,7 @@ st, commit = api('/repos/%s/git/commits/%s' % (REPO, head))
 base_tree = commit['tree']['sha']
 
 st, t = api('/repos/%s/git/trees/%s?recursive=1' % (REPO, head))
-remote = {e['path']: e['sha'] for e in t['tree'] if e['type'] == 'blob' if not e['path'].startswith(SKIP_PREFIX)}
+remote = {e['path']: e['sha'] for e in t['tree'] if e['type'] == 'blob' if not e['path'].startswith(SKIP_PREFIXES)}
 
 local = {}
 for root, dirs, files in os.walk(ROOT):
@@ -45,7 +51,7 @@ for root, dirs, files in os.walk(ROOT):
     for f in files:
         full = os.path.join(root, f)
         rel = os.path.relpath(full, ROOT)
-        if rel.startswith(SKIP_PREFIX):
+        if rel.startswith(SKIP_PREFIXES):
             continue
         local[rel] = full
 
