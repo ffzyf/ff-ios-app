@@ -270,22 +270,22 @@ enum SkyRoomMetrics {
 
         /// 层数（远 / 中 / 近）。
         ///
-        /// 峰高由 `heightRatio × amplitude` 推出来，三层分别落在 0.47H / 0.51H / 0.53H ——
-        /// **远山最高、近山最低**，这是视距造成的（远山能看到更高的山脊）。
-        /// 谷底三层都在 0.61H 左右，全部被地面吃掉，所以看不见"山的底边"。
+        /// 峰顶三层分别落在 0.48H / 0.51H / 0.535H —— **远山最高、近山最低**，
+        /// 这是视距造成的（远山能看到更高的山脊）。谷底都埋在地平线之下，
+        /// 所以看不见"山的底边"。
         static let layers: [RidgeSpec] = [
             // 远山：宽、高、最淡（混入最多的天空色）
-            RidgeSpec(crests: 2.6, amplitude: 0.30, widthRatio: 1.26,
-                      centerX: 0.50, heightRatio: 0.67,
-                      haze: 0.58, density: 0.30, parallaxDepth: 0.15, seed: 0x11_0001),
+            RidgeSpec(crests: 2.6, widthRatio: 1.26, centerX: 0.50,
+                      peakHeight: 0.20, haze: 0.58, density: 0.30,
+                      parallaxDepth: 0.15, seed: 0x11_0001),
             // 中山：错开半个波长，峰顶比远山矮一档
-            RidgeSpec(crests: 3.2, amplitude: 0.34, widthRatio: 1.12,
-                      centerX: 0.42, heightRatio: 0.47,
-                      haze: 0.36, density: 0.55, parallaxDepth: 0.25, seed: 0x22_0002),
+            RidgeSpec(crests: 3.2, widthRatio: 1.12, centerX: 0.42,
+                      peakHeight: 0.17, haze: 0.36, density: 0.55,
+                      parallaxDepth: 0.25, seed: 0x22_0002),
             // 近山：最窄、最实、峰最低
-            RidgeSpec(crests: 3.8, amplitude: 0.42, widthRatio: 0.98,
-                      centerX: 0.58, heightRatio: 0.29,
-                      haze: 0.14, density: 0.85, parallaxDepth: 0.40, seed: 0x33_0003)
+            RidgeSpec(crests: 3.8, widthRatio: 0.98, centerX: 0.58,
+                      peakHeight: 0.145, haze: 0.14, density: 0.85,
+                      parallaxDepth: 0.40, seed: 0x33_0003)
         ]
         /// 曲线采样点数（72 段足够平滑，又不会在每帧重建时变贵）
         static let sampleCount: Int = 72
@@ -295,14 +295,14 @@ enum SkyRoomMetrics {
     struct RidgeSpec: Equatable {
         /// 主频（视野内大约几个波峰）
         let crests: Double
-        /// 高差（相对自身高度）
-        let amplitude: CGFloat
         /// 这一层宽度相对舞台宽的比例
         let widthRatio: CGFloat
         /// 水平中心（0…1 相对舞台宽）
         let centerX: CGFloat
-        /// 层高（相对屏高）—— 与 `amplitude` 相乘得到山峰高度
-        let heightRatio: CGFloat
+        /// **峰高**（相对屏高）—— 山体矩形就是「峰顶到山脚」这一段，
+        /// 渐变因此能精确铺满可见的山体（3.15.0 之前按 0.67H 的整块矩形铺，
+        /// 可见部分只吃到渐变的尾巴，山全是黑的）
+        let peakHeight: CGFloat
         /// 大气透视：混入天空色的比例（越远越大）
         let haze: Double
         /// 本体密度（不透明度）

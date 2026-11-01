@@ -540,9 +540,11 @@ struct SkyRoomView: View {
 
     /// 一层山脊：形状 + 大气透视 + 滚动视差
     ///
-    /// **山脚的垂直位置是固定的**：矩形底统一落在 `horizon + buryDepth`（0.68H），
-    /// 比地面最外端（0.65H）还低 —— 山一定是从地里长出来的，不存在"山脚露一条天"。
-    /// 峰高由 `heightRatio × amplitude` 决定，三层分别落在 0.47H / 0.51H / 0.53H。
+    /// 三个几何量各管一件事：
+    /// - **山脚** 固定落在 `horizon + buryDepth`（0.68H），比地面最外端（0.65H）还低 ——
+    ///   山一定从地里长出来，不存在"山脚露一条天"；
+    /// - **矩形高度** = `peakHeight`（峰顶到山脚的那一段），所以填充渐变正好铺满可见山体；
+    /// - **峰谷差**由 Shape 内部的 `0.55 + 0.45 × shape` 决定，约占峰高的 45%。
     ///
     /// 填充走 `Color.blend` 实色：远山 58% 混入天空色（化在天里），近山 14%（一块实剪影）。
     /// 3.14.0 用 `opacity` 的结果是一整块"土黄半透明板"——形状轮廓被冲没，只剩脏。
@@ -552,8 +554,8 @@ struct SkyRoomView: View {
                        baseY: CGFloat,
                        parallaxY: CGFloat) -> some View {
         let width = frame.stageWidth * spec.widthRatio
-        let height = frame.height * spec.heightRatio
-        // 山脚：固定埋进地面，与 index 无关（层与层的错落由峰高本身拉开）
+        let height = frame.height * spec.peakHeight
+        // 山脚：固定埋进地面，与层序无关（层与层的错落由峰高本身拉开）
         let footY = baseY + frame.height * SkyRoomMetrics.Ridges.buryDepth
 
         // 山体本色：远山更"化"在天里（混入更多 horizon），近山接近大地本色
@@ -561,14 +563,13 @@ struct SkyRoomView: View {
         let ridgeDeep = Color.blend(sky.ground, .black, 0.20)
 
         return SkyRoomRidge(crests: spec.crests,
-                            amplitude: spec.amplitude,
                             seed: spec.seed,
                             sampleCount: SkyRoomMetrics.Ridges.sampleCount)
             .fill(
                 LinearGradient(
                     stops: [
                         .init(color: ridgeTop, location: 0),
-                        .init(color: Color.blend(ridgeTop, ridgeDeep, 0.55), location: 0.55),
+                        .init(color: Color.blend(ridgeTop, ridgeDeep, 0.60), location: 0.55),
                         .init(color: ridgeDeep, location: 1)
                     ],
                     startPoint: .top,
@@ -805,6 +806,12 @@ struct SkyRoomView: View {
 
         return ZStack {
             // ① 本体：三段实色（3.15.0 起不再叠半透明 —— 那正是"地平线一片暧昧橙"的来源）
+            //
+            // **起止点必须钉在地平线上**：`LinearGradient` 的默认 `.top/.bottom` 是相对
+            // shape 的 **bounds**（整块屏幕），于是 location 0 在屏幕顶端、location 0.30
+            // 在屏幕 30% 处 —— 而地面只从 58% 开始画，等于是从渐变的后半段开始取色，
+            // 地平线底下直接就是近黑。真机截图里那条"地平线正下方一条黑洞"就是这么来的。
+            // 用 `UnitPoint(y: horizon)` 把 0 点挪到地平线，渐变才铺得满这块地。
             shape.fill(
                 LinearGradient(
                     stops: [
@@ -813,21 +820,21 @@ struct SkyRoomView: View {
                         .init(color: sky.ground, location: SkyRoomMetrics.Ground.midStop + 0.22),
                         .init(color: deep, location: 1)
                     ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    startPoint: UnitPoint(x: 0.5, y: frame.horizon),
+                    endPoint: UnitPoint(x: 0.5, y: 1)
                 )
             )
             // ② 极淡的竖向纹理（0.02 不透明度）：用 `Canvas` 一次画完
             groundTexture(sky: sky, frame: frame)
-            // ③ 地平线下方 20pt 的暖色辉光（从地平线往下淡出）
+            // ③ 地平线下方 20pt 的暖色辉光（同上：起止点钉在地平线，否则辉光会跑到屏幕顶端）
             shape.fill(
                 LinearGradient(
                     stops: [
                         .init(color: haze.opacity(SkyRoomMetrics.Horizon.glowAlpha), location: 0),
-                        .init(color: haze.opacity(0), location: frame.horizonGlowFraction)
+                        .init(color: haze.opacity(0), location: 1)
                     ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    startPoint: UnitPoint(x: 0.5, y: frame.horizon),
+                    endPoint: UnitPoint(x: 0.5, y: frame.horizon + frame.horizonGlowFraction)
                 )
             )
             // ⑤ 渐隐光带：横向从 `sky.edge` 淡到透明（地平线"消失在画面外"，不断在屏幕边）
@@ -1186,17 +1193,23 @@ private struct SkyRoomDome: View, Equatable {
 
 // MARK: - 山脊
 
-/// 平滑山脊（3.12.0 引入，原样保留）。
+/// 平滑山脊（3.12.0 引入，3.15.0 调平）。
 ///
 /// 三个不同频率的正弦叠加（0.55 / 0.30 / 0.15）再归一化到 0…1，得到一条**至少有 4 个波峰**、
 /// 且峰高不等的起伏曲线；然后用 `quadCurve` 把采样点连成平滑曲线（不是折线）。
 /// 固定种子保证同一台设备每次进来看见的是同一座山。
+///
+/// ## 3.15.0 改了什么
+///
+/// 原来的纵向公式是 `maxY - h * amplitude * (0.30 + 0.70 * shape)`：
+/// 峰谷差吃到矩形高度的 70%，配上 0.67H 的矩形 = 一屏高的十分之一，
+/// 真机上就是一排**尖锐的帐篷**。现在改成 `0.55 + 0.45 * shape`：
+/// 峰谷差只占 45%，而矩形高度本身就是峰高（见 `RidgeSpec.peakHeight`），
+/// 于是山的起伏约为峰高的 45% —— 远山平缓、近山略有棱角，这才是山脊线。
 private struct SkyRoomRidge: Shape {
 
     /// 主频（视野内大约几个波峰）
     var crests: Double
-    /// 高差（相对自身高度）
-    var amplitude: CGFloat
     /// 固定种子（决定三个正弦的相位）
     var seed: UInt32
     /// 采样点数（72 段在 400pt 宽上每段约 5.5pt）
@@ -1219,7 +1232,7 @@ private struct SkyRoomRidge: Shape {
                 + sin(2 * .pi * crests * 1.7 * t + phase2) * 0.30
                 + sin(2 * .pi * crests * 2.6 * t + phase3) * 0.15
             let shape = CGFloat(min(max((wave + 1) / 2, 0), 1))
-            let y = rect.maxY - rect.height * amplitude * (0.30 + 0.70 * shape)
+            let y = rect.maxY - rect.height * (0.55 + 0.45 * shape)
             points.append(CGPoint(x: rect.minX + rect.width * CGFloat(t), y: y))
         }
 
