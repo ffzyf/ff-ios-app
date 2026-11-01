@@ -18,7 +18,8 @@ import WidgetKit
 ///    ground / edge / ink / inkDim）。七档天色在 `Theme` 里逐档手调过，正好对应参考图的
 ///    六张（日出一档最接近纯白，夜里地平线只剩一道极细的冷光）。本文件没有一个颜色字面量。
 /// 2. **几何复用 Shared 的 `HorizonGround` / `HorizonEdge`**：桌面这条弧必须和 App 内简报卡
-///    落在同一个高度（`WidgetTheme.skyCrestY` = 0.62 / `skyEdgeY` = 0.74），重画一遍必然会漂。
+///    落在同一个高度（两个比例来自 `HorizonSky.crestY` = 0.62 / `HorizonSky.edgeY` = 0.74，
+///    全工程唯一出处），重画一遍必然会漂。
 /// 3. **一次模糊都不做**（`blur` 修饰器在本文件零出现）：Widget 每帧都重绘，模糊是这里最贵的一笔。柔光一律用
 ///    `RadialGradient` 与"低不透明度 + 更粗的线"伪造（见 `horizonLayers`）。
 ///
@@ -65,7 +66,8 @@ struct SkyLightFace: View {
             accessoryContent
                 // accessory 的背景由系统提供，透明底即"融入锁屏"
                 .containerBackground(for: .widget) { Color.clear }
-                .widgetURL(WidgetDeepLink.brief)
+                // 锁屏档也指向天光页：这张卡画的是"此刻的天"，点开就该是那片更大的天
+                .widgetURL(WidgetDeepLink.sky)
         } else {
             content
                 // 画布测量（§5.2）：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
@@ -83,8 +85,10 @@ struct SkyLightFace: View {
                         SkyLightSky(entry: entry, renderMode: renderMode)
                     }
                 }
-                // 整卡可点：落到简报页（复用 `WidgetProvider` 里已有的深链常量，不新造 URL）
-                .widgetURL(WidgetDeepLink.brief)
+                // 整卡可点：落到沉浸式天光页 `SkyRoomView`（3.11.0 起天光 / 日弧 / 月相 / 风
+                // 四张卡统一指向 `skyapp://sky`；本文件是这天光面的唯一出处，所以整卡深链就写在这里，
+                // 宿主组件（`SkyLightWidget` / `RedstoneWidgetView` 的空窗分支）不必再各写一遍）
+                .widgetURL(WidgetDeepLink.sky)
                 // 背景铺满四边（配合 `SkyLightWidget` 里的 `.contentMarginsDisabled()`）
                 .containerBackground(for: .widget) {
                     SkyLightSky(entry: entry, renderMode: renderMode)
@@ -275,8 +279,8 @@ struct SkyLightSky: View {
     private let renderMode: WidgetRenderingMode
 
     init(entry: SkyLightEntry,
-         crestY: CGFloat = WidgetTheme.skyCrestY,
-         edgeY: CGFloat = WidgetTheme.skyEdgeY,
+         crestY: CGFloat = HorizonSky.crestY,
+         edgeY: CGFloat = HorizonSky.edgeY,
          renderMode: WidgetRenderingMode = .fullColor) {
         self.entry = entry
         self.crestY = crestY

@@ -70,8 +70,6 @@ enum Layout {
     static let compositionBar: CGFloat = 10
     /// rail 卡之间的间距
     static let railGap: CGFloat = 12
-    /// rail「露边」的参考值：393 屏上 353 − 140×2 − 12×2 = 49，第三张能露出 1/3
-    static let railPeek: CGFloat = 20
 
     // MARK: - 宽屏（iPad）常量（设计文档 §4.2，9 个）
     //
@@ -117,15 +115,13 @@ enum Layout {
     /// **1080 = 344×3 + 24×2**，内容占 90.5%、留白 57。
     static let canvasMaxWidth: CGFloat = 1080
     /// 栅格列宽（三列时；也是概览 hero 卡的宽档高度，见 `CardTier.wideHeight`）
+    ///
+    /// 两列宽 712 = 344×2 + 24 只是线框图上的一笔，**工程里不设常量**：1020…1039 那条窄带里
+    /// 列宽不是 344，写死 712 会横向溢出；概览用的是 `frame(maxWidth: .infinity)`，
+    /// 在 1080 的画布上它算出来正好是 712。（3.11.0 删掉了零引用的 `gridSpan2Width`。）
     static let gridColumnWidth: CGFloat = 344
     /// 栅格栏距
     static let gridGutter: CGFloat = 24
-    /// 两列宽（344×2 + 24 = 712）：概览 Row A 大卡的**参考宽**。
-    ///
-    /// 页面里不要直接拿它当 `width`：1020…1039 那条窄带里列宽不是 344，写死 712 会横向溢出。
-    /// 概览实际用的是 `frame(maxWidth: .infinity)` —— 在 1080 的画布上它算出来正好是 712，
-    /// 而在这个常量旁边留一份"设计上应该是多少"，评审时才对得上线框图。
-    static let gridSpan2Width: CGFloat = 712
     /// 主列宽（rail 档：1080 − 32 − 368）
     static let mainColumnMaxWidth: CGFloat = 680
     /// 画布达到此宽才允许 2 列（760 = 368×2 + 24：两列时每列不小于副列宽 368）

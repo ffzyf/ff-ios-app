@@ -7,8 +7,25 @@ import SwiftUI
 /// 否则同一份数据会出现「以谁为准」的第二次判断。
 ///
 /// 铁律：**空字段整行不渲染**。不显示「--」，不显示 `null`，也不留空白占位行。
-/// 折叠策略：默认「农历/紫外线/日出日落/风力/降雨 + 宜忌」，点「展开全文」再出星座、生日、
-/// 彭祖百忌、黄历（高度变化走 `Motion.expand`，0.4s）。
+///
+/// ## 3.11.0：默认态压到 3 条（用户："今日简报里面的内容太多了！app 就简洁一些"）
+///
+/// 默认只露三组：
+/// ```
+/// 今日简报                            10月30日   ← 页头（日期保留）
+/// ─────────────────────────────────────────────
+/// ☾ 农历九月十二 · 冲煞：鼠(北)              ← ① 农历行
+/// ☂ 有阵雨，记得带伞                         ← ② 一条天气（优先级见 `BriefText.weatherLines`）
+/// 宜 晒被 散步 …                            ← ③ 宜忌 chips
+///                                     展开全文 ⌄
+/// ```
+/// 其余（紫外线 / 日出日落 / 风力 / 生日 / 彭祖百忌 / 星座 / 黄历正文）全部进「展开全文」。
+/// 分组规则住在 `BriefText`（`compactLines` / `detailLines`），本文件只负责"长什么样"。
+///
+/// **本卡不挂任何外链**（3.11.0 复核：`Features/Brief` 与 `BriefView` 里都不存在「原文」入口）。
+/// 用户点名"下面挂一个原文太占地方"，所以这里连一个 11pt 的小字入口都不留 ——
+/// 简报本身就是成品，没有"更原文的原文"可点。要加外部链接请先确认真有那个地址。
+///
 /// `available == false`（当天快照还没生成）是正常业务状态，走口语化占位，**不是错误样式**。
 ///
 /// 文案翻译全部在 `BriefText`，所以本文件只负责「长什么样」。
@@ -20,12 +37,14 @@ struct TodayBriefCard: View {
     var body: some View {
         GlassCard {
             if isAvailable {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     headerRow
                     divider
-                    if !baselineLines.isEmpty {
-                        lineViews(baselineLines)
+                    // ① ②：默认态的两行（农历 → 一条天气）
+                    if !compactLines.isEmpty {
+                        lineViews(compactLines)
                     }
+                    // ③：宜忌 chips（横向可滑，永远只占一行高）
                     if showsLuck {
                         BriefLuckChips(yi: yiTags, ji: jiTags)
                     }
@@ -111,8 +130,8 @@ struct TodayBriefCard: View {
                 overview: horoscopeOverview
             )
         }
-        if !extraLines.isEmpty {
-            lineViews(extraLines)
+        if !detailLines.isEmpty {
+            lineViews(detailLines)
         }
         if let text = bodyParagraph {
             BriefAlmanacBox(text: text)
@@ -150,12 +169,14 @@ struct TodayBriefCard: View {
         return BriefText.dateText(snapshot?.date)
     }
 
-    private var baselineLines: [BriefLine] {
-        return BriefText.baselineLines(snapshot)
+    /// 默认态的两行（农历 + 一条天气）
+    private var compactLines: [BriefLine] {
+        return BriefText.compactLines(snapshot)
     }
 
-    private var extraLines: [BriefLine] {
-        return BriefText.extraLines(snapshot)
+    /// 展开态的行（其余天气字段 + 生日 + 彭祖百忌）
+    private var detailLines: [BriefLine] {
+        return BriefText.detailLines(snapshot)
     }
 
     private var yiTags: [String] {
@@ -189,6 +210,6 @@ struct TodayBriefCard: View {
     /// 有「多出来的内容」才给展开按钮；否则按钮点了也不会有变化，不如不出现
     private var canExpand: Bool {
         return horoscopeTitle != nil || horoscopeLuckyText != nil || horoscopeOverview != nil
-            || !extraLines.isEmpty || bodyParagraph != nil
+            || !detailLines.isEmpty || bodyParagraph != nil
     }
 }

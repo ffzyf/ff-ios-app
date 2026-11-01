@@ -22,7 +22,6 @@ struct HorizonGround: Shape {
     var crestY: CGFloat
     /// 两端位置，占高度比例（应大于 crestY）
     var edgeY: CGFloat
-
     func path(in rect: CGRect) -> Path {
         let w = rect.width
         let h = rect.height
@@ -53,4 +52,23 @@ struct HorizonEdge: Shape {
                           control: CGPoint(x: w / 2, y: h * (2 * crestY - edgeY)))
         return path
     }
+}
+
+// MARK: - 天际线比例（全工程唯一出处）
+
+/// 天际线的两个比例：**弧顶高度** 与 **两端高度**（都占容器高度的比例）。
+///
+/// 为什么要有这个名字：这两个数原本**三处各写一遍**
+/// （`SkyCard` 的私有常量、`WidgetTheme.skyCrestY/skyEdgeY`、`SunClock.SunTrack.crestY`），
+/// 靠注释互相指认「必须一致」。那种做法只能保证"改的时候记得"，保证不了"真的相等"。
+/// 现在三处都读这一份，App 内的简报卡、桌面上的天光 / 日弧组件、实时活动落在同一条弧上，
+/// 是**编译期**的保证。
+///
+/// 数值未变（0.62 / 0.74）：弧顶落在卡片 62% 高度，两端下沉到 74% ——
+/// 12% 的落差在 158pt 的小组件上是 19pt，读作"缓坡"；参考图里那条地平线就是这个斜度。
+enum HorizonSky {
+    /// 弧顶（正中）高度，占容器高度
+    static let crestY: CGFloat = 0.62
+    /// 两端高度，占容器高度
+    static let edgeY: CGFloat = 0.74
 }

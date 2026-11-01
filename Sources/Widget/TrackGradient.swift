@@ -86,42 +86,7 @@ enum TrackGradient {
     static let startPoint = UnitPoint.topLeading
     static let endPoint = UnitPoint.bottomTrailing
 
-    /// 前景色（大字 / 图标 / 地名）：用近黑，深浅自适应。直接复用 `Theme.textPrimary`
-    /// —— 它在浅色下正是近黑（#0F1A26），深色下近白，全程可读。
-    static func foreground(for key: Key) -> Color {
-        return Theme.textPrimary
-    }
-
-    // MARK: - 时段 → 配方
-
-    /// 北京时区的小时（0–23）。
-    static func hour(now: Date = Date()) -> Int {
-        return RedstoneClock.calendar.component(.hour, from: now)
-    }
-
-    /// 由「一天里的小时」选配方（设计文档 §5.1.2 trigger 列）。
-    ///
-    /// 05–08 日出 / 08–11 与 14–17 日间 / 11–14 正午 / 17–19:30 黄昏 / 其余午夜。
-    static func forHour(_ h: Int) -> Key {
-        switch h {
-        case 5..<8:             return .dawn
-        case 8..<11, 14..<17:   return .day
-        case 11..<14:           return .noon
-        case 17..<20:           return .dusk
-        default:                return .night
-        }
-    }
-
-    /// 红石 widget：有进行中场次 → active（lime 节点）；否则按当前小时选时段配方。
-    static func forRedstone(phase: RockPhase, now: Date = Date()) -> Key {
-        if phase.isOngoing { return .active }
-        return forHour(hour(now: now))
-    }
-
-    /// 简报 widget：纯时段配方（无自身状态语义，如表1 裁决）。
-    static func forBrief(now: Date = Date()) -> Key {
-        return forHour(hour(now: now))
-    }
+    // MARK: - 状态 → 配方
 
     /// 实时活动锁屏：即将=dawn / 进行中=active / 兜底=night。
     static func forLiveActivity(phase: String) -> Key {

@@ -24,8 +24,6 @@ enum Spacing {
     /// 列表项最小点击高度
     static let listItemMinHeight: CGFloat = 48
 
-    /// 浮动 Tab 栏高度（3.8.1：74 → 66，压缩栏内上下死空间 —— 推导见 `FloatingTabBar.barHeight`）
-    static let tabBarHeight: CGFloat = 66
     /// 浮动 Tab 栏左右内缩（V3.1：24 → 8，改成整幅宽，落点更大也更贴近系统栏观感）
     static let tabBarInset: CGFloat = 8
     /// 浮动 Tab 栏距底（3.8.1：10 → 4，栏更贴近底部安全区，少一截悬空 —— 用户原话
@@ -76,8 +74,4 @@ enum Motion {
     static let glow = Animation.easeInOut(duration: 2.4).repeatForever(autoreverses: true)
     /// 骨架 shimmer（1.4s 循环）
     static let shimmer = Animation.linear(duration: 1.4).repeatForever(autoreverses: false)
-    /// 刷新圆弧旋转
-    static let spinner = Animation.linear(duration: 0.9).repeatForever(autoreverses: false)
-    /// 骨架呼吸（比 shimmer 更含蓄，用于 reduceMotion 之外的静默态）
-    static let skeletonBreath = Animation.easeInOut(duration: 1.2).repeatForever(autoreverses: true)
 }

@@ -241,7 +241,9 @@ struct MoonPhaseFace: View {
                 Color.clear
             }
         }
-        .widgetURL(WidgetDeepLink.brief)
+        // 月相画的是"此刻的月亮"，点开就进沉浸式天光页（`skyapp://sky`，
+        // 与天光 / 日弧 / 风 三张卡同一个落点）
+        .widgetURL(WidgetDeepLink.sky)
     }
 
     private var isSystemFamily: Bool {

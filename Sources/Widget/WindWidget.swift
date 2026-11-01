@@ -105,7 +105,8 @@ struct WindFace: View {
                     }
             }
         }
-        .widgetURL(WidgetDeepLink.brief)
+        // 风画的是"此刻这片天的一部分"，点开就进沉浸式天光页（`skyapp://sky`）
+        .widgetURL(WidgetDeepLink.sky)
     }
 
     // MARK: 桌面小号

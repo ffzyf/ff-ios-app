@@ -176,11 +176,6 @@ enum WeatherKind: String, CaseIterable, Sendable {
         }
     }
 
-    /// 是否有降水。**由 `precipitation` 派生**，不另写一张表 —— 两张表迟早会漂移。
-    var hasPrecipitation: Bool {
-        return precipitation != nil
-    }
-
     /// 是否强对流（要不要加闪电）。目前只有雷暴一类。
     var isSevere: Bool {
         return self == .thunder

@@ -22,8 +22,14 @@ enum WidgetDeepLink {
     static let briefHost = "brief"
     /// 红石小组件 → 红石 Tab
     static let rockHost = "rock"
-    /// 收益页（预留给将来可能的收益小组件）
-    static let earningsHost = "earnings"
+    /// 沉浸式天光页（3.11.0）。**不是 Tab** —— App 侧会全屏呈现 `SkyRoomView`。
+    ///
+    /// 为什么把天光 / 日弧 / 月相 / 风 四张卡一起改成它：这四张卡画的都是"此刻的天"
+    /// （同一片天空、同一颗太阳、同一轮月亮、同一阵风），点开就该进那个更大的同一片天；
+    /// 而 `brief` 是"今天有什么事"，与看天是两件事（用户原话："这个页面就从相关的小组件
+    /// 和概览-第二个小组件可以点击今日"）。
+    /// App 侧同一份契约在 `RootView.swift` 的 `AppDeepLink.skyHost`，两边必须逐字一致。
+    static let skyHost = "sky"
 
     /// 拼一个合法的深链；拼不出来返回 nil（`.widgetURL` 接受 nil，等于"这张卡不可点"）
     static func url(host: String) -> URL? {
@@ -34,6 +40,8 @@ enum WidgetDeepLink {
     static let brief = url(host: briefHost)
     /// 红石小组件整卡点击目标
     static let rock = url(host: rockHost)
+    /// 天光页（天光 / 日弧 / 月相 / 风 四张卡共用）
+    static let sky = url(host: skyHost)
 }
 
 // MARK: - Timeline 时间刻度
@@ -426,8 +434,35 @@ struct RedstoneEntry: TimelineEntry {
     /// 带在身上即可。有场次的日子它根本不会被读到，成本只是几次日出日落三角函数。
     let daylight: SkyLightEntry?
 
+    /// 「本周排期」（3.11.0，大号卡下半部那 3–4 行）。
+    ///
+    /// 为什么新增字段而不是让 `RedstoneFace` 自己算：entry 是**预渲染帧**，
+    /// 而 `days` 只活在 Provider 手里 —— 视图里拿不到整月排期（也不该拿，
+    /// 那会让视图依赖"数据怎么来的"）。这里在造 entry 时顺手折好，
+    /// 视图只负责画。空数组 = 没有未来场次，大号卡下半部整块不渲染。
+    let weekRows: [RedstoneWeekRow]
+
     /// 下一场 / 进行中的那一场（没有就 nil）
     var focus: Occurrence? { phase.occurrence }
+}
+
+// MARK: - 本周排期行
+
+/// 红石大号卡「本周排期」的一行：一天一条。
+///
+/// 只带**展示需要的三个字符串**（不塞 `[Occurrence]`）：entry 会进 Timeline 缓存，
+/// 让每行背着整天的场次对象既没必要，也让"哪天开始多带一个字段"变得难以察觉。
+struct RedstoneWeekRow: Identifiable, Equatable {
+    /// `"2026-11-01"`
+    let dayKey: String
+    /// `"今天"` / `"明天"` / `"周三"`
+    let dayLabel: String
+    /// `"11:08 · 17:08 · 23:08"`
+    let timesLabel: String
+    /// `"霞谷·圆梦村"`；空串 = 待确认（渲染层照样不编地名）
+    let map: String
+
+    var id: String { dayKey }
 }
 
 extension RedstoneEntry {
@@ -450,7 +485,8 @@ extension RedstoneEntry {
             todayOccurrences: today,
             todayCount: today.count,
             needsCheck: today.contains { $0.needsCheck },
-            daylight: SkyLightEntry.make(date: date)
+            daylight: SkyLightEntry.make(date: date),
+            weekRows: weekRows(from: occurrences, now: date)
         )
     }
 
@@ -464,8 +500,47 @@ extension RedstoneEntry {
             todayOccurrences: [],
             todayCount: 0,
             needsCheck: false,
-            daylight: SkyLightEntry.make(date: date)
+            daylight: SkyLightEntry.make(date: date),
+            weekRows: []
         )
+    }
+
+    /// 「本周排期」：从**已加载的场次**里取"还没结束"的那些，按天归组，最多 4 行。
+    ///
+    /// 三条取舍：
+    /// - 用 `endAt > now` 而不是"今天的场次"：一场进行中时它仍然属于"接下来要发生的事"，
+    ///   从这一场开始读才对（用户看排期是看"接下来"）；
+    /// - 不跨月补数据：Provider 只拉当月（+ 月末的最后 3 天会多拉下月），
+    ///   所以这里也**只报拿到的东西**，绝不写"下周再看"这种承诺；
+    /// - 行数上限来自 `WidgetTheme.Redstone.largeRowLimit`：大号卡下半部放得下 4 行 12pt，
+    ///   第 5 行就会顶到卡片底边。
+    static func weekRows(from occurrences: [Occurrence], now: Date) -> [RedstoneWeekRow] {
+        let todayKey = RedstoneClock.dayKey(now)
+        var byDay: [String: [Occurrence]] = [:]
+        for occurrence in occurrences where occurrence.endAt > now {
+            byDay[occurrence.date, default: []].append(occurrence)
+        }
+        let orderedDays = byDay.keys.sorted()
+        guard !orderedDays.isEmpty else { return [] }
+
+        return orderedDays.prefix(WidgetTheme.Redstone.largeRowLimit).compactMap { dayKey in
+            guard let list = byDay[dayKey], !list.isEmpty else { return nil }
+            let times = list.sorted { $0.startAt < $1.startAt }.map { $0.time }
+            return RedstoneWeekRow(
+                dayKey: dayKey,
+                dayLabel: dayLabel(dayKey: dayKey, todayKey: todayKey),
+                timesLabel: times.joined(separator: " · "),
+                map: list.first?.map ?? ""
+            )
+        }
+    }
+
+    /// 「今天 / 明天 / 周三」—— 两个相对日给相对词，其余给星期（想不起几号也能对上号）
+    private static func dayLabel(dayKey: String, todayKey: String) -> String {
+        if dayKey == todayKey { return "今天" }
+        if dayKey == RedstoneClock.nextDayKey(todayKey) { return "明天" }
+        let weekday = Formatters.weekdayLabel(dayKey: dayKey)
+        return weekday.isEmpty ? Formatters.dayTitle(dayKey) : weekday
     }
 }
 

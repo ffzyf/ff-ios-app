@@ -52,9 +52,12 @@ struct SkyCard<Content: View>: View {
         self.content = content()
     }
 
-    /// 地平线弧顶 / 两端（占卡片高度）
-    private let crestY: CGFloat = 0.62
-    private let edgeY: CGFloat = 0.74
+    /// 地平线弧顶 / 两端（占卡片高度）。
+    ///
+    /// 3.11.0 起读 `HorizonSky` 这一份共享常量：桌面天光 / 日弧小组件、天光页用的是**同一组数**，
+    /// 以前三处各写 0.62 / 0.74 靠注释互相指认，改一处就会漂。
+    private var crestY: CGFloat { HorizonSky.crestY }
+    private var edgeY: CGFloat { HorizonSky.edgeY }
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

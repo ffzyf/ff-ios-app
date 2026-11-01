@@ -64,16 +64,9 @@ enum Typography {
 
     /// 48pt 白 12% —— 封面首字水印
     static let coverWatermark = Font.system(size: 48, weight: .bold)
-    /// 96pt 白 12% —— 详情 Hero 首字水印
-    static let heroWatermark = Font.system(size: 96, weight: .bold)
 
     /// 大字号标题的字距（PRD §4.2：≥22pt 加 -0.4pt，正文不动）
     static let trackingLarge: CGFloat = -0.4
-
-    /// 阅读字号档位对应的正文字号
-    static func reader(_ scale: ReaderScale) -> Font {
-        return Font.system(size: scale.pointSize, weight: .regular)
-    }
 
     /// 行高换算：SwiftUI 的 `lineSpacing` 是「行间额外空白」，
     /// 系统单行自然高度约等于 `fontSize * 1.2`，所以额外量 = 目标行高 − 自然行高。

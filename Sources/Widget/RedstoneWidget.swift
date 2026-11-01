@@ -1,7 +1,7 @@
 import SwiftUI
 import WidgetKit
 
-/// 红石桌面小组件（V3.7：**只留正方形小号**，卡面按参考图语言重排，见 `RedstoneFace.swift`）。
+/// 红石桌面小组件（V3.11：**小 / 中 / 大三档**，三套版式，见 `RedstoneFace.swift`）。
 ///
 /// 这个文件从"画整张卡"退回到**只做装配**，是刻意的：
 /// 上一版把版式、底色、剪影、云海全堆在这里，改一处字号要翻 300 行，
@@ -9,9 +9,11 @@ import WidgetKit
 /// 与"组件注册信息"无关。留在本文件的只有三样：
 ///
 /// 1. **kind 与 supportedFamilies**：`kind` 是 WidgetKit 匹配已上桌实例的键，
-///    改名等于让所有用户的小组件失效；**只支持 `.systemSmall`（正方形）** ——
-///    用户原话是"把它设计成正方形的，不要这个长条形的了"，中号那一套
-///    （右栏场次表 / 竖分割线 / 中号内边距）已随本次改动整段删除，不留死代码；
+///    改名等于让所有用户的小组件失效。3.11.0 起恢复 `.systemMedium` 并新增
+///    `.systemLarge` —— 用户原话"红石的小组件咋只有一个"（V3.7 曾按另一条反馈
+///    只留正方形）。三个尺寸是**三套版式**，不是把正方形拉宽拉高：
+///    中号横排（左倒计时 / 右收益·规律·今日）、大号上方 hero + 下方本周排期，
+///    分档由 `RedstoneFace` 里的 `@Environment(\.widgetFamily)` 决定（DESIGN-RULES §3）；
 /// 2. **刷新策略的接入口**：`RedstoneProvider`（在 `WidgetProvider.swift`，只读不改）；
 /// 3. **整卡点击目标**：`WidgetDeepLink.rock`（`RootView.onOpenURL` 那头解析同一个 URL）。
 ///
@@ -32,12 +34,13 @@ struct RedstoneWidget: Widget {
         }
         .configurationDisplayName("红石")
         .description("下一场红石的时刻、地图与倍率，倒计时自动走时。")
-        // 只有正方形（#8 审计的例外，理由必须写明）：中号的右栏场次表在 158pt 见方里
-        // 放不下，而"今天还有几场"已经并进倒计时那一行（`RedstoneFace.todayCountText`）；
-        // 中 / 大号在 V3.7 是**应用户要求整段下线**的（用户原话"不要这个长条形的了"），
-        // 重建需要一套全新的横向版式 + 场次列表数据面 —— 那是新设计，不是"把小号拉大"，
-        // 在那之前维持单一家族，不做硬缩放的假适配。
-        .supportedFamilies([.systemSmall])
+        // 三个尺寸，一套数据三种版式（`RedstoneFace.body` 按 family 分派）：
+        // - 小号 158×158：地图名 + 主时刻 + 时间轴弧 + 倒计时（版式一字未改）；
+        // - 中号 338×158：左栏 30pt 主时刻与倒计时，右栏收益 / 规律 / 今日场次
+        //   （"今天还有几场"从中号退役后曾挤回小号倒计时行，现在回到它该在的地方）；
+        // - 大号 338×354：52pt hero 主时刻 + 本周排期 3–4 行（`RedstoneEntry.weekRows`）。
+        // 空窗期（无场次 / 本月收官）三档都整卡换成天光面，见 `RedstoneWidgetView`。
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         // 与其它组件一致地关掉系统内容边距：底色渐变必须铺到卡片四边，
         // 默认 16pt 边距会在渐变外围留一圈系统底色，看着像"卡里嵌了一张小卡"。
         .contentMarginsDisabled()
@@ -56,7 +59,8 @@ struct RedstoneWidget: Widget {
 /// 用户原话："如果说这几天是红石的空窗期它应该显示其他的内容啊不应该一直挂个红石"。
 /// 所以 `focus == nil`（暂无排期 / 本月已收官）的日子，整卡切换为天光卡面
 /// （`SkyLightFace`，吃 Provider 顺带算好的 `entry.daylight`，见 `RedstoneEntry`），
-/// 深链也跟着换成 `WidgetDeepLink.brief` —— 卡上说的已经是天光，点进去就该是天光页。
+/// 深链也跟着换成 `WidgetDeepLink.sky` —— 卡上说的已经是天光，点进去就该是天光页
+/// （3.11.0 起全工程的天光 / 日弧 / 月相 / 风 四张卡统一指向沉浸式天光页 `SkyRoomView`）。
 /// **同日有场次则一切不变**：红石卡面 + `skyapp://rock`。
 struct RedstoneWidgetView: View {
 
@@ -70,8 +74,10 @@ struct RedstoneWidgetView: View {
         Group {
             if entry.focus == nil, let daylight = entry.daylight {
                 SkyLightFace(entry: daylight)
-                    // 卡面是天光，点击目标跟着换成简报页
-                    .widgetURL(WidgetDeepLink.brief)
+                    // 卡面是天光，点击目标跟着换成天光页（不是简报表）。
+                    // 与 `SkyLightFace` 内部那条 `.widgetURL(WidgetDeepLink.sky)` 值相同、
+                    // 互为兜底：将来谁改了一处，另一处仍是同一个落点。
+                    .widgetURL(WidgetDeepLink.sky)
             } else {
                 RedstoneFace(entry: entry)
                     // 整卡可点：点一下跳进 App 的红石页（冷启动 / 热启动都生效，见 RootView.onOpenURL）

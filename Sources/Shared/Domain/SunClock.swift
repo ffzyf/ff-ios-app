@@ -113,8 +113,10 @@ extension SunClock {
 
     /// 太阳轨迹的几何常量（归一化，0 = 画布顶 / 左）。
     ///
-    /// `crestY` 必须与 `WidgetTheme.skyCrestY`（0.62）一致：太阳落在"弧顶高度"上，
-    /// 正好压在那条地平线亮边上。两侧各留 0.10 的边，是给卡片圆角让位 ——
+    /// `crestY` 直接取共享常量 `HorizonSky.crestY`（0.62）：太阳落在"弧顶高度"上，
+    /// 正好压在那条地平线亮边上。以前这里另写一个 0.62 再靠注释说"必须与小组件一致"，
+    /// 3.11.0 起读同一份定义 —— 两边不可能再漂。
+    /// 两侧各留 0.10 的边，是给卡片圆角让位 ——
     /// 太阳贴在 0 / 1 的角上会被裁掉半个，看起来像画错了。
     enum SunTrack {
         /// 日出时太阳的水平位置
@@ -123,8 +125,8 @@ extension SunClock {
         static let rightX: CGFloat = 0.90
         /// 拱顶高度（天空区上方）
         static let peakY: CGFloat = 0.10
-        /// 地平线弧顶高度（= `WidgetTheme.skyCrestY`）
-        static let crestY: CGFloat = 0.62
+        /// 地平线弧顶高度（= 共享常量 `HorizonSky.crestY`）
+        static let crestY: CGFloat = HorizonSky.crestY
         /// 太阳落下后余晖衰减的时长（分钟）：超过它天空里不再有任何太阳的痕迹
         static let glowFadeMinutes: Double = 45
     }
@@ -238,9 +240,28 @@ extension SkyPhase {
         }
     }
 
-    /// 倒计时文案：`2分钟4秒` / `7小时34分钟` / `49分钟30秒`（与参考图一致，不补零）
+    /// 倒计时到期（或只剩不到 1 秒）时给的文案。
+    ///
+    /// 为什么不显示 0：`0分钟0秒` 是"已经结束"的读数，而这一刻离切换只差最后一抖 ——
+    /// 用户读到的是"倒计时坏了"，不是"马上要换天色了"。
+    static let imminentText = "即将切换"
+
+    /// 倒计时文案：`2分钟4秒` / `7小时34分钟` / `49分钟30秒`（与参考图一致，不补零）。
+    ///
+    /// ## 为什么必须先判 `date > now`（3.11.0 QA nit）
+    ///
+    /// 取整是**截断**（`Int(_:)`），所以"还剩 0.4 秒"会被算成 0 秒 →
+    /// 下一秒刷新时读到 `0分钟0秒`。而 `phase(at:)` 要到 `deadline` 当刻才翻档：
+    /// 屏幕上的相位还是旧的、deadline 还是旧的，于是这最后不到 1 秒必然画出 `0分钟0秒`
+    /// （桌面小组件更明显：时间线帧是静态的，过期后可以一直停在 `0分钟0秒`）。
+    ///
+    /// 所以：`remaining < 1`（含已过期，即 `deadline <= now`）一律返回「即将切换」，
+    /// **绝不回 0**。这是所有调用点（天光页 / 天光卡 / 小组件）共用的唯一派生处，
+    /// 在这里补上就不会有哪个入口漏掉。
     static func countdownText(to date: Date, now: Date) -> String {
-        let seconds = max(0, Int(date.timeIntervalSince(now)))
+        let remaining = date.timeIntervalSince(now)
+        guard remaining >= 1 else { return imminentText }
+        let seconds = Int(remaining)
         if seconds >= 3600 {
             let hours = seconds / 3600
             let minutes = (seconds % 3600) / 60

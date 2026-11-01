@@ -3,12 +3,14 @@ import WidgetKit
 
 // MARK: - 版式常量
 
-/// 红石卡面的**唯一量纲来源**：字号 / 间距 / 弧与节点的几何。
+/// 红石**小号**卡面的唯一量纲来源：字号 / 间距 / 弧与节点的几何。
 ///
-/// 为什么集中在一个 enum 而不是散在视图里：小组件画布只有 **158pt 见方**（`.systemSmall`，
-/// 中号在 V3.7 已下线，见 `RedstoneWidget.supportedFamilies`），字号差 1pt 就会挤成一团
-/// 或者虚掉，间距差 1pt 就会让弧压到字。这些数只有摆在一起才调得动；
-/// `RedstoneWidget.swift` 因此只剩"装配"，一个数字都不带。
+/// 为什么集中在一个 enum 而不是散在视图里：小号画布只有 **158pt 见方**（`.systemSmall`），
+/// 字号差 1pt 就会挤成一团或者虚掉，间距差 1pt 就会让弧压到字。这些数只有摆在一起才调得动。
+///
+/// **3.11.0 起中号 / 大号回来了**（用户："红石的小组件咋只有一个"）。那两档的字号在
+/// `WidgetTheme.Redstone` —— 它们按 338×158 / 338×354 配平，与小号这套量纲完全不同，
+/// 混在一起改一处就会连带另一处。本 enum 因此只管小号，一个数字都没动。
 ///
 /// 单位说明：字号用 `Font`，长度一律 pt。
 enum RedstoneMetric {
@@ -134,23 +136,25 @@ enum RedstoneMetric {
 
 // MARK: - 卡面
 
-/// 红石卡面（**只有小号 158×158**）。
+/// 红石卡面（**小 / 中 / 大三个尺寸，三套版式**）。
 ///
-/// 版式（照用户给的参考图语言重排 —— 饱和渐变压底 + 顶行小字 + 中间巨大主值 +
-/// 一条几何轨迹带光点 + 两端极值贴轨迹下方）：
+/// 分档由 `@Environment(\.widgetFamily)` 决定（DESIGN-RULES §3：禁止一套布局硬缩放）：
+///
 /// ```
-/// ┌──────────────────────────────┐
-/// │ ● 暮土·失落方舟         2.5× │  ← 地图色点 6pt + 地图名 11pt / 倍率 11pt（无底）
-/// │                              │
-/// │  23:08                       │  ← 34pt rounded bold
-/// │                              │
-/// │  ╭────●────○────╮            │  ← 弧（今日所有场次的轨道，亮段跟着光点走）
-/// │  11:08          23:08        │  ← 两端首末场次 11pt
-/// │  ↘ 还有 39:27      今日 4 场 │  ← 倒计时 11pt + 今日场次数 11pt
-/// └──────────────────────────────┘
+/// 小号 158×158          中号 338×158                大号 338×354
+/// ┌────────────┐        ┌──────────────────────┐    ┌──────────────────────┐
+/// │ ● 暮土 2.5× │        │ ● 暮土·失落方舟  2.5× │    │ ● 暮土·失落方舟  2.5× │
+/// │  23:08     │        │ 23:08      收益 2.5× │    │ 23:08                │
+/// │  ╭─●─○─╮   │        │ ↘ 还有 39:27 规律 每2时│   │ ↘ 还有 39:27  今日4场 │
+/// │ 11:08 23:08│        │            今日 4 场  │    │ ──────────────────── │
+/// │ ↘ 还有 今日 │        └──────────────────────┘    │ 本周排期              │
+/// └────────────┘                                    │ 今天 11:08·17:08 暮土 │
+///                                                   │ 明天 07:08      霞谷 │
+///                                                   └──────────────────────┘
 /// ```
-/// 158pt 见方里**只有这五组元素**：今日场次表放不下，所以它彻底不进小号
-/// （中号下线时已经把这部分整段删掉，不留给死代码）。
+///
+/// 三档共用同一条数据（`RedstoneEntry`），**没有一个视图自己算时间**：
+/// `phase` / `todayOccurrences` / `weekRows` 全部由 Provider 在造 entry 时算好。
 ///
 /// 四条不能破的规矩：
 /// 1. **颜色只有一个来源**：`Theme.sky(band)` 的六个 token + `Theme.trackArc`。
@@ -164,6 +168,9 @@ enum RedstoneMetric {
 /// 4. **本月过完了就说收官**：`.closed` 写「本月红石已收官」+ 月份文案，
 ///    同样不画弧、不画时刻（判定与 App 首页共用 `RedstoneWindow`，见 Shared/Domain）。
 struct RedstoneFace: View {
+
+    /// 尺寸档：三个尺寸三套版式，只在这里分叉
+    @Environment(\.widgetFamily) private var family
 
     private let entry: RedstoneEntry
 
@@ -203,26 +210,283 @@ struct RedstoneFace: View {
 
     var body: some View {
         Group {
-            switch windowState {
-            case .closed:
-                closedCard
-            case .pending:
-                pendingCard
-            case .live:
-                if hasFocus {
-                    card
-                } else {
-                    pendingCard
-                }
+            switch family {
+            case .systemMedium:
+                mediumFace
+            case .systemLarge:
+                largeFace
+            default:
+                smallFace
             }
         }
-        .padding(RedstoneMetric.padding)
+        .padding(canvasPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // 画布测量（§5.2）：`.background` 不参与布局，`Group` 拿到的 proposal 与不挂时完全相同。
         // 只在 `onAppear` / 尺寸真变时写 `@State`，重绘与帧切换都不会触发 body 重算。
+        // **只有小号读它**（`s`）：中/大号是另一套按 338 宽配平的字号，不参与缩放。
         .background {
             canvasProbe
         }
+    }
+
+    /// 三个尺寸各自的内边距（中/大号按 338 宽配平，见 `WidgetTheme.Redstone`）
+    private var canvasPadding: CGFloat {
+        switch family {
+        case .systemMedium:
+            return WidgetTheme.Redstone.mediumPadding
+        case .systemLarge:
+            return WidgetTheme.Redstone.largePadding
+        default:
+            return RedstoneMetric.padding
+        }
+    }
+
+    // MARK: - 小号（158×158，版式一字未改）
+
+    @ViewBuilder
+    private var smallFace: some View {
+        switch windowState {
+        case .closed:
+            closedCard
+        case .pending:
+            pendingCard
+        case .live:
+            if hasFocus {
+                card
+            } else {
+                pendingCard
+            }
+        }
+    }
+
+    // MARK: - 中号（338×158：左栏倒计时 / 右栏收益与规律）
+
+    /// 中号版式：**两列**。
+    ///
+    /// 为什么是"左倒计时 + 右摘要"而不是把小号拉宽：中号 158pt 高、338pt 宽，
+    /// 横向多出来的 180pt 如果只是把小号的元素铺开，中间会空出一块（"放大的空卡"）。
+    /// 所以右边那一栏放**小号装不下的第二层信息**：收益（倍率）、规律（场次间隔）、今日场次。
+    ///
+    /// 空窗期（无场次 / 本月收官）在 `RedstoneWidgetView` 里已被天光面整卡接走，
+    /// 所以下面那个 `fallbackCard` 只是**兜底**（天光帧理论上永远存在，见 `RedstoneEntry.daylight`）。
+    @ViewBuilder
+    private var mediumFace: some View {
+        switch windowState {
+        case .closed:
+            fallbackCard(title: windowState.closedTitle ?? "本月红石已收官",
+                         note: windowState.closedNote ?? "")
+        case .pending:
+            fallbackCard(title: "暂无排期", note: "打开 App 刷新一次")
+        case .live:
+            if hasFocus {
+                mediumCard
+            } else {
+                fallbackCard(title: "暂无排期", note: "打开 App 刷新一次")
+            }
+        }
+    }
+
+    private var mediumCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 顶行右上角**不写倍率**：中号的右栏已经有「收益」那一行，
+            // 同一个数在一张卡上出现两次，读起来像两件事（这也是"少而准"的一部分）。
+            headRow(titleFont: WidgetTheme.Redstone.title, rateFont: nil)
+                .padding(.bottom, 10)
+
+            HStack(alignment: .top, spacing: WidgetTheme.Redstone.mediumColumnGap) {
+                mediumMainColumn
+                // 竖分割线：两列之间的关系是"并列"，不是"上下"，一条线比留白更省地方
+                Rectangle()
+                    .fill(Theme.trackDivider)
+                    .frame(width: 1)
+                mediumSummaryColumn
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 左栏：主时刻 + 倒计时（唯一还带大数字的一栏）
+    private var mediumMainColumn: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(entry.focus?.time ?? "")
+                .font(WidgetTheme.Redstone.mediumTime)
+                .foregroundStyle(band.sky.ink)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .widgetAccentable()
+
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.right")
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(Theme.trackArc)
+                countdownText
+            }
+            if let prefix = dayPrefix {
+                Text(prefix)
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(band.sky.inkDim)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 右栏：收益（倍率）+ 规律（场次间隔）+ 今日场次。
+    ///
+    /// 三行都做"标签 …… 值"的右对齐结构：这一栏是**读数表**，
+    /// 数字必须能一眼扫下来（这也是它值得占半张卡的理由）。
+    private var mediumSummaryColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let rate = entry.focus?.rate {
+                summaryRow(label: "收益", value: rateValue(rate))
+            }
+            if let interval = intervalText {
+                summaryRow(label: "规律", value: interval)
+            }
+            summaryRow(label: "今日", value: entry.needsCheck ? "待核对" : "\(entry.todayCount) 场")
+        }
+    }
+
+    private func summaryRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(WidgetTheme.Redstone.label)
+                .foregroundStyle(band.sky.inkDim)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(WidgetTheme.Redstone.value)
+                .foregroundStyle(band.sky.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+    }
+
+    // MARK: - 大号（338×354：上方 hero 倒计时 + 下方本周排期）
+
+    /// 大号版式：**hero 倒计时 + 本周排期 3–4 行**。
+    ///
+    /// 空窗期同样交给天光面（`RedstoneWidgetView` 的 `daylight` 分支）：`SkyLightFace` 的内容
+    /// 是"顶行阶段 + 底行日出日落 + 中间 Spacer"，`frame(maxHeight: .infinity)` 会自己把天空
+    /// 拉满整块大号画布 —— 它**撑得起 large**（天空越大越好看），所以这里不需要退回 medium 版式。
+    /// 只有天光帧意外缺失（`daylight == nil`）时才走 `fallbackCard` 居中留白。
+    @ViewBuilder
+    private var largeFace: some View {
+        switch windowState {
+        case .closed:
+            fallbackCard(title: windowState.closedTitle ?? "本月红石已收官",
+                         note: windowState.closedNote ?? "")
+        case .pending:
+            fallbackCard(title: "暂无排期", note: "打开 App 刷新一次")
+        case .live:
+            if hasFocus {
+                largeCard
+            } else {
+                fallbackCard(title: "暂无排期", note: "打开 App 刷新一次")
+            }
+        }
+    }
+
+    private var largeCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            headRow(titleFont: WidgetTheme.Redstone.title, rateFont: WidgetTheme.Redstone.value)
+                .padding(.bottom, 12)
+
+            Text(entry.focus?.time ?? "")
+                .font(WidgetTheme.Redstone.largeTime)
+                .foregroundStyle(band.sky.ink)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .widgetAccentable()
+
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.right")
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(Theme.trackArc)
+                countdownText
+                Spacer(minLength: 6)
+                if let prefix = dayPrefix {
+                    Text(prefix)
+                        .font(WidgetTheme.Redstone.label)
+                        .foregroundStyle(band.sky.inkDim)
+                        .lineLimit(1)
+                }
+                Text(entry.needsCheck ? "待核对" : "今日 \(entry.todayCount) 场")
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(band.sky.inkDim)
+                    .lineLimit(1)
+            }
+            .padding(.top, 8)
+
+            Rectangle()
+                .fill(Theme.trackDivider)
+                .frame(height: 1)
+                .padding(.vertical, 12)
+
+            schedule
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 「本周排期」：3–4 行，一天一行。数据是 `RedstoneEntry.weekRows`（Provider 算好的）。
+    /// 一行都没有就整块不渲染 —— 不为一个空标题留位置。
+    @ViewBuilder
+    private var schedule: some View {
+        if !entry.weekRows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("本周排期")
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(band.sky.inkDim)
+                    .tracking(0.5)
+                ForEach(entry.weekRows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.dayLabel)
+                            .font(WidgetTheme.Redstone.rowDay)
+                            .foregroundStyle(row.dayLabel == "今天" ? Theme.trackArc : band.sky.ink)
+                            .frame(width: WidgetTheme.Redstone.rowDayWidth, alignment: .leading)
+                        Text(row.timesLabel)
+                            .font(WidgetTheme.Redstone.rowTimes)
+                            .foregroundStyle(band.sky.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 6)
+                        if !row.map.isEmpty {
+                            Text(row.map)
+                                .font(WidgetTheme.Redstone.rowMap)
+                                .foregroundStyle(band.sky.inkDim)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 兜底（空窗期没有天光帧时才会出现）
+
+    /// 中/大号在**没有任何可画内容**时的兜底：两句文案居中留白。
+    /// 中号靠左、大号垂直居中 —— 大号画布高，贴顶会让下半张卡空得像渲染失败。
+    private func fallbackCard(title: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: RedstoneMetric.gapEmptyBlock) {
+            Text(title)
+                .font(RedstoneMetric.emptyTitle)
+                .foregroundStyle(band.sky.ink)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+            if !note.isEmpty {
+                Text(note)
+                    .font(RedstoneMetric.emptyNote)
+                    .foregroundStyle(band.sky.inkDim)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: family == .systemLarge ? .center : .top)
     }
 
     /// 量画布**短边**。为什么不是宽度：medium 是 338×158，按宽度算会得到 2.14 再被 clamp 到
@@ -264,19 +528,7 @@ struct RedstoneFace: View {
 
     private var headerRow: some View {
         HStack(spacing: 5) {
-            ZStack {
-                Circle()
-                    .strokeBorder(Theme.trackArc.opacity(0.55),
-                                  lineWidth: RedstoneMetric.mapDotRingWidth)
-                    .frame(width: RedstoneMetric.mapDotRingDiameter,
-                           height: RedstoneMetric.mapDotRingDiameter)
-                Circle()
-                    .fill(band.dot)
-                    .frame(width: RedstoneMetric.mapDotDiameter,
-                           height: RedstoneMetric.mapDotDiameter)
-            }
-            .frame(width: RedstoneMetric.mapDotRingDiameter,
-                   height: RedstoneMetric.mapDotRingDiameter)
+            mapDot
 
             Text(focusMap)
                 .font(RedstoneMetric.mapName)
@@ -290,9 +542,69 @@ struct RedstoneFace: View {
             Spacer(minLength: 4)
 
             if let rate = entry.focus?.rate {
-                rateText(rate)
+                rateLabel(rate, font: RedstoneMetric.rate)
             }
         }
+    }
+
+    /// 地图色点 + 外环。三个尺寸共用（小号 6pt / 中号大号同尺寸）：
+    /// 外环的作用是浅色外观下"近白本体压在白卡上"时仍然留得住这个点。
+    private var mapDot: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(Theme.trackArc.opacity(0.55),
+                              lineWidth: RedstoneMetric.mapDotRingWidth)
+                .frame(width: RedstoneMetric.mapDotRingDiameter,
+                       height: RedstoneMetric.mapDotRingDiameter)
+            Circle()
+                .fill(band.dot)
+                .frame(width: RedstoneMetric.mapDotDiameter,
+                       height: RedstoneMetric.mapDotDiameter)
+        }
+        .frame(width: RedstoneMetric.mapDotRingDiameter,
+               height: RedstoneMetric.mapDotRingDiameter)
+    }
+
+    /// 中号 / 大号的顶行：与小号 `headerRow` 同一结构，字号按档位传入。
+    ///
+    /// `rateFont == nil` 表示**这一档不画倍率**（中号的倍率在右栏「收益」那一行，
+    /// 同卡不重复）；大号没有右栏，所以倍率留在顶行右上角。
+    private func headRow(titleFont: Font, rateFont: Font?) -> some View {
+        HStack(spacing: 6) {
+            mapDot
+            Text(focusMap)
+                .font(titleFont)
+                .tracking(0.5)
+                .foregroundStyle(band.sky.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 6)
+            if let rate = entry.focus?.rate, let rateFont {
+                rateLabel(rate, font: rateFont)
+            }
+        }
+    }
+
+    /// 倍率文案（`2.5×`）。**全工程唯一实现**在 `RedstoneRules.rateText(_:)` ——
+    /// 3.11.0 起这里不再自己写 `String(format:)`：App 的规律页和三个尺寸的小组件
+    /// 必须是同一个格式，两份实现迟早出现「2.5×」与「2.50×」并存。
+    private func rateValue(_ rate: Double) -> String {
+        return RedstoneRules.rateText(rate) ?? ""
+    }
+
+    /// 今日场次的间隔（`每 2 小时`）。少于两场、或间隔短到不像"规律"时返回 nil。
+    ///
+    /// 为什么按"首场 → 次场"算而不是取平均：红石的场次一天内是等距的（服务端规律如此），
+    /// 首两场就能代表节奏；取平均会在"跨零点那一天"算出毫无意义的值。
+    private var intervalText: String? {
+        let sorted = entry.todayOccurrences.sorted { $0.startAt < $1.startAt }
+        guard sorted.count >= 2 else { return nil }
+        let minutes = Int(sorted[1].startAt.timeIntervalSince(sorted[0].startAt) / 60)
+        guard minutes >= 30 else { return nil }
+        if minutes % 60 == 0 {
+            return "每 \(minutes / 60) 小时"
+        }
+        return "每 \(minutes) 分钟"
     }
 
     /// 倍率：**一行纯文字，不带任何面**（原 `rateBadge` 带 `Theme.lime` 底与 4pt 圆角，
@@ -303,9 +615,12 @@ struct RedstoneFace: View {
     /// **第三支强调色**（天色 `sky.edge` + 轨迹 `trackArc` 已经两支，R7 #3 的上限是两支）。
     /// 现在它只是一行 11pt semibold 的字，颜色取 `trackArc`（与轨迹同一支，不引入新色），
     /// 于是卡面自绘形归 0（R6），`Theme.lime` 在这张卡上一次都不出现。
-    private func rateText(_ rate: Double) -> some View {
-        Text(String(format: "%.1f×", rate))
-            .font(RedstoneMetric.rate)
+    ///
+    /// 三档共用这一个渲染函数，**只有字号按档位传**（小号 `RedstoneMetric.rate`、
+    /// 中/大号 `WidgetTheme.Redstone.label` / `.value`）：倍率的颜色、对齐、格式不该有三份。
+    private func rateLabel(_ rate: Double, font: Font) -> some View {
+        Text(rateValue(rate))
+            .font(font)
             .foregroundStyle(Theme.trackArc)
             .lineLimit(1)
     }
@@ -429,6 +744,19 @@ struct RedstoneFace: View {
         return "今日 " + String(entry.todayCount) + " 场"
     }
 
+    /// 倒计时那一行用的字号：小号 11pt，中/大号 13pt（理由见 `WidgetTheme.Redstone.countdown`）。
+    ///
+    /// 为什么做成计算属性而不是三处各写一遍 `.font(...)`：`countdownText` 被三个尺寸共用，
+    /// 里面 `timerLabel` / `caption` 两处都要字号 —— 传参数进去会让这条调用链变得又长又容易漏。
+    private var countdownFont: Font {
+        switch family {
+        case .systemMedium, .systemLarge:
+            return WidgetTheme.Redstone.countdown
+        default:
+            return RedstoneMetric.countdown
+        }
+    }
+
     /// 倒计时文案。未来场次一律交给 `Text(timerInterval:countsDown:)` 让系统自绘：
     /// 秒级在走，但**零刷新成本**（Widget 里不能起 Timer，进程随时被挂起）。
     @ViewBuilder
@@ -459,7 +787,7 @@ struct RedstoneFace: View {
         HStack(spacing: 3) {
             caption(text)
             Text(timerInterval: start...end, countsDown: true, showsHours: false)
-                .font(RedstoneMetric.countdown)
+                .font(countdownFont)
                 .foregroundStyle(Theme.trackArc)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -469,7 +797,7 @@ struct RedstoneFace: View {
 
     private func caption(_ text: String) -> some View {
         Text(text)
-            .font(RedstoneMetric.countdown)
+            .font(countdownFont)
             .foregroundStyle(band.sky.inkDim)
             .lineLimit(1)
             .minimumScaleFactor(0.8)

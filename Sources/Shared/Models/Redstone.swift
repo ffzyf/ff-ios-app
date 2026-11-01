@@ -461,11 +461,6 @@ struct RedstoneRules: Codable, Sendable, Equatable {
         return String(format: "%.1f", rate)
     }
 
-    /// 某倍率对应的点位列表（查不到就是空数组，页面不渲染这一段）
-    func maps(forRate rate: Double) -> [String] {
-        return rates[RedstoneRules.rateKey(rate)] ?? []
-    }
-
     /// 倍率展示文案（`2.5×`）。`nil` 不展示，绝不显示 `—`
     static func rateText(_ rate: Double?) -> String? {
         guard let rate = rate else { return nil }

@@ -20,17 +20,25 @@ import Foundation
 /// 傍晚是红、夜里是深靛 —— 不需要用户手动换。
 ///
 /// 正文只给 1 句 + 1 行补充：卡片不是阅读页，全文点进简报 Tab 看。
+///
+/// ## 3.11.0：点击目标改成"天光页"
+///
+/// 用户原话："概览-第二个小组件可以点击今日"。所以整卡点击不再切到简报 Tab，
+/// 而是全屏打开沉浸式天光页（`SkyRoomView`）—— 这张卡本来就是一整片天空，
+/// 点进去看到"更大的同一片天"才是它该有的去向；简报全文仍可从 Tab 栏进。
 struct TodayBriefTrackCard: View {
 
     /// 首页这张是 `.medium`（窄档 168 / 宽档仍是 168，宽档靠外层 `maxHeight: .infinity` 拉到 172）
     @Environment(\.layoutMetrics) private var metrics
 
     let snapshot: BriefSnapshot?
-    private let onOpenBrief: () -> Void
+    /// 点击整卡 → 打开天光页。由 `OverviewView` 注入（页面自己持有弹出状态，
+    /// 卡片只发信号 —— 组件永远不决定"要用什么方式呈现下一页"）。
+    private let onOpenSky: () -> Void
 
-    init(snapshot: BriefSnapshot?, onOpenBrief: @escaping () -> Void) {
+    init(snapshot: BriefSnapshot?, onOpenSky: @escaping () -> Void) {
         self.snapshot = snapshot
-        self.onOpenBrief = onOpenBrief
+        self.onOpenSky = onOpenSky
     }
 
     var body: some View {
@@ -41,10 +49,10 @@ struct TodayBriefTrackCard: View {
         .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .onTapGesture {
             Haptics.light()
-            onOpenBrief()
+            onOpenSky()
         }
         .accessibilityElement(children: .combine)
-        .accessibilityHint("打开今日简报全文")
+        .accessibilityHint("打开今日天光")
         // 伪 3D 倾斜挂最外层（§3.4：不能塞进 SkyCard 内部），iPad 生效、iPhone 完全不挂载
         .cardTilt(cornerRadius: Radius.card)
     }

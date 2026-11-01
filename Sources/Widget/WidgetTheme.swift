@@ -14,62 +14,28 @@ import WidgetKit
 enum WidgetTheme {
 
     // MARK: - 字号
+    //
+    // 3.11.0 清理：这里原有 15 个「3.7–3.10 之间被替换掉的版式」留下的字号/间距常量
+    // （小号 28pt 时刻、中号左右两栏的行字号、简报三档字号、顶部地名、地面注脚等），
+    // 全工程已零引用（`BriefFace` 自带 `BriefMetrics`、红石小号自带 `RedstoneMetric`）。
+    // 死常量留着比删掉危险：下次改版会有人以为"这个还在用"而不敢动它。
+    // 同一批还删掉了 `label` / `meta` / `mapName` / `countdown` / `blockGap` 五个 ——
+    // 它们原本服务的是已下线的红石中号版式，3.11.0 中/大号重建后字号全部收在
+    // `WidgetTheme.Redstone`（按 338 宽重新配平），基础档只剩下面 `sunTime` 与 `padding` 在用。
 
-    /// 10pt：小号里最上面的「红石」标签、徽标
-    static let label = Font.system(size: 10, weight: .semibold)
-    /// 11pt：中号里「今日 3 场」这类计数、右半列表
-    static let meta = Font.system(size: 11, weight: .medium)
-    /// 13pt：地图名（小号最多 2 行）
-    static let mapName = Font.system(size: 13, weight: .semibold)
-    /// 12pt：中号右半的场次行
-    static let rowText = Font.system(size: 12, weight: .regular)
-    /// 12pt Medium：场次时刻
-    static let rowTime = Font.system(size: 12, weight: .semibold, design: .monospaced)
-    /// 28pt：小号大字时刻 `19:08`（rounded，任务 1 特征5「rounded」）
-    static let bigTime = Font.system(size: 28, weight: .bold, design: .rounded)
-    /// 22pt：中号左半大字时刻（比小号略小，给右半让位）
-    static let mediumTime = Font.system(size: 24, weight: .bold, design: .rounded)
-    /// 11pt 等宽：倒计时
-    static let countdown = Font.system(size: 11, weight: .semibold, design: .monospaced)
-    /// 13pt：简报正文（前 2 段）
-    static let briefBody = Font.system(size: 12, weight: .regular)
-    /// 11pt：简报页脚（推送状态）
-    static let briefFooter = Font.system(size: 10, weight: .medium)
-    /// 20pt bold：简报首句（句子不是数字，不要 44pt，约 20pt 截断 2 行）
-    static let briefBig = Font.system(size: 20, weight: .bold)
-    /// 11pt semibold：底部两行的地点图标
-    static let placeIcon = Font.system(size: 11, weight: .semibold)
-    /// 11pt：顶部一行次要状态色（如「简报」「周四」）
-    static let statusSecondary = Font.system(size: 11, weight: .medium)
-    /// 12pt semibold：顶部一行地名/地图名
-    static let headerTitle = Font.system(size: 12, weight: .semibold)
-    /// 11pt 等宽：简报顶行的日期（`10月31日`），数字要对齐
-    static let skyDate = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// 11pt 等宽：地面区的日出 / 日落时刻（`06:44` / `17:33`）
     static let sunTime = Font.system(size: 11, weight: .medium, design: .monospaced)
-    /// 10pt：地面区左槽的注脚（`宜 打猎、散步 · 忌 店铺开业`）—— 地平线以下只能放这么小
-    static let skyNote = Font.system(size: 10, weight: .regular)
 
     // MARK: - 间距
 
     /// 组件内容内边距
     static let padding: CGFloat = 12
-    /// 行间距
-    static let rowGap: CGFloat = 3
-    /// 区块之间
-    static let blockGap: CGFloat = 8
-    /// 简报卡左右内边距（比上下多 2pt：顶部胶囊离圆角要留出余量，否则会被裁角）
-    static let skySidePadding: CGFloat = 14
 
-    // MARK: - 天际线几何（与 App 内 `SkyCard` 同一组数）
+    // MARK: - 天际线几何
     //
-    // 这两个比例必须和 `Sources/DesignSystem/SkyCard.swift` 里的 `crestY` / `edgeY` 一致：
-    // 桌面上那条地平线要和 App 内那张卡落在同一个高度，不然"同一套语言"就成了两套。
-
-    /// 地平线弧顶（占卡片高度）
-    static let skyCrestY: CGFloat = 0.62
-    /// 地平线两端（占卡片高度）
-    static let skyEdgeY: CGFloat = 0.74
+    // 3.11.0 清理：这里原有 `skyCrestY` / `skyEdgeY` 两个副本（0.62 / 0.74），靠注释
+    // 说"必须和 SkyCard 一致"。现在两处都读 `Shared/UI/HorizonShape.swift` 的 `HorizonSky` ——
+    // 同一个数只有一处定义，改一次三端（App 卡 / 组件 / 天光页）一起动。
 
     // MARK: - 实时太阳（V3.4：天空里那颗「现在在哪儿」的太阳）
     //
@@ -253,6 +219,60 @@ extension WidgetTheme {
         static let tintedCloudAlphaScale: Double = 0.45
         /// 着色模式下太阳核保留的不透明度（实心圆染白后是一块死白，压到半透明才有"辉光点"层次）
         static let tintedSunAlpha: Double = 0.55
+    }
+}
+
+// MARK: - 红石三档（3.11.0：中号恢复、大号新增）
+//
+// 小号那套字号仍留在 `RedstoneFace.swift` 的 `RedstoneMetric` 里（它按 158pt 见方配平，
+// 一个数字都不改）。这里只放**中号 / 大号**的档位，理由与 `SkyLight` 那段相同：
+// 三个尺寸是三种版式，字号必须一档一档给，**不许用一套字号硬缩放**（DESIGN-RULES §3）。
+//
+// 数字怎么来的：
+//   · medium 338×158：左栏要放 30pt 的时刻（"23:08" 在 30pt 下约 78pt 宽，左栏留 140），
+//     右栏三行 12pt；30pt 是"比小号的 34 略小、但仍是全卡最大字"的折中；
+//   · large 338×354：卡片高度是小号的 2.24 倍，hero 时刻放到 52pt ——
+//     它与下方 4 行排期（每行 16pt）加起来仍留出约 40pt 余量。
+extension WidgetTheme {
+
+    enum Redstone {
+
+        // MARK: 字号
+
+        /// 中号左栏主时刻（30pt rounded bold，与全工程"数字用 rounded"一致）
+        static let mediumTime = Font.system(size: 30, weight: .bold, design: .rounded)
+        /// 大号 hero 主时刻
+        static let largeTime = Font.system(size: 52, weight: .bold, design: .rounded)
+        /// 地图名（中/大号共用 13pt semibold）
+        static let title = Font.system(size: 13, weight: .semibold)
+        /// 右栏标签 / 分区标签（11pt semibold）
+        static let label = Font.system(size: 11, weight: .semibold)
+        /// 右栏数值 / 排期时刻（12pt 等宽：数字要对齐）
+        static let value = Font.system(size: 12, weight: .semibold, design: .monospaced)
+        /// 中/大号的倒计时（13pt 等宽）。
+        ///
+        /// 为什么不用小号那支 11pt：中号主时刻 30pt、大号 52pt，下面紧跟一行 11pt 会被读成
+        /// "注脚"而不是"第二个读数"；13pt 是这套版式里"比标签大一档、又不抢主时刻"的位置。
+        static let countdown = Font.system(size: 13, weight: .semibold, design: .monospaced)
+        /// 排期的日期列（12pt，等宽是为了"今天/明天/周三"三个字宽不一也不抖）
+        static let rowDay = Font.system(size: 12, weight: .semibold)
+        /// 排期的时间串（12pt 等宽）
+        static let rowTimes = Font.system(size: 12, weight: .medium, design: .monospaced)
+        /// 排期的地点（11pt，压一档 —— 一行里最次要的那截）
+        static let rowMap = Font.system(size: 11, weight: .regular)
+
+        // MARK: 间距 / 尺寸
+
+        /// 中号内边距（158pt 高，上下各 14 后内容 130pt）
+        static let mediumPadding: CGFloat = 14
+        /// 中号两栏之间的间距（栏间还有一条 1pt 竖线）
+        static let mediumColumnGap: CGFloat = 12
+        /// 大号内边距
+        static let largePadding: CGFloat = 16
+        /// 大号「本周排期」最多几行（第 5 行会顶到卡片底边）
+        static let largeRowLimit = 4
+        /// 排期里"今天/明天/周三"这一列的宽度（三个汉字 + 呼吸）
+        static let rowDayWidth: CGFloat = 38
     }
 }
 

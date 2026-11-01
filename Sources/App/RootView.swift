@@ -30,6 +30,23 @@ struct RootView: View {
     /// 设置浮层（⌘, 打开，设计文档 §7.1）。iPad 上 ⌘, 是肌肉记忆，
     /// iPhone 无外接键盘时它是死代码 —— 隐藏按钮不占布局、不改变任何像素。
     @State private var showsSettings: Bool = false
+    /// 沉浸式天光页（3.11.0）。**深链只有一条**：小组件深链 `skyapp://sky`
+    /// （天光 / 日弧 / 月相 / 风 四张卡，见 `WidgetDeepLink.sky`）。
+    /// 概览第二张卡的那个入口在 `OverviewView` 自己身上 —— 两处 `SkyRoomView(` 就是全部，
+    /// 不许再挂第三个（DESIGN-RULES §4）。
+    @State private var showsSkyRoom: Bool = false
+    /// 天光页 present 的「排队中」标记（3.11.0 深链重入守卫）。
+    ///
+    /// **为什么需要 pending 守卫**：同一个 `RootView` 上挂了两个 `fullScreenCover`，
+    /// UIKit 同一时刻只允许一次转场。演示/深链在「正在 dismiss 文章详情」的窗口里
+    /// 再次 present 时，UIKit 会**静默丢弃**这次 present —— 不报错、不崩溃、没有动画，
+    /// 而 `showsSkyRoom` 这个状态位**已经被写成 true 了**。此后任何"再置一次 true"
+    /// 都是 no-op（值没变 → SwiftUI 没有 diff、UIKit 也没有新请求），
+    /// 于是天光页就**永远不弹**，用户只能杀进程重来。
+    ///
+    /// 所以「谁在看这个 350ms 窗口、谁负责最后那一次 present」必须显式记下来：
+    /// 窗口内的重复深链一律被吞掉，绝不碰状态位；只有排队中的那个任务去写 true。
+    @State private var skyRoomPending: Bool = false
     /// 配色主题。`Theme.*` 是全局静态 token，SwiftUI 不会替我们追踪它的变化，
     /// 所以切换时靠下面的 `.id(themeId)` 把内容区整块重建一次（滚动位置存在字典里，不受影响）。
     @ObservedObject private var appearance = AppearanceStore.shared
@@ -70,6 +87,13 @@ struct RootView: View {
         // ⌘, 打开的设置浮层（⌘, 的隐藏按钮挂在 `pageContent` 上，见 `settingsShortcut`）
         .sheet(isPresented: $showsSettings) {
             SettingsView()
+        }
+        // 沉浸式天光页（3.11.0）。与文章详情一样走 `fullScreenCover`：
+        // 这一页要独占全屏（天空铺到状态栏与 Home Indicator 之外），浮动 Tab 栏必须让位。
+        // 环境值（`layoutMetrics` / `themeMetrics` / `reduceMotion`）由模态自动继承，
+        // 所以这里不重复注入 —— 只有它真的读 `AppModel` 时才需要 `.environmentObject`。
+        .fullScreenCover(isPresented: $showsSkyRoom) {
+            SkyRoomView()
         }
         .task {
             await model.loadOverview()
@@ -278,12 +302,15 @@ struct RootView: View {
 
     // MARK: - 深链
 
-    /// 处理小组件深链：解析 host → 切 Tab。
+    /// 处理小组件深链：解析 host → 切 Tab / 打开天光页。
     ///
     /// 走 `tabSelection` 这个 Binding 而**不是**直接写 `tab = next`：
     /// 触觉反馈与 `withAnimation(Motion.tab)` 都在它的 setter 里，绕过去就会出现
     /// "从桌面点进来，页面是硬切过去的、没有过渡"的割裂感 —— 同一个动作两套体验，
     /// 而且以后调切换动画会有一个人被漏掉。
+    ///
+    /// `skyapp://sky` 是**唯一**一个不落在 Tab 上的深链（3.11.0）：它全屏呈现 `SkyRoomView`，
+    /// 与 Tab 选择互不影响 —— 关掉天光页回到的仍然是进来之前那个 Tab。
     ///
     /// 认不出的 host 一律忽略（不崩、不跳首页）：宁可不响应，也不要因为一个手打错的
     /// URL 把用户从当前页面踢走。
@@ -295,6 +322,59 @@ struct RootView: View {
         let host = rawHost
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .lowercased()
+
+        // 天光页：先把可能挂着的文章详情收起来（否则它盖在上面，用户看不到天光页）
+        if AppDeepLink.isSky(host) {
+            // 守卫 A（入口）：天光页已经在呈现，或者正在呈现的路上 —— 直接放弃本次。
+            //
+            // `showsSkyRoom` 是真的时候再置一次 true 是纯 no-op（值没变），不会带来
+            // 第二次 present；但它也说明"上一次的意图已经被满足了"。这里 return 而不是
+            // 继续往下走，是为了不让一次多余的深链把下面 `openedArticle = nil` 的
+            // dismiss 也一起触发（用户明明在看天光页，后面的文章详情却在偷偷关掉）。
+            guard !showsSkyRoom else { return }
+
+            // 守卫 B（入口）：已经有一轮 present 排在 350ms 窗口里 —— 这一次直接放弃。
+            //
+            // 不能放行：此刻 `openedArticle` 早就是 nil 了，会掉进下面的 else 立刻
+            // `showsSkyRoom = true`，正好撞上正在播的 dismiss 动画 → 被 UIKit 丢掉，
+            // 状态位却留在 true；350ms 后排队任务再写一次 true 已是 no-op，
+            // 整条链路就卡死在「永远不弹」。排队中的那一次会负责把天光页弹出来，
+            // 重复触发不需要也不应该再插一脚。
+            guard !skyRoomPending else { return }
+
+            guard openedArticle != nil else {
+                showsSkyRoom = true
+                return
+            }
+            // 文章详情正开着：**不能**在同一个 update 里"收起详情 + 立刻 present 天光页"。
+            // 两个 fullScreenCover（`$openedArticle` 与 `$showsSkyRoom`）挂在**同一个** RootView
+            // 上，详情页还在播 dismiss 动画时立刻 present 第二个，UIKit 会判定
+            // 「presenting in progress」并把这次 present 丢掉 —— 表现是"点了小组件深链没反应"，
+            // 再点一次又好了（那份动画此时已经播完），是最难查的一类时序 bug。
+            // 所以：先置 nil 触发 dismiss，把 present 推到下一个 runloop 并等满系统 dismiss
+            // 动画（iOS 全屏 cover 约 350ms）再置 true。
+            skyRoomPending = true
+            openedArticle = nil
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                // 守卫 C（出队时）：真正 present 之前**再判一次**文章详情是否关干净。
+                //
+                // 350ms 只是经验值：低端机 / 系统繁忙时 dismiss 动画可能还没播完，
+                // 这时硬 present 依旧会被 UIKit 静默丢弃，而状态位一旦写成 true
+                // 就再也没机会重来（值不变 = no-op）。所以这里宁可**放弃本次**
+                // （清掉 pending，用户再点一下小组件就能正常弹），也不要把状态位写脏、
+                // 连累后续所有深链。同理，`openedArticle` 非 nil 也可能是这 350ms 里
+                // 用户自己又点开了一篇文章 —— 那就更该让位给用户当前的页面。
+                guard openedArticle == nil else {
+                    skyRoomPending = false
+                    return
+                }
+                showsSkyRoom = true
+                skyRoomPending = false
+            }
+            return
+        }
+
         guard let target = AppDeepLink.tab(for: host) else { return }
 
         // 文章详情是全屏覆盖，盖在 Tab 栏之上 —— 不收起它，切 Tab 是"看不到"的
@@ -308,7 +388,7 @@ struct RootView: View {
 
 // MARK: - 深链契约（App 侧）
 
-/// App 侧对小组件深链的**唯一**认知：scheme + host → Tab。
+/// App 侧对小组件深链的**唯一**认知：scheme + host → Tab / 全屏页。
 ///
 /// 为什么不复用 Widget 侧的 `WidgetDeepLink`：那个类型属于 Widget target，
 /// 主 App 的 sources 明确 `excludes: Widget`（见 project.yml 的 R1 —— 否则两个 @main
@@ -319,6 +399,15 @@ private enum AppDeepLink {
 
     /// 与 `Info.plist` 的 `CFBundleURLSchemes`、`WidgetDeepLink.scheme` 一致
     static let scheme = "skyapp"
+
+    /// 天光页（3.11.0）。**不是 Tab**，走 `RootView.showsSkyRoom` 全屏呈现。
+    /// 与 `WidgetDeepLink.skyHost` 逐字一致：天光 / 日弧 / 月相 / 风 四张卡都指向它。
+    static let skyHost = "sky"
+
+    /// 这个 host 是不是"打开天光页"
+    static func isSky(_ host: String) -> Bool {
+        return host == skyHost
+    }
 
     /// host → 落在哪个 Tab。认不出返回 nil（调用方整条忽略）
     static func tab(for host: String) -> AppTab? {

@@ -74,21 +74,6 @@ private struct ShimmerBand: View {
 
 // MARK: - 按页面结构预置的骨架（尺寸与真实内容误差 <2pt，收起不跳动）
 
-/// 首页：日期两条短块 + 状态卡 + 简报卡 + 两张封面大卡
-struct SkeletonHome: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.cardGap) {
-            SkeletonBlock(width: 90, height: 12)
-            SkeletonBlock(width: 180, height: 34)
-            SkeletonBlock(height: 132, cornerRadius: Radius.card)
-            SkeletonBlock(height: 168, cornerRadius: Radius.card)
-            ForEach(0..<2, id: \.self) { _ in
-                SkeletonBlock(height: 200, cornerRadius: Radius.card)
-            }
-        }
-    }
-}
-
 /// 列表：5 张 116pt 卡（含 56×56 圆角缩略块）
 struct SkeletonList: View {
     var count: Int = 5

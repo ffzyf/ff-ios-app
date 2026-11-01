@@ -25,6 +25,10 @@ struct PageBackground: View {
             if glow {
                 lightLayer
             }
+            // 3.11.0：氛围层（极慢氛围漂移）。**排在滚动光影之后** ——
+            // 它比光影更"远"，压在下面只能被光影盖住一半，反过来就没有层次可言。
+            // 它不参与滚动（不读 `scrollLight`），所以 `ScrollLightLayer` 的语义一个字没变。
+            ambientDrift
             footerShadow
         }
         .ignoresSafeArea()
@@ -60,6 +64,14 @@ struct PageBackground: View {
         } else {
             ScrollLightLayer(progress: 0, pull: 0)
         }
+    }
+
+    /// 第 3 层（3.11.0）：氛围漂移。
+    ///
+    /// 用户原话："现在的所有主题背景都很统一感觉，我不是让你设计动态效果了吗但是也别太动态"。
+    /// 所以这一层只做一件事：让背景在**几十秒的尺度上**呼吸一下，不做任何看得出来的位移。
+    private var ambientDrift: some View {
+        AmbientDriftLayer()
     }
 
     /// 第 3 层：底部压影。
@@ -210,5 +222,84 @@ private struct ScrollLightLayer: View {
             Theme.lime.opacity(baseAlpha),
             Theme.lime.opacity(0)
         ])
+    }
+}
+
+// MARK: - 氛围漂移（3.11.0）
+
+/// 极慢氛围层：两团**极淡**的色斑沿对角线来回漂移，单程 60s。
+///
+/// ## 判据（写在这里，验收时逐条比）
+///
+/// **静止盯着看 10 秒，不应该注意到它在动**；但截图对比能看出层次，
+/// 来回切两个页面时能感觉到"背景是活的"。三条数字就是为了这个判据定的：
+///
+/// | 参数 | 值 | 为什么 |
+/// |---|---|---|
+/// | 单团不透明度 | ≤0.05 | 0.07 以上在纯深底上就能看出"一块雾在挪" |
+/// | 单程时长 | 60s（铁律下限 40s） | 60s 走 18pt ≈ 0.3pt/s，肉眼无从察觉 |
+/// | 单程位移 | ≤18pt | 相对 852pt 屏高只有 2%，是"呼吸"不是"平移" |
+///
+/// ## 三条纪律
+///
+/// 1. **只动 `offset`**：颜色、半径、圆心全固定，不参与任何逐帧重算；
+/// 2. **不读 `scrollLight`**：它与滚动完全解耦（`ScrollLightLayer` 的语义因此一字未变）；
+/// 3. **`reduceMotion` 下完全不启动**：连初始的偏移都不给，图层退化成一张静态柔光。
+///
+/// 为什么不做成第三束"光"：光是方向的（有明暗中心），氛围层是**没有方向**的 ——
+/// 它得看起来像背景本身在缓慢地变化，而不是又打了一盏灯。
+private struct AmbientDriftLayer: View {
+
+    /// 前庭敏感用户：整层退化为静态
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// 是否已漂到另一头（`false` = 起点）
+    @State private var drifted: Bool = false
+
+    /// 单团直径（pt）。520 约等于 61% 屏高：大到看不出"这是一个圆"，
+    /// 只剩中心到边缘的渐变 —— 那才是"背景在变"的观感。
+    private static let blobDiameter: CGFloat = 520
+    /// 单团峰值不透明度（判据表里的 0.05）
+    private static let blobAlpha: Double = 0.05
+    /// 单程时长（秒）
+    private static let tripDuration: Double = 60
+
+    var body: some View {
+        ZStack {
+            blob(Theme.lime)
+                .offset(x: (drifted ? 18 : -18) - 96,
+                        y: (drifted ? 14 : -14) - 210)
+            blob(Theme.limeBright)
+                .offset(x: (drifted ? -16 : 16) + 104,
+                        y: (drifted ? -12 : 12) + 240)
+        }
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: Self.tripDuration).repeatForever(autoreverses: true)) {
+                drifted = true
+            }
+        }
+        // 退场复位：`repeatForever` 的动画挂在 `drifted` 这个 `@State` 上，而 `@State` 会在
+        // 视图被移出层级后**继续持有**它的值（包含退场前已为 true 的那一份）。二次进场时
+        // `withAnimation { drifted = true }` 就是"true → true"，SwiftUI 认为没有变化，
+        // 于是整层永久静止 —— 现象是"第二次进这个页面，氛围层不漂了"，且极难复现。
+        // 这里显式复位：退场即回到起点，每次进场都是一次全新的 0 → 1 动画。
+        .onDisappear {
+            drifted = false
+        }
+    }
+
+    /// 一团柔光：中心 0.05 → 边缘 0 的径向渐变，没有任何描边与模糊
+    private func blob(_ color: Color) -> some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [color.opacity(Self.blobAlpha), color.opacity(0)],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: Self.blobDiameter / 2
+                )
+            )
+            .frame(width: Self.blobDiameter, height: Self.blobDiameter)
     }
 }

@@ -67,9 +67,6 @@ struct LayoutMetrics: Equatable {
     /// 正文列宽（§3.8 阅读行宽 60–75 字符原则）
     var readingWidth: CGFloat { min(effectiveWidth, Layout.readingMaxWidth) }
 
-    /// 表单列宽（§3.7 设置行"标题 …… 值"不折行的上限）
-    var formWidth: CGFloat { min(effectiveWidth, Layout.formMaxWidth) }
-
     // MARK: - 画布与版式档（2026-10-31 iPad 版式重做，设计文档 §3）
 
     /// 画布宽度 = **内容区**最多多宽（不含页边距 20×2）。

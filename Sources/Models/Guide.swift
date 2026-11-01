@@ -111,12 +111,6 @@ struct GuideItem: Codable, Sendable, Equatable {
         return nil
     }
 
-    /// 宽高比兜底：服务端算不出就给 4:3，绝不是 0（0 会让 `aspectRatio` 布局塌掉）
-    var displayAspect: Double {
-        guard let aspect = aspect, aspect.isFinite, aspect > 0.1 else { return 4.0 / 3.0 }
-        return aspect
-    }
-
     private enum CodingKeys: String, CodingKey {
         case type
         case url

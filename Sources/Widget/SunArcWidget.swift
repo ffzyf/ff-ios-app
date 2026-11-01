@@ -156,7 +156,8 @@ struct SunArcFace: View {
                 // accessory 的背景由系统提供，这里给透明底（iOS 17 accessory 同样要求
                 // containerBackground，给 clear 即"融入锁屏"）
                 .containerBackground(for: .widget) { Color.clear }
-                .widgetURL(WidgetDeepLink.brief)
+                // 日弧画的是"此刻的太阳"，点开就进沉浸式天光页（`skyapp://sky`）
+                .widgetURL(WidgetDeepLink.sky)
         } else {
             systemContent
                 .containerBackground(for: .widget) {
@@ -164,7 +165,7 @@ struct SunArcFace: View {
                                    startPoint: .top,
                                    endPoint: .bottom)
                 }
-                .widgetURL(WidgetDeepLink.brief)
+                .widgetURL(WidgetDeepLink.sky)
         }
     }
 

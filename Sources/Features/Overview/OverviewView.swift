@@ -36,6 +36,11 @@ struct OverviewView: View {
     private let scrollPosition: Binding<ScrollPosition>
 
     @State private var showsSettings: Bool = false
+    /// 沉浸式天光页（3.11.0）。第二张卡（`TodayBriefTrackCard`）的「今日」是它**唯一**的 App 内入口。
+    ///
+    /// 为什么由本页持有而不是甩给 `RootView`：弹出状态跟着"谁发起"走，
+    /// `RootView` 只需要管深链那一条（DESIGN-RULES §4：入口只有两处）。
+    @State private var showsSkyRoom: Bool = false
 
     /// 公告横幅的数据源（3.9.0）。单例直读 + ObservedObject：配置到达时横幅原地出现，
     /// 不需要整页刷新。页面不发请求 —— 拉取由 `FFWangApp` 的 task 统一驱动（§7.3 同一条纪律）。
@@ -103,6 +108,10 @@ struct OverviewView: View {
         .sheet(isPresented: $showsSettings) {
             SettingsView()
         }
+        // 天光页（3.11.0）：全屏呈现，环境值（layoutMetrics / reduceMotion）由模态继承
+        .fullScreenCover(isPresented: $showsSkyRoom) {
+            SkyRoomView()
+        }
     }
 
     // MARK: - 公告横幅
@@ -158,7 +167,7 @@ struct OverviewView: View {
                 RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
 
                 TodayBriefTrackCard(snapshot: model.todayBrief) {
-                    openBrief()
+                    openSkyRoom()
                 }
             }
         }
@@ -171,7 +180,7 @@ struct OverviewView: View {
     private var overviewSideColumn: some View {
         VStack(alignment: .leading, spacing: Spacing.cardGap) {
             TodayBriefTrackCard(snapshot: model.todayBrief) {
-                openBrief()
+                openSkyRoom()
             }
             .frame(maxHeight: .infinity)
 
@@ -353,6 +362,14 @@ struct OverviewView: View {
         withAnimation(Motion.tab) {
             selectedTab = .brief
         }
+    }
+
+    /// 天光卡点击 → 全屏打开天光页（3.11.0）。
+    ///
+    /// 不走 `withAnimation(Motion.tab)`：这不是切 Tab，是一次模态呈现 ——
+    /// 给它套 Tab 的弹簧只会让"弹出"多一层与本页无关的位移。
+    private func openSkyRoom() {
+        showsSkyRoom = true
     }
 
     /// rail 卡 / 「全部文章」→ 切到文章 Tab。
