@@ -275,16 +275,16 @@ enum SkyRoomMetrics {
         /// 谷底三层都在 0.61H 左右，全部被地面吃掉，所以看不见"山的底边"。
         static let layers: [RidgeSpec] = [
             // 远山：宽、高、最淡（混入最多的天空色）
-            RidgeSpec(crests: 3.4, amplitude: 0.40, widthRatio: 1.26,
-                      centerX: 0.50, heightRatio: 0.50,
+            RidgeSpec(crests: 2.6, amplitude: 0.30, widthRatio: 1.26,
+                      centerX: 0.50, heightRatio: 0.67,
                       haze: 0.58, density: 0.30, parallaxDepth: 0.15, seed: 0x11_0001),
             // 中山：错开半个波长，峰顶比远山矮一档
-            RidgeSpec(crests: 4.2, amplitude: 0.50, widthRatio: 1.12,
-                      centerX: 0.42, heightRatio: 0.32,
+            RidgeSpec(crests: 3.2, amplitude: 0.34, widthRatio: 1.12,
+                      centerX: 0.42, heightRatio: 0.47,
                       haze: 0.36, density: 0.55, parallaxDepth: 0.25, seed: 0x22_0002),
             // 近山：最窄、最实、峰最低
-            RidgeSpec(crests: 5.2, amplitude: 0.64, widthRatio: 0.98,
-                      centerX: 0.58, heightRatio: 0.22,
+            RidgeSpec(crests: 3.8, amplitude: 0.42, widthRatio: 0.98,
+                      centerX: 0.58, heightRatio: 0.29,
                       haze: 0.14, density: 0.85, parallaxDepth: 0.40, seed: 0x33_0003)
         ]
         /// 曲线采样点数（72 段足够平滑，又不会在每帧重建时变贵）

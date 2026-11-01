@@ -629,11 +629,13 @@ struct SkyRoomView: View {
         .allowsHitTesting(false)
     }
 
-    /// 云的颜色：亮天用 `edge`（近白），暗天用 `ink`（与天光小组件同一条规则）
+    /// 云的颜色：亮天用 `edge`（近白）；暗天用「天顶色往白里混 30%」——
+    /// 夜里云是"比天稍亮的一层灰"，直接给纯白会在深天上糊成一团雾霾
+    /// （3.15.0 第一次截图里那几坨灰白雾就是这条）。
     private func cloudTint(sky: Theme.SkyColors, phase: SkyPhase) -> Color {
         switch phase {
         case .night, .blueDawn, .blueDusk:
-            return sky.ink
+            return Color.blend(sky.top, sky.ink, 0.30)
         case .sunrise, .golden, .day, .sunset:
             return sky.edge
         }
@@ -1017,10 +1019,15 @@ private struct SkyRoomPreviewScene {
               let weather = try? JSONDecoder().decode(WeatherNow.self, from: data) else {
             return nil
         }
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        // 时区必须钉北京：CI 模拟器跑在 UTC，`Calendar.current` 会把 17:25 算成
+        // "北京次日 01:25" —— 3.15.0 第一次截图就是这样截出一片夜空。
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var components = calendar.dateComponents([.year, .month, .day], from: Date())
+        // 17:05 = 日落前一刻钟，稳定落在「日落」档（日落前 70 分钟起算）
         components.hour = 17
-        components.minute = 25
-        let moment = Calendar.current.date(from: components) ?? Date()
+        components.minute = 5
+        let moment = calendar.date(from: components) ?? Date()
         return SkyRoomPreviewScene(weather: weather, moment: moment)
     }
 }
