@@ -80,7 +80,8 @@ struct SkyLightEntry: TimelineEntry {
                      weather: WeatherNow? = nil,
                      sunTimes: SunTimesOverride? = nil) -> SkyLightEntry {
         let phase = SunClock.phase(at: date)
-        var times = sunTimes(for: date, phase: phase)
+        // 显式写类型名：参数 sunTimes 与同名静态方法重名，局部名会遮蔽方法名。
+        var times = SkyLightEntry.sunTimes(for: date, phase: phase)
         // 实际值只驱动**同一天**的帧：这一轮 timeline 铺 24 小时，明天的帧拿不到
         // 天气接口的值（上游只给今天），让它们继续用 SunClock —— 跨天时刻略偏 ±3 分钟，
         // 但绝不会出现"用今天的日落顶替明天的"这种张冠李戴。
