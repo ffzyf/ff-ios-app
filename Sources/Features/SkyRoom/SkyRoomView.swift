@@ -1228,9 +1228,11 @@ private struct SkyRoomRidge: Shape {
         points.reserveCapacity(steps + 1)
         for index in 0...steps {
             let t = Double(index) / Double(steps)
-            let wave = sin(2 * .pi * crests * t + phase1) * 0.55
-                + sin(2 * .pi * crests * 1.7 * t + phase2) * 0.30
-                + sin(2 * .pi * crests * 2.6 * t + phase3) * 0.15
+            // 权重 0.68 / 0.24 / 0.08：主频主导，高频只负责"棱角"。
+            // 3.15.0 早期是 0.55 / 0.30 / 0.15，2.6 倍高频把山脊剁成一排尖角。
+            let wave = sin(2 * .pi * crests * t + phase1) * 0.68
+                + sin(2 * .pi * crests * 1.7 * t + phase2) * 0.24
+                + sin(2 * .pi * crests * 2.6 * t + phase3) * 0.08
             let shape = CGFloat(min(max((wave + 1) / 2, 0), 1))
             let y = rect.maxY - rect.height * (0.55 + 0.45 * shape)
             points.append(CGPoint(x: rect.minX + rect.width * CGFloat(t), y: y))

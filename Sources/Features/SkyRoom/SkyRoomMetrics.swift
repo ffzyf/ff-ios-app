@@ -164,9 +164,9 @@ enum SkyRoomMetrics {
         // 现在是三段实色：地平线处的暖大地 → 中段的大地本色 → 底部再压深一档。
 
         /// 弧顶处混入大地的比例（0 = 纯天色，1 = 纯大地）。0.22 = 地平线上还留着夕阳的余温
-        static let crestMix: Double = 0.22
+        static let crestMix: Double = 0.34
         /// 过渡带结束的位置（相对地面自身高度）
-        static let midStop: CGFloat = 0.30
+        static let midStop: CGFloat = 0.18
         /// 过渡带末端混入大地的比例
         static let midMix: Double = 0.82
         /// 最底端再压深一档的比例（让卡片区有一个"安静的底"）
