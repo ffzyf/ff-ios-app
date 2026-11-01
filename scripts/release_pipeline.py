@@ -63,6 +63,21 @@ def api(path, method='GET', body=None, timeout=60):
         return e.code, e.read().decode()[:400]
 
 
+def guard_preview_flag():
+    """拒绝带「截图模式标记」发版。
+
+    `Resources/preview-skyroom.json` 是给 CI 模拟器截图用的：
+    Debug 构建立刻 App 会自动跳进天光页、并注入一份样例天气。
+    它一旦跟着 Release 包发出去，所有用户打开 App 都会被弹进天光页看到假数据。
+    3.15.0 翻过一次车（没先确认就发版），这道闸门就是为了不再犯。
+    """
+    flag = os.path.join(ROOT, 'Resources', 'preview-skyroom.json')
+    if os.path.exists(flag):
+        sys.exit('拒绝发版：Resources/preview-skyroom.json 还在仓库里。\n'
+                 '那是截图模式标记，会带进正式包（App 启动自动跳天光页 + 注入样例天气）。\n'
+                 '先删除它并重新 push，再发版。')
+
+
 def local_version():
     txt = open(os.path.join(ROOT, 'project.yml')).read()
     ver = re.search(r'MARKETING_VERSION:\s*"([^"]+)"', txt).group(1)
@@ -190,6 +205,7 @@ def verify_ipa(ipa, expect_ver, expect_build):
 
 
 def main():
+    guard_preview_flag()
     global TOKEN, RUN_AFTER
     ap = argparse.ArgumentParser()
     ap.add_argument('--notes', required=True, help='更新说明 txt 路径')
