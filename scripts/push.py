@@ -42,7 +42,9 @@ st, commit = api('/repos/%s/git/commits/%s' % (REPO, head))
 base_tree = commit['tree']['sha']
 
 st, t = api('/repos/%s/git/trees/%s?recursive=1' % (REPO, head))
-remote = {e['path']: e['sha'] for e in t['tree'] if e['type'] == 'blob' if not e['path'].startswith(SKIP_PREFIXES)}
+# remote 侧只挡 .github/（令牌推不了它，也不许删除逻辑误删它）；
+# _release/、build/ 不挡 —— 它们若出现在远端（3.14.0 事故），要被下面的删除逻辑清掉。
+remote = {e['path']: e['sha'] for e in t['tree'] if e['type'] == 'blob' if not e['path'].startswith('.github/')}
 
 local = {}
 for root, dirs, files in os.walk(ROOT):
