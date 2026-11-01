@@ -1,29 +1,30 @@
 import SwiftUI
 
-/// 沉浸式「天光室」——3.13.0 按《天光页设计调研报告》重做。
+/// 沉浸式「天光室」——3.14.0 按《iOS 端设计报告 v3 定版》（用户提供，视觉基准
+/// `sky-weather.html`）完成第二轮校准。3.13.0 已解决"温度藏进手势"的反模式
+/// （标准滚动 + 温度常驻），本版把**质感**对齐报告规格：
 ///
-/// ## 3.12.0 → 3.13.0 的关键变化（用户对 3.12.0 的原话："想看温度只能往下滑，一把手拿开就返回了"）
+/// | 报告 v3 规格 | 本版落地 |
+/// |---|---|
+/// | 大温度 104pt / UltraLight | `TextStyle.heroTemperature` 104pt `.ultraLight` rounded |
+/// | 顶栏初始透明，滚动 >30pt 切毛玻璃 | `fixedTopBar` 固定层 + `TopBarGlass`（滚动态 `.card` 玻璃） |
+/// | 视差：太阳 0.15 / 山 0.15·0.25·0.40 | `scene(parallaxY:)` 分层下沉，钳制 320pt 不露底 |
+/// | hero 减速上滑 + 缩小淡出 | 净速度 0.55x、scale 1→0.70、160pt 内淡尽 |
+/// | 太阳大核心 + 大半径辉光 | 核心 16pt、内晕 96、外晕 340（pt 折算，保各档天色层次） |
+/// | 「上滑查看详情」bob 提示 | 2s ±4pt 呼吸，reduceMotion 不启动 |
+/// | 湿度/能见度没数据不渲染空壳 | 接口无此字段，卡片区维持四张（§六铁律） |
 ///
-/// | | 3.12.0（差评版） | 3.13.0（本版） |
-/// |---|---|---|
-/// | 温度 | 藏在"下拉才浮出"的面板里，松手即弹回 | **84pt 大字常驻首屏**，进入页面第 0 秒可读 |
-/// | 看详情 | 拖拽三档吸附（snap-back 反模式：内容只在拖动期间可见） | **标准纵向滚动**，卡片松手后留在原地 |
-/// | 首屏 | 大片空白 | 温度 + 现象 + 今日高低温 + 日出日落 |
-/// | 详情 | 一张面板三行文字 | 四张玻璃卡（天光进度 / 气温范围 / 风 / 云量） |
-///
-/// 调研依据：Apple 天气、Pixel 天气、墨迹、彩云**无一例外**都是"温度大字常驻首屏 +
-/// 详情走标准滚动"，没有一家把核心数据藏在拖拽手势后面。
+/// 报告的色板是"黄昏专用"；本工程已有七档天色 token（`Theme.sky`），
+/// 所以落的是报告的**结构与交互**，颜色仍逐字走各档 token —— 夜里不会出现橙天空。
 ///
 /// ## 页面结构
 ///
 /// ```
-/// ZStack {
-///   ① 天空场景（固定背景：天幕 / 星 / 云 / 太阳 / 山脊 / 地面，地平线恒在 0.58）
-///        └ 滚动反馈：压暗 ≤0.45 + 微放大 ≤1.07（只动 scaleEffect / opacity，合成层变换）
-///   ② ScrollView {
-///        hero（高 62%）：顶部状态行 / 温度大字 / 现象 / 高低温 / 日出日落 / 滚动提示
-///        卡片流：天光进度 → 气温范围 →（风 | 云量）
-///      }
+/// ZStack(alignment: .top) {
+///   ① 天空场景（天幕 / 星 / 云 / 太阳 / 山脊 / 地面，滚动时分层下沉）
+///        └ 滚动反馈：压暗 ≤0.45（只动 opacity，合成层变换）
+///   ② ScrollView { hero（高 62%，减速淡出）→ 卡片流 }
+///   ③ 固定顶栏（滚过 30pt 切毛玻璃）
 /// }
 /// ```
 ///
@@ -60,6 +61,8 @@ struct SkyRoomView: View {
     @State private var breathe: Bool = false
     /// 云漂移（40s，单程 6pt × 距离系数）
     @State private var drifting: Bool = false
+    /// 滚动提示的 bob 呼吸（2s，±4pt；报告 §三，reduceMotion 不启动）
+    @State private var hintBob: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -102,12 +105,10 @@ struct SkyRoomView: View {
         let sky = Theme.sky(phase)
         let progress = scrollProgress(height: frame.height)
 
-        return ZStack {
-            // ① 天空场景（六层：天幕 → 星 → 云 → 太阳 → 山脊 → 地面）
-            scene(sky: sky, phase: phase, frame: frame, now: now)
-                // 微放大：像把海报往眼前推一点。只动 scaleEffect（合成层变换），
-                // 场景本体一个参数都不改，`SkyRoomDome` 的 Equatable 照常整块跳过重建。
-                .scaleEffect(1 + SkyRoomMetrics.Scroll.zoomScale * progress)
+        return ZStack(alignment: .top) {
+            // ① 天空场景（六层：天幕 → 星 → 云 → 太阳 → 山脊 → 地面，
+            //    太阳 / 云 / 山随滚动分层下沉——报告 §三 的视差）
+            scene(sky: sky, phase: phase, frame: frame, now: now, parallaxY: parallaxY)
                 // 压暗：滚过半屏后天空退成"安静的背景板"，卡片可读性随之上升。
                 // 压暗不是动效（reduceMotion 用户也需要可读性），所以它不受铁律 4 管辖。
                 .overlay(
@@ -118,6 +119,8 @@ struct SkyRoomView: View {
                 )
             // ② 滚动内容（hero + 卡片流）
             scrollContent(sky: sky, frame: frame, insets: insets, now: now)
+            // ③ 固定顶栏：初始透明，滚过 30pt 切毛玻璃（报告 §三）
+            fixedTopBar(sky: sky, frame: frame, insets: insets, now: now)
         }
         .frame(width: size.width, height: size.height)
     }
@@ -126,6 +129,13 @@ struct SkyRoomView: View {
     private func scrollProgress(height: CGFloat) -> CGFloat {
         let span = max(height * SkyRoomMetrics.Scroll.travel, 1)
         return min(max(scrollOffset / span, 0), 1)
+    }
+
+    /// 视差行程：滚过的距离被钳制在 `parallaxClamp` 内 —— 远处的山与太阳
+    /// 沉到这里就"停"，不会把地平线一路沉出屏幕（HTML 版用 `-10%` 余量兜底，
+    /// 原生版钳制更稳：不露底、不越界）。
+    private var parallaxY: CGFloat {
+        return min(scrollOffset, SkyRoomMetrics.Scroll.parallaxClamp)
     }
 
     // MARK: - 滚动内容
@@ -154,23 +164,32 @@ struct SkyRoomView: View {
     // MARK: - hero（首屏：温度大字常驻）
 
     /// hero 区高 62%（地平线在 58%）——卡片流恰好从地平线略下方开始，
-    /// 读起来是"信息从大地里长出来"。
+    /// 读起来是"信息从大地里长出来"。顶栏已上提到固定层（报告 §三），
+    /// hero 内容从顶栏高度之下开始排。
     private func hero(sky: Theme.SkyColors,
                       frame: SkyRoomMetrics.Frame,
                       insets: EdgeInsets,
                       now: Date) -> some View {
-        VStack(spacing: 0) {
-            topBar(sky: sky, frame: frame, now: now)
-                .padding(.top, insets.top + 10)
+        // 报告 §三：fade = y/160；温度大字 scale = 1 - fade*0.3，opacity = 1 - fade*1.25
+        let fade = min(max(scrollOffset / SkyRoomMetrics.Scroll.heroFadeTravel, 0), 1)
+        let gone = max(0, 1 - fade * 1.25)
+
+        return VStack(spacing: 0) {
             Spacer(minLength: 0)
+            // 温度大字的减速视差：净速度 0.55x，像贴在天上而不是印在纸上
             heroReadout(sky: sky, frame: frame)
+                .scaleEffect(1 - SkyRoomMetrics.Scroll.heroShrink * fade)
+                .opacity(gone)
+                .offset(y: scrollOffset * SkyRoomMetrics.Scroll.heroLag)
             Spacer(minLength: 0)
             VStack(spacing: 12) {
                 sunTimesRow(sky: sky, frame: frame, now: now)
                 scrollHint(sky: sky, frame: frame)
             }
+            .opacity(1 - fade)
             .padding(.bottom, 10)
         }
+        .padding(.top, insets.top + SkyRoomMetrics.Page.topbarReserve)
         .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : 0)
         .frame(height: frame.heroHeight)
         .frame(width: frame.stageWidth)
@@ -258,6 +277,7 @@ struct SkyRoomView: View {
     }
 
     /// 滚动提示：只在第一屏出现，滚过 1/4 屏就淡出（opacity 只减不增，不闪）。
+    /// bob 动画（±4pt / 2s）是报告 §三 的「上滑查看详情」呼吸提示，reduceMotion 不启动。
     private func scrollHint(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame) -> some View {
         let fade = 1 - min(max(scrollOffset / (frame.height * 0.25), 0), 1)
         return VStack(spacing: 2) {
@@ -268,8 +288,25 @@ struct SkyRoomView: View {
         }
         .foregroundStyle(sky.inkDim)
         .opacity(fade)
+        .offset(y: hintBobOffset)
         .frame(maxWidth: .infinity)
         .accessibilityHidden(true)
+    }
+
+    /// 顶栏固定层的滚动反馈：滚过 `topbarThreshold` 切毛玻璃（报告 §三：复刻
+    /// UIVisualEffectView 的"滚起来才知道自己在哪"）。动画只包这 0.25s 的材质切换。
+    private func fixedTopBar(sky: Theme.SkyColors,
+                             frame: SkyRoomMetrics.Frame,
+                             insets: EdgeInsets,
+                             now: Date) -> some View {
+        let isScrolled = scrollOffset > SkyRoomMetrics.Scroll.topbarThreshold
+        return topBar(sky: sky, frame: frame, now: now)
+            .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : SkyRoomMetrics.Page.compactInset)
+            .padding(.vertical, 6)
+            .modifier(TopBarGlass(active: isScrolled))
+            .padding(.top, insets.top + 4)
+            .animation(.easeOut(duration: 0.25), value: isScrolled)
+            .frame(maxWidth: .infinity)
     }
 
     /// 顶部一行（关闭按钮 + 阶段名 + 倒计时）—— 3.12.0 原样保留。
@@ -361,21 +398,24 @@ struct SkyRoomView: View {
     /// 太阳排在**山脊之前**：日落时太阳会被山挡住一半，那是日落该有的读法。
     /// 它同时仍在地面之前 —— 落到地平线以下的部分被地面盖住，不需要任何 mask。
     ///
-    /// 3.13.0 起地平线是**固定值**（不再随拖动换档），所以 3.12.0 那些
-    /// `offset(y: -lift × 系数)` 的视差层全部回归静止 —— 视差在滚动版里
-    /// 由「背景压暗 + 微放大」这一对合成层反馈承担。
+    /// 3.14.0 起接入**滚动视差**（报告 §三）：滚动时太阳 / 云 / 星 / 山按各自深度
+    /// 向下沉——越近的层沉得越快，天"退到后面去"，纵深就是这样来的。
+    /// 全部走 `offset`（合成层变换），天幕本体零重建；`parallaxY` 已钳制，
+    /// 山沉进地面、太阳沉进地平线，都不露底。
     private func scene(sky: Theme.SkyColors,
                        phase: SkyPhase,
                        frame: SkyRoomMetrics.Frame,
-                       now: Date) -> some View {
+                       now: Date,
+                       parallaxY: CGFloat) -> some View {
         ZStack {
-            // ① 天幕（网格 / 线性兜底 + 宽档暗角）
+            // ① 天幕（网格 / 线性兜底 + 宽档暗角）—— 天幕不动（它是"无限远"）
             skyBase(sky: sky, phase: phase, frame: frame, now: now)
-            // ② 星点 / 云 / 三层山脊
-            parallax(sky: sky, phase: phase, frame: frame)
-            // ③ 太阳：三层结构，画在山脊与地面之前
+            // ② 星点 / 云 / 三层山脊（各带视差）
+            parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY)
+            // ③ 太阳：三层结构，画在山脊与地面之前，随滚动沉向地平线
             sun(sky: sky, phase: phase, frame: frame, now: now)
-            // ④ 地面 + 地平线光带 + 暖色辉光 + 竖纹理
+                .offset(y: parallaxY * SkyRoomMetrics.Scroll.sunDepth)
+            // ④ 地面 + 地平线光带 + 暖色辉光 + 竖纹理（地面不沉：它是"脚下"）
             ground(sky: sky, phase: phase, frame: frame)
         }
         .frame(width: frame.width, height: frame.height)
@@ -445,19 +485,25 @@ struct SkyRoomView: View {
 
     private func parallax(sky: Theme.SkyColors,
                           phase: SkyPhase,
-                          frame: SkyRoomMetrics.Frame) -> some View {
+                          frame: SkyRoomMetrics.Frame,
+                          parallaxY: CGFloat) -> some View {
         ZStack {
             if isStarry(phase) {
                 stars(sky: sky, frame: frame)
+                    .offset(y: parallaxY * SkyRoomMetrics.Scroll.starDepth)
             }
             clouds(sky: sky, phase: phase, frame: frame)
-            mountains(sky: sky, frame: frame)
+                .offset(y: parallaxY * SkyRoomMetrics.Scroll.cloudDepth)
+            mountains(sky: sky, frame: frame, parallaxY: parallaxY)
         }
     }
 
     /// 三层山脊。锚在固定地平线上，层与层之间错开 8pt，
     /// 颜色随距离混入天空色（`haze`）—— 越远越淡越蓝，这就是大气透视。
-    private func mountains(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame) -> some View {
+    /// 滚动时各层按 `parallaxDepth` 下沉（远 0.15 / 中 0.25 / 近 0.40）。
+    private func mountains(sky: Theme.SkyColors,
+                           frame: SkyRoomMetrics.Frame,
+                           parallaxY: CGFloat) -> some View {
         let baseY = frame.horizon * frame.height
 
         return ZStack {
@@ -467,17 +513,19 @@ struct SkyRoomView: View {
                       index: pair.offset,
                       sky: sky,
                       frame: frame,
-                      baseY: baseY)
+                      baseY: baseY,
+                      parallaxY: parallaxY)
             }
         }
     }
 
-    /// 一层山脊：形状 + 大气透视渐变 + 层间错位
+    /// 一层山脊：形状 + 大气透视渐变 + 层间错位 + 滚动视差
     private func ridge(spec: SkyRoomMetrics.RidgeSpec,
                        index: Int,
                        sky: Theme.SkyColors,
                        frame: SkyRoomMetrics.Frame,
-                       baseY: CGFloat) -> some View {
+                       baseY: CGFloat,
+                       parallaxY: CGFloat) -> some View {
         let width = frame.stageWidth * spec.widthRatio
         let height = frame.height * spec.heightRatio
         // 层间错位：远层更高、更靠上（远景先露头）
@@ -502,6 +550,8 @@ struct SkyRoomView: View {
             // `.position` 返回的是**弹性视图**（铺满 proposal），所以固定尺寸的山不会撑宽父级
             .position(x: frame.stageOriginX + frame.stageWidth * spec.centerX,
                       y: baseY + offsetY - height / 2)
+            // 视差下沉：山体下缘原本就埋在地面里，往下沉只会沉得更深，不露底
+            .offset(y: parallaxY * spec.parallaxDepth)
     }
 
     /// 云：5 朵，每朵 3–4 个模糊椭圆叠成不规则形状。
@@ -813,7 +863,8 @@ struct SkyRoomView: View {
 
     // MARK: - 动态（克制）
 
-    /// 只启动两个动画：太阳外晕呼吸（8s）、云漂移（40s）。`reduceMotion` 下什么都不启动。
+    /// 只启动三个动画：太阳外晕呼吸（8s）、云漂移（40s）、滚动提示 bob（2s）。
+    /// `reduceMotion` 下什么都不启动。
     ///
     /// **注意 `reduceMotion` 不等于"没有画面"**：云的形状、山脊、星点、太阳三层全都照画，
     /// 只是它们静止 —— 静止的一帧本身就是完整的视觉（这正是铁律 4 的要求）。
@@ -827,12 +878,23 @@ struct SkyRoomView: View {
             .repeatForever(autoreverses: true)) {
             drifting = true
         }
+        withAnimation(.easeInOut(duration: SkyRoomMetrics.hintBobDuration)
+            .repeatForever(autoreverses: true)) {
+            hintBob = true
+        }
     }
 
-    /// 静态兜底：把两个开关复位（视图离场后动画不该继续跑）。
+    /// 静态兜底：把三个开关复位（视图离场后动画不该继续跑）。
     private func stopAmbient() {
         breathe = false
         drifting = false
+        hintBob = false
+    }
+
+    /// bob 的瞬时位移（0 或 4pt，方向由动画插值）。
+    private var hintBobOffset: CGFloat {
+        guard !reduceMotion else { return 0 }
+        return hintBob ? SkyRoomMetrics.hintBobDistance : 0
     }
 
     /// 呼吸后的外晕不透明度。Reduce Motion 下恒为 1（不呼吸，也不留一个"半亮"的错值）。
@@ -882,6 +944,23 @@ struct SkyRoomView: View {
         value = value &* 2_654_435_761
         value = value ^ (value >> 16)
         return CGFloat(value % 10_000) / 10_000
+    }
+}
+
+// MARK: - 顶栏滚动态玻璃
+
+/// 报告 §三 的「topbar.scrolled」：激活时套 `.card` 级玻璃（全工程唯一玻璃入口，
+/// iOS 26 走系统 `glassEffect`、18–25 走手工配方），未激活时完全透明。
+private struct TopBarGlass: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active {
+            content.glassSurface(.card,
+                                 in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        } else {
+            content
+        }
     }
 }
 

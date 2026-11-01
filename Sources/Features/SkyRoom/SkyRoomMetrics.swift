@@ -49,6 +49,9 @@ enum SkyRoomMetrics {
         /// 卡片流末尾的呼吸留白（Home Indicator 之上再多给一屏息）
         static let tailPadding: CGFloat = 28
 
+        /// 固定顶栏在安全区之外再占的高度（hero 的内容从这行底下开始排）
+        static let topbarReserve: CGFloat = 52
+
         /// 两侧暗角强度（只对宽档生效）。0.34 足够把视线收回舞台中心，
         /// 又不至于让边缘变成一条黑边。
         static let vignetteAlpha: Double = 0.34
@@ -56,19 +59,37 @@ enum SkyRoomMetrics {
 
     // MARK: - 滚动反馈（只动 offset / scale / opacity）
 
-    /// 滚动时背景的三个反馈量。全部是**常量目标值 + 进度插值**：
-    /// 逐帧变化的只有两个 `CGFloat` 状态（`scrollOffset` 的派生数），
-    /// 天幕 / 山脊 / 云的本体一个参数都不改 —— 这是"滚动不卡"的前提。
+    /// 滚动时背景的反馈量。全部是**常量目标值 + 进度插值**：
+    /// 逐帧变化的只有 `scrollOffset` 的派生数，天幕 / 山脊 / 云的本体一个参数都不改
+    /// —— 这是"滚动不卡"的前提（报告 §三：transform / opacity 走合成器线程）。
     enum Scroll {
-        /// 归一化进度的行程（× 屏高）：滚过半屏，压暗与放大都到满值
+        /// 归一化进度的行程（× 屏高）：滚过半屏，压暗到满值
         static let travel: CGFloat = 0.5
 
         /// 背景压暗的上限（叠一层 `sky.ground` 的黑色地面色）
         static let dimAlpha: Double = 0.45
 
-        /// 背景微放大的上限（1.0 → 1.07）：像把海报往眼前推一点，
-        /// 只动 `scaleEffect`（合成层变换），不触发任何重绘。
-        static let zoomScale: CGFloat = 0.07
+        /// 顶栏切毛玻璃的滚动阈值（报告 §三：`scrollTop > 30`）
+        static let topbarThreshold: CGFloat = 30
+
+        /// hero 淡出的行程（报告 §三：`fade = y / 160`，160pt 走完）
+        static let heroFadeTravel: CGFloat = 160
+
+        /// hero 相对滚动的减速量：报告的绝对速度是 `-y * 0.55`，而 hero 本身
+        /// 已经在 ScrollView 里以 1x 上移，所以再补 `+0.45y` 的向下偏移，净速度 0.55x
+        static let heroLag: CGFloat = 0.45
+
+        /// hero 缩小上限（报告 §三：`scale = 1 - fade * 0.3`）
+        static let heroShrink: CGFloat = 0.30
+
+        /// 视差钳制：滚过这个距离，背景就"停"——远处的山与太阳不能再往下沉了
+        /// （HTML 版靠 `inset:-10%` 的天幕余量兜底，原生版用钳制更稳，不露底）
+        static let parallaxClamp: CGFloat = 320
+
+        /// 视差速率（报告 §三：太阳/天空 0.15、云取 0.10、星取 0.05）
+        static let sunDepth: CGFloat = 0.15
+        static let cloudDepth: CGFloat = 0.10
+        static let starDepth: CGFloat = 0.05
     }
 
     // MARK: - 动态（克制：只走 offset / opacity）
@@ -81,6 +102,10 @@ enum SkyRoomMetrics {
     /// 云带漂移周期 40s、单程位移 6pt（设计铁律 §2：背景层 40s+）
     static let driftDuration: Double = 40
     static let driftDistance: CGFloat = 6
+
+    /// 滚动提示 bob：周期 2s、幅度 4pt（报告 §三 的「上滑查看详情」呼吸）
+    static let hintBobDuration: Double = 2
+    static let hintBobDistance: CGFloat = 4
 
     // MARK: - 天空 / 地面几何
 
@@ -156,17 +181,16 @@ enum SkyRoomMetrics {
     }
 
     enum Sun {
-        /// 核心实心圆直径。12pt：手机屏上"一颗看得见的圆点"，
-        /// 不是 14pt 那种"像一个按钮"，也不是 9pt 那种"像一颗星"。
-        static let coreDiameter: CGFloat = 12
-        /// 内晕直径（半径 20pt → 直径 40）。三层结构里的"第二层"
-        static let innerGlowDiameter: CGFloat = 40
+        /// 核心实心圆直径。16pt（3.14.0 报告定版：太阳要有"主角感"，12pt 太缩着）
+        static let coreDiameter: CGFloat = 16
+        /// 内晕直径。贴着核心的亮边，把核心从天幕里"托"出来
+        static let innerGlowDiameter: CGFloat = 96
         /// 内晕中心不透明度
-        static let innerGlowAlpha: Double = 0.55
-        /// 外晕直径（半径 110pt → 直径 220）。这一层负责"整片天被照亮"的观感
-        static let outerGlowDiameter: CGFloat = 220
-        /// 外晕中心不透明度
-        static let outerGlowAlpha: Double = 0.18
+        static let innerGlowAlpha: Double = 0.60
+        /// 外晕直径（报告 §二：420px 光晕 → 折算到 pt 取 340，太阳坐进地平线的辉光里）
+        static let outerGlowDiameter: CGFloat = 340
+        /// 外晕中心不透明度（报告的黄昏光晕中心 0.85 太满，取 0.28 保住各档天色的层次）
+        static let outerGlowAlpha: Double = 0.28
         /// 核心外面那圈高光环线宽（内晕之上再压一圈，让核心"立"起来）
         static let ringWidth: CGFloat = 1.2
         /// 高光环的不透明度
@@ -221,15 +245,15 @@ enum SkyRoomMetrics {
             // 远山：宽、扁、最淡（混入最多的天空色）
             RidgeSpec(crests: 4.0, amplitude: 0.55, widthRatio: 1.24,
                       centerX: 0.50, heightRatio: 0.10, rise: 0.045,
-                      haze: 0.62, density: 0.34, seed: 0x11_0001),
+                      haze: 0.62, density: 0.34, parallaxDepth: 0.15, seed: 0x11_0001),
             // 中山：错开半个波长，峰顶比远山高一点
             RidgeSpec(crests: 5.0, amplitude: 0.62, widthRatio: 1.10,
                       centerX: 0.42, heightRatio: 0.085, rise: 0.028,
-                      haze: 0.40, density: 0.58, seed: 0x22_0002),
+                      haze: 0.40, density: 0.58, parallaxDepth: 0.25, seed: 0x22_0002),
             // 近山：最窄的最高、最实
             RidgeSpec(crests: 6.5, amplitude: 0.50, widthRatio: 0.96,
                       centerX: 0.58, heightRatio: 0.065, rise: 0.012,
-                      haze: 0.18, density: 0.82, seed: 0x33_0003)
+                      haze: 0.18, density: 0.82, parallaxDepth: 0.40, seed: 0x33_0003)
         ]
         /// 曲线采样点数（72 段足够平滑，又不会在每帧重建时变贵）
         static let sampleCount: Int = 72
@@ -255,6 +279,8 @@ enum SkyRoomMetrics {
         let haze: Double
         /// 本体密度（不透明度）
         let density: Double
+        /// 滚动视差深度（报告 §三：远 0.15 / 中 0.25 / 近 0.40 —— 越近沉得越快）
+        let parallaxDepth: CGFloat
         /// 固定种子
         let seed: UInt32
     }
@@ -277,19 +303,19 @@ enum SkyRoomMetrics {
         static let countdownSize: CGFloat = 12
         /// hero 底部日出日落 12pt 等宽
         static let sunTimeSize: CGFloat = 12
-        /// hero 温度大字 84pt rounded（3.13.0：从面板的 64 提到 84 ——
-        /// 温度是这一页的标题，调研里所有主流天气 App 的首屏温度都远大于正文）
-        static let heroTemperatureSize: CGFloat = 84
-        /// hero 天气现象 20pt
-        static let heroConditionSize: CGFloat = 20
-        /// hero 高低温行 15pt
-        static let heroRangeSize: CGFloat = 15
+        /// hero 温度大字 104pt UltraLight rounded（3.14.0 按《iOS 端设计报告 v3 §二》定版：
+        /// 104pt / 字重 200 —— 报告的视觉基准就是这么大，温度是这一页唯一的标题）
+        static let heroTemperatureSize: CGFloat = 104
+        /// hero 天气现象 22pt Medium（报告 §二）
+        static let heroConditionSize: CGFloat = 22
+        /// hero 高低温行 14pt（报告 §二：Regular，70% 白 → 走 `inkDim`）
+        static let heroRangeSize: CGFloat = 14
         /// 滚动提示 11pt
         static let scrollHintSize: CGFloat = 11
         /// 卡片标题 13pt
         static let cardTitleSize: CGFloat = 13
-        /// 卡片大数值 32pt rounded（风 / 云量）
-        static let cardValueSize: CGFloat = 32
+        /// 卡片大数值 34pt rounded（风 / 云量；报告 §二「大数字 34pt SemiBold」）
+        static let cardValueSize: CGFloat = 34
         /// 卡片数值单位 13pt
         static let cardUnitSize: CGFloat = 13
         /// 卡片细节行 12pt
@@ -308,11 +334,11 @@ enum SkyRoomMetrics {
         }
 
         static func heroTemperature(_ scale: CGFloat) -> Font {
-            return Font.system(size: heroTemperatureSize * scale, weight: .bold, design: .rounded)
+            return Font.system(size: heroTemperatureSize * scale, weight: .ultraLight, design: .rounded)
         }
 
         static func heroCondition(_ scale: CGFloat) -> Font {
-            return Font.system(size: heroConditionSize * scale, weight: .semibold)
+            return Font.system(size: heroConditionSize * scale, weight: .medium)
         }
 
         static func heroRange(_ scale: CGFloat) -> Font {
