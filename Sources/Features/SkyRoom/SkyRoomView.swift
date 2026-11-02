@@ -71,6 +71,19 @@ struct SkyRoomView: View {
     /// nil = 还没拿到 / 截图模式（截图模式下刻意不起雾：CI 天气固定，雾会干扰对照）。
     @State private var visibilityMeters: Double?
 
+    /// 此刻这片天还能不能看见「景观」（3.22.0）。`nil` = 没有数据，不判。
+    ///
+    /// 为什么不是 `@State`：它是 `weatherNow` 与 `visibilityMeters` 的**纯派生值**，
+    /// 存一份就会多一个可能不同步的副本（天气到了、verdict 还是旧的）。
+    /// 计算属性每次重画现算，成本是几次除法。
+    ///
+    /// 为什么能见度优先取天气接口的、缺了才用独立的 `visibilityMeters`：
+    /// 天气接口那份与 `cloud` / `kind` 同源（同一次观测），拿它判"云和雾是不是一回事"
+    /// 不会自相矛盾；独立探测那份是另一台上游，只在天气接口没给时补位。
+    private var viewingVerdict: SkyViewing.Verdict? {
+        SkyViewing.verdict(of: weatherNow, visibilityMeters: visibilityMeters)
+    }
+
     /// 设备定位。顶栏第二行要显示"这里是哪"（用户："我现在不在郑州了，不知道它这个定位在哪儿"）。
     ///
     /// 用 `@ObservedObject` 观察单例：`placeName` 是**异步**反查出来的，
@@ -159,7 +172,11 @@ struct SkyRoomView: View {
     /// 于是卡片永远浮在同一片天上，而天在卡片滑过时慢慢静下来。
     private func page(size: CGSize, insets: EdgeInsets, now: Date) -> some View {
         let frame = SkyRoomMetrics.Frame(size: size, wide: metrics.usesWideCards)
-        let phase = SunClock.phase(at: now)
+        // 3.22.0：`phase` 不再只是"太阳在哪个角度"，还要过一遍天气 —— 多云 / 阴 / 雨 /
+        // 低能见度时，`golden` 降级成 `day`（见 `SkyViewing.effective`）。
+        // 这是用户在"早上多云蓝天"时看到顶栏写「黄金时刻」的那条反馈的修法：
+        // 天色档位、顶栏文案、天空配色全部读这一个 `phase`，所以只改这里就能同时纠正三处。
+        let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
         let sky = Theme.sky(phase)
         let progress = scrollProgress(height: frame.height)
         // 大气浑浊度（0 = 通透，1 = 浓雾）：能见度 + 天气类型两路取 max，见 `SkyHaze`
@@ -402,15 +419,19 @@ struct SkyRoomView: View {
                 TimelineView(.periodic(from: Date(), by: 1)) { context in
                     // 截图模式下时刻是钉住的（`previewMoment`），倒计时不跟着真实秒数跑
                     let moment = previewMoment ?? context.date
+                    // 这一行与页面主体（`page`）读的是**同一个**派生规则：
+                    // 先按天文算，再过一遍天气。两边各写一次容易漂 —— 比如主体已经
+                    // 变成"白天"的蓝天，顶栏还挂着"黄金时刻"。
+                    let momentPhase = SunClock.phase(at: moment).effective(viewing: viewingVerdict)
                     HStack(spacing: 7) {
                         Circle()
                             .fill(sky.edge)
                             .frame(width: 5, height: 5)
-                        Text(SunClock.phase(at: moment).label)
+                        Text(momentPhase.label)
                             .font(SkyRoomMetrics.TextStyle.phase(frame.fontScale))
                             .foregroundStyle(sky.ink)
                             .lineLimit(1)
-                        if let deadline = SunClock.phase(at: moment).deadline(at: moment) {
+                        if let deadline = momentPhase.deadline(at: moment) {
                             Text(shortCountdown(to: deadline, now: moment))
                                 .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
                                 .foregroundStyle(sky.inkDim)
@@ -497,7 +518,9 @@ struct SkyRoomView: View {
         }
 
         return SpeechStore.script(now: now,
-                                  phase: SunClock.phase(at: now),
+                                  // 念出来的时段必须与屏幕上写着的一致 ——
+                                  // 否则会出现"顶栏说白天、喇叭里说现在是黄金时刻"
+                                  phase: SunClock.phase(at: now).effective(viewing: viewingVerdict),
                                   weather: weatherNow,
                                   sunTimes: speechTimes,
                                   nextRedstone: nil,
@@ -582,6 +605,8 @@ struct SkyRoomView: View {
     /// 玻璃就"啪"地出现会很脏；缓入缓出读起来才像天光在慢慢沉淀下来。
     private func cards(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
         let reveal = cardReveal(height: frame.height)
+        // 与 `page` / 顶栏同一个派生：时段先过天气门控（见 `SkyViewing.effective`）
+        let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
         return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
             // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
             // 排在气温之前不是排版偏好，是优先级。
@@ -593,7 +618,8 @@ struct SkyRoomView: View {
                                     sunrise: times.sunrise,
                                     sunset: times.sunset,
                                     sky: sky,
-                                    scale: frame.fontScale)
+                                    scale: frame.fontScale,
+                                    phase: phase)
             }
             SkyRoomTemperatureCard(weather: weatherNow,
                                    sky: sky,

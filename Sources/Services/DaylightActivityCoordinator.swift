@@ -413,7 +413,10 @@ final class DaylightActivityCoordinator: ObservableObject {
     private func heartbeat(_ activity: Activity<DaylightActivityAttributes>, now: Date) {
         let weather = Self.currentWeather()
         let signature = Self.signature(of: weather)
+        // 3.22.0：与 App、小组件同一套门控（`SkyViewing.effective`）。
+        // 锁屏卡片和 App 里写两个不同的时段名，是这套功能里最容易被当成"卡坏了"的一种不一致。
         let phase = SunClock.phase(at: now)
+            .effective(viewing: SkyViewing.verdict(of: weather))
         let due = lastUpdateAt.map { now.timeIntervalSince($0) >= Self.heartbeatSeconds } ?? true
         let phaseChanged = (lastPhase != phase)
         guard due || signature != lastWeatherSignature || phaseChanged else { return }

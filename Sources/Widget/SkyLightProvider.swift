@@ -94,7 +94,17 @@ struct SkyLightEntry: TimelineEntry {
                      weather: WeatherNow? = nil,
                      sunTimes: SunTimesOverride? = nil,
                      visibilityMeters: Double? = nil) -> SkyLightEntry {
-        let phase = SunClock.phase(at: date)
+        // 3.22.0：时段先过天气门控 —— 多云 / 阴 / 雨 / 低能见度时，
+        // `golden` 降级成 `day`，小组件上的「黄金时刻」和天空的金橙一起换成白天的蓝。
+        // 与 App 的 `SkyRoomView` 调同一个 `SkyViewing.effective`，两边不可能漂。
+        //
+        // **只降 `phase`，不动上面那张边界表**：边界是"这一帧在几点重排"的时间网格，
+        // 与天气无关。若让边界跟着降级，一天会凭空少掉 7:24 那一帧，
+        // 而那张表还要负责跨子夜、跨年 —— 那种改动不值得。
+        let rawPhase = SunClock.phase(at: date)
+        let phase = rawPhase.effective(
+            viewing: SkyViewing.verdict(of: weather, visibilityMeters: visibilityMeters)
+        )
         // 显式写类型名：参数 sunTimes 与同名静态方法重名，局部名会遮蔽方法名。
         var times = SkyLightEntry.sunTimes(for: date, phase: phase)
         // 实际值只驱动**同一天**的帧：这一轮 timeline 铺 24 小时，明天的帧拿不到

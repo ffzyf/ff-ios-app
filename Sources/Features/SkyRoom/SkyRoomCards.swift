@@ -106,10 +106,16 @@ struct SkyRoomDaylightCard: View {
     let sunset: Date
     let sky: Theme.SkyColors
     let scale: CGFloat
+    /// 此刻的时段，**已过天气门控**（3.22.0）。
+    ///
+    /// 为什么由外面传进来而不是这里 `SunClock.phase(at: now)`：本卡拿不到天气，
+    /// 自己算就只能算天文时间。而右上角那枚辅注正是"黄金时刻"出现的位置之一 ——
+    /// 用户在顶栏看到它被纠正、卡片上却还写着，等于没修。
+    let phase: SkyPhase
 
     var body: some View {
         SkyRoomCardShell(title: "今日天光",
-                         accessory: SunClock.phase(at: now).label,
+                         accessory: phase.label,
                          scale: scale) {
             VStack(alignment: .leading, spacing: 10) {
                 progressLine

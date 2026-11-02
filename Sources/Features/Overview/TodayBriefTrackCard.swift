@@ -58,7 +58,11 @@ struct TodayBriefTrackCard: View {
     }
 
     private func card(now: Date) -> some View {
+        // 3.22.0：与天光页同一套门控 —— 这张卡的右上角也写着「黄金时刻」，
+        // 只修天光页的话，用户回到首页还是看到同一句话。天气读单例：
+        // 本卡没有自己的天气数据源，而 `WeatherStore` 是全 App 唯一那一份实况。
         let phase = SunClock.phase(at: now)
+            .effective(viewing: SkyViewing.verdict(of: WeatherStore.shared.current))
         let sky = Theme.sky(phase)
 
         return SkyCard(

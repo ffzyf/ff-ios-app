@@ -117,7 +117,17 @@ private enum DaylightMetric {
 /// （缺数据不猜，这里干脆不需要 —— 天气在旧版里就只是个挤在角落的小字）。
 private func daylightSkyEntry(state: DaylightActivityAttributes.ContentState,
                               now: Date) -> SkyLightEntry {
-    let phase = SunClock.phase(at: now)
+    // 3.22.0：时段过天气门控（与 App / 小组件同一个 `SkyViewing`）。
+    //
+    // 这里只有天气**代码**（`ContentState` 没带云量），但 `WeatherKind` 本身已经
+    // 蕴含了量级：`overcast` 就是厚云、`partly` 就是半片天、`rain` 就是雨幕。
+    // 够判「这一刻天边有没有金色」了 —— 判不够精确的代价只是偶尔多说一句，
+    // 而不判的代价是锁屏卡片上写着"黄金时刻"、人站在阴天里。
+    let phase = SunClock.phase(at: now).effective(
+        viewing: SkyViewing.verdict(kind: WeatherKind.from(code: state.weatherCode),
+                                    cloud: nil,
+                                    visibilityMeters: nil)
+    )
     return SkyLightEntry(
         date: now,
         phase: phase,
