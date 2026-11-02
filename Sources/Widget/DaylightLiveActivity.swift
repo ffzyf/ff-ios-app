@@ -69,13 +69,13 @@ struct DaylightLiveActivity: Widget {
                     // 固定亮色，不读随深浅变化的 textPrimary：灵动岛永远是黑底
                     // 3.23.0：这一支也要过天气门控，与卡面、底色读同一个 `daylightSky`。
                     // 只需一个 `edge`，就地调纯函数 —— 闭包体保持单表达式，不引入 `return`
-                    .foregroundStyle(daylightSky(state: context.state, now: Date()).edge)
+                    .foregroundStyle(daylightSky(context.state, now: Date()).edge)
             } compactTrailing: {
                 DaylightCompactCountdown(state: context.state)
             } minimal: {
                 Image(systemName: "sun.max.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
-                    .foregroundStyle(daylightSky(state: context.state, now: Date()).edge)
+                    .foregroundStyle(daylightSky(context.state, now: Date()).edge)
             }
         }
     }
@@ -238,7 +238,7 @@ private struct DaylightLockScreenTinted: View {
     let state: DaylightActivityAttributes.ContentState
 
     var body: some View {
-        let sky = daylightSky(state: state, now: Date())
+        let sky = daylightSky(state, now: Date())
         DaylightLockScreenView(state: state)
             // 锁屏卡的底色跟着天色走（与红石那套 TrackGradient 是两套配方，不复用）
             .activityBackgroundTint(sky.top)
@@ -366,9 +366,9 @@ private struct DaylightIslandTrailing: View {
     var body: some View {
         let now = Date()
         let entry = daylightSkyEntry(state: state, now: now)
-        return DaylightPhaseCountdown(entry: entry,
-                                      size: DaylightMetric.islandHeaderSize,
-                                      color: Theme.sky(entry.phase).inkDim)
+        DaylightPhaseCountdown(entry: entry,
+                               size: DaylightMetric.islandHeaderSize,
+                               color: Theme.sky(entry.phase).inkDim)
     }
 }
 
@@ -427,7 +427,7 @@ private struct DaylightCompactCountdown: View {
         let now = Date()
         // 紧凑态只取 `ink`（字色），但它同样是"天色"，一样要过门控 ——
         // 与卡面、底色读同一个 `daylightSky`，不各算一遍。
-        let sky = daylightSky(state: state, now: now)
+        let sky = daylightSky(state, now: now)
         if state.sunset > now {
             Text(timerInterval: now...state.sunset, countsDown: true)
                 .font(.system(size: DaylightMetric.countdownSize, weight: .semibold, design: .monospaced))
