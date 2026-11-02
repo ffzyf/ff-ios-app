@@ -101,7 +101,11 @@ struct WeatherNow: Decodable, Equatable, Sendable {
     let indices: [WeatherIndex]?
 
     /// 最终是哪些源拼出来的（`qweather` / `qweather+open-meteo`…）。
-    /// 只用于排查"这条数据到底谁说的"，不参与任何展示。
+    ///
+    /// 3.20.0 起它**上屏**了：天光页卡片区底部那行「和风天气 + Open-Meteo · 14:20 更新」
+    /// 就是它 —— 四个源在同一坐标上常年差 2~3℃，用户需要一个能自证出处的凭据。
+    /// 翻译成人话在 `SkyRoomSourceFooter.sourceLabel(_:)`，那边遇到未知名字会原样显示，
+    /// 所以这里新增源时不必同步改两处（但改了翻译表才能看到中文）。
     let provider: String?
 
     /// WMO 代码 → 8 组视觉类型。代码缺失或未知一律 nil（理由见 `WeatherKind.from(code:)`）

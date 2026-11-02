@@ -606,6 +606,9 @@ struct SkyRoomView: View {
                 SkyRoomWindCard(weather: weatherNow, scale: frame.fontScale)
                 SkyRoomCloudCard(weather: weatherNow, scale: frame.fontScale)
             }
+            // 元信息收尾：谁说的、什么时候说的。放在最后一张卡下面，
+            // 顺序本身就是「从上到下越来越不重要」，不需要额外强调。
+            SkyRoomSourceFooter(weather: weatherNow, now: now, scale: frame.fontScale)
         }
         .frame(width: frame.cardColumnWidth)
         .frame(maxWidth: .infinity)

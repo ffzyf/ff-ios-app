@@ -261,3 +261,87 @@ struct SkyRoomComfortCard: View {
         }
     }
 }
+
+// MARK: - 数据来源与更新时间（3.20.0）
+
+/// 卡片区底部的一行「这屏天气是谁说的、什么时候说的」。
+///
+/// 为什么要把这件事写在界面上：现在天气是四个源拼出来的（和风主、心知补位与比对、
+/// Open-Meteo 补天空参数、高德抽样），同一个坐标上四家经常差 2~3℃。用户看到 18℃
+/// 却觉得明明 23℃，唯一能自证的不是解释，而是「这是和风 14:20 报的」——
+/// 有了这一行，偏差就从「App 乱报」变成了「这家源在我这个位置偏冷」，是两种完全不同的结论。
+///
+/// 为什么放在卡片**外面**、不用卡片壳：它不是天气内容，是元信息。
+/// 套一层玻璃卡会让它读起来像第五张数据卡，权重过高。一段低对比度的小字足够。
+///
+/// 缺省语义：`provider` 与 `updatedAt` 各自独立判断，缺哪个就少说哪半句，
+/// 绝不用 "—" 占位（那会让「不知道」看起来像「查到了但是空的」）。
+struct SkyRoomSourceFooter: View {
+
+    let weather: WeatherNow?
+    /// 页面级的分钟级走时（`TimelineView(.periodic(by: 60))`），"N 分钟前" 靠它自己变
+    let now: Date
+    let scale: CGFloat
+
+    var body: some View {
+        let parts = segments
+        return Group {
+            if parts.isEmpty {
+                EmptyView()
+            } else {
+                Text(parts.joined(separator: " · "))
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                    .foregroundStyle(Theme.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 2)
+                    // 它是元信息，读屏时降级为「辅助说明」，不与天气正文抢焦点
+                    .accessibilityLabel(accessibilityText)
+            }
+        }
+    }
+
+    /// 拼句子：来源 → 钟点 → 相对时间。三段各自可缺。
+    private var segments: [String] {
+        guard let weather, weather.ok else { return [] }
+        var out: [String] = []
+
+        if let raw = weather.provider, !raw.isEmpty {
+            out.append(Self.sourceLabel(raw))
+        }
+        if let updated = weather.updatedAt {
+            out.append("\(Formatters.timeHHmm(updated)) 更新")
+            // 观测时间超过 3 小时说明上游很久没刷新（或我们读到的是旧缓存），
+            // 这时「几小时前」比钟点更有信息量，两个都给出来
+            let age = now.timeIntervalSince(updated)
+            if age >= 3 * 3600 {
+                out.append(Formatters.relative(updated, now: now))
+            }
+        }
+        return out
+    }
+
+    private var accessibilityText: String {
+        segments.isEmpty ? "" : "天气数据：" + segments.joined(separator: "，")
+    }
+
+    /// 后端的 `provider` 是 `+` 连接的机器名（`qweather+open-meteo`），这里翻成人话。
+    ///
+    /// 未知名字原样保留而不是丢掉：将来加第五个源时，界面上出现一个没翻译的英文名
+    /// 比「这屏天气没有来源」要好 —— 前者是待补的文案，后者是错误的信息。
+    static func sourceLabel(_ raw: String) -> String {
+        let names: [String: String] = [
+            "qweather": "和风天气",
+            "seniverse": "心知天气",
+            "open-meteo": "Open-Meteo",
+            "amap": "高德"
+        ]
+        let parts = raw.split(separator: "+").map { token -> String in
+            let key = String(token).trimmingCharacters(in: .whitespaces)
+            return names[key] ?? key
+        }.filter { !$0.isEmpty }
+        return parts.isEmpty ? raw : parts.joined(separator: " + ")
+    }
+}
