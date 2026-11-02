@@ -34,21 +34,24 @@ import WidgetKit
 struct DaylightLiveActivity: Widget {
 
     var body: some WidgetConfiguration {
+        // 底色 / 前景色也要过天气门控（3.23.0 补漏）。
+        //
+        // 3.22.0 只给**卡面**接了门控，底色这一行还是裸 `SunClock.phase(at: Date())`：
+        // overcast + golden 的早晨，卡面文字已经按「白天」写了，锁屏底色仍然是金橙 ——
+        // 同一张卡上出现两个天色，比单点误差更显眼。判定与卡面共用
+        // `daylightSky(...)`（一条派生、两处消费），不各算一遍。
+        //
+        // 这段注释原来写在 content 闭包里，旁边就是 `let sky = ...` + `return` ——
+        // 而 `ActivityConfiguration(for:content:dynamicIsland:)` 的**两个闭包都是
+        // `@ViewBuilder`**：局部 `let` 是允许的（同 target 的 `SunEventLiveActivity` 就靠这个），
+        // 但**显式 `return` 是硬错** —— 报错原文 `cannot use explicit 'return' statement in
+        // the body of result builder 'ViewBuilder'`，而 `Content` 泛型参数也因此推不出来
+        // （`generic parameter 'Content' could not be inferred`）。3.23.0 就是同时踩了这两条。
+        // 现在"算天色 + 上底色"收进 `DaylightLockScreenTinted`，两个闭包体里只剩视图表达式。
         ActivityConfiguration(for: DaylightActivityAttributes.self) { context in
-            // 底色 / 前景色也要过天气门控（3.23.0 补漏）。
-            //
-            // 3.22.0 只给**卡面**接了门控，底色这一行还是裸 `SunClock.phase(at: Date())`：
-            // overcast + golden 的早晨，卡面文字已经按「白天」写了，锁屏底色仍然是金橙 ——
-            // 同一张卡上出现两个天色，比单点误差更显眼。判定与卡面共用
-            // `daylightSky(...)`（一条派生、两处消费），不各算一遍。
-            let sky = daylightSky(state: context.state, now: Date())
-            return DaylightLockScreenView(state: context.state)
-                // 锁屏卡的底色跟着天色走（与红石那套 TrackGradient 是两套配方，不复用）
-                .activityBackgroundTint(sky.top)
-                .activitySystemActionForegroundColor(sky.ink)
+            DaylightLockScreenTinted(state: context.state)
         } dynamicIsland: { context in
-            let sky = daylightSky(state: context.state, now: Date())
-            return DynamicIsland {
+            DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     DaylightIslandLeading(state: context.state)
                 }
@@ -64,13 +67,15 @@ struct DaylightLiveActivity: Widget {
                 Image(systemName: "sun.horizon.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
                     // 固定亮色，不读随深浅变化的 textPrimary：灵动岛永远是黑底
-                    .foregroundStyle(sky.edge)
+                    // 3.23.0：这一支也要过天气门控，与卡面、底色读同一个 `daylightSky`。
+                    // 只需一个 `edge`，就地调纯函数 —— 闭包体保持单表达式，不引入 `return`
+                    .foregroundStyle(daylightSky(state: context.state, now: Date()).edge)
             } compactTrailing: {
                 DaylightCompactCountdown(state: context.state)
             } minimal: {
                 Image(systemName: "sun.max.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
-                    .foregroundStyle(sky.edge)
+                    .foregroundStyle(daylightSky(state: context.state, now: Date()).edge)
             }
         }
     }
@@ -217,6 +222,29 @@ private struct DaylightPhaseCountdown: View {
 }
 
 // MARK: - 锁屏视图
+
+/// 锁屏卡 + 天色底色。
+///
+/// 为什么要有这一层：`ActivityConfiguration(for:content:dynamicIsland:)` 的 content 闭包
+/// 是 `@ViewBuilder` —— 局部 `let` 允许，**显式 `return` 不允许**（3.23.0 写了
+/// `return DaylightLockScreenView(...)`，连带 `Content` 泛型参数推不出来）。
+/// 而底色这件事需要先算出一份 `sky`、再连点两个 modifier：把它收进一个 View，
+/// 闭包体就退化成一个视图表达式，"算天色 + 上底色"也只有这一个入口。
+///
+/// `activityBackgroundTint` / `activitySystemActionForegroundColor` 只有在 `View` 上才成立，
+/// 所以这一层的存在是结构性的，不是多余包装。
+private struct DaylightLockScreenTinted: View {
+
+    let state: DaylightActivityAttributes.ContentState
+
+    var body: some View {
+        let sky = daylightSky(state: state, now: Date())
+        DaylightLockScreenView(state: state)
+            // 锁屏卡的底色跟着天色走（与红石那套 TrackGradient 是两套配方，不复用）
+            .activityBackgroundTint(sky.top)
+            .activitySystemActionForegroundColor(sky.ink)
+    }
+}
 
 /// 锁屏天光卡：整片天空铺满，文字浮在上下两角。
 ///
