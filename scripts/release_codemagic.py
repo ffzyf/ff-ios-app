@@ -190,6 +190,13 @@ def main():
     print('上传 -> %s' % r.get('key'))
 
     notes = open(args.notes, encoding='utf-8').read()
+    # 说明写太长没人读：App 的更新 sheet 只有一屏，超过 ~200 字就要滚动。
+    # 这里不拒绝（拒绝会让发版卡住），只在超限时把字数打出来提醒收短。
+    notes_len = len(notes.strip())
+    if notes_len > 400:
+        print('警告：更新说明 %d 字，超过 400 字上限，服务端会回 notesTooLong；建议压到 200 字内' % notes_len)
+    elif notes_len > 200:
+        print('提示：更新说明 %d 字，略长；建议压到 200 字内' % notes_len)
     st, r = site_api('/api/app/version', data=json.dumps({
         'build': build_no, 'version': version, 'notes': notes, 'ipaKey': key_name,
     }).encode(), headers={'x-release-token': RT, 'Content-Type': 'application/json'})
