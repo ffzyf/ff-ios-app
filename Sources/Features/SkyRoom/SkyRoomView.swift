@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// 沉浸式「天光室」——3.14.0 按《iOS 端设计报告 v3 定版》（用户提供，视觉基准
@@ -168,7 +169,14 @@ struct SkyRoomView: View {
         // 强制深色后：玻璃 = 白 6% + 厚材质、文字 = 近白，与天空同一套明暗逻辑。
         .preferredColorScheme(.dark)
         .task {
-            // 预警排第一：命中 `AlertStore` 的 10 分钟本地窗口时它是零成本返回，
+            // 0. 先补一次定位（3.26.0）：这一页常见的打开方式是"人已经开了一小时车，
+            //    停下车才把页面点开"。而定位只发生在回前台、以及下面那条 10 分钟循环里 ——
+            //    循环的第一拍要等满 10 分钟，这段时间页面会一直写着出发地的天。
+            //    `refreshIfNeeded()` 内部有 15 分钟有效期 + 60 秒冷却，绝大多数进场是纯短路；
+            //    真换了地方，`didUpdateLocations` 里那条距离判定会强制重取三份数据，
+            //    所以这里不需要它的结果，也就不阻塞后面的请求。
+            await LocationStore.shared.refreshIfNeeded()
+            // 网络请求里预警排第一：命中 `AlertStore` 的 10 分钟本地窗口时它是零成本返回，
             // 而 `loadWeather()` 走天气整包、最长 15 秒超时。排在后面的代价不是"晚一点到"，
             // 而是首屏一直挂着「预警数据暂时取不到」—— 那一行就在 hero 下面，第一屏看得见，
             // 而 `AlertStore` 里可能早躺着一条暴雨预警。
@@ -186,6 +194,46 @@ struct SkyRoomView: View {
             // 分钟降水同样轻量，但它不参与首屏的任何判断（没数据就整块不渲染），
             // 所以留在天气之后：首屏该最先拿到的是温度那两行大字。
             await minutely.refresh(force: false)
+        }
+        // 天气变了就跟着重画（3.26.0）。
+        //
+        // 修的是"页面开着数据却冻住"：`weatherNow` 是 `@State`，`loadWeather()` 只在这页
+        // 出现时跑一次，于是 `WeatherStore` 后来拿到的任何新数据都进不来 ——
+        // 顶部预警时间（`AlertStore` 10 分钟轮询）一直在走、底部天气时间一动不动，
+        // 用户看到的是"23:30 更新"和"22:37 更新"同时挂在同一屏。
+        //
+        // 直接订阅 `@Published`，而不是在定时任务里再抄一遍：定时任务只管"要数据"，
+        // "数据到了画什么"只有一条通路，就不会出现两处写法不一致。
+        .onReceive(WeatherStore.shared.$current) { weatherNow = $0 }
+        // 能见度是另一条独立的 `@Published`（可以来自天气响应，也可以来自独立探测），
+        // 不跟着 `current` 一起变，必须单独订阅
+        .onReceive(WeatherStore.shared.$visibilityMeters) { visibilityMeters = $0 }
+        // 页面开着就自动更新（3.26.0）：10 分钟一轮，视图消失即取消。
+        //
+        // 为什么必须有它：用户把手机架在车上开着这一页看天，人动了、时间过了，
+        // 页面却一直是打开那一刻的天气。`WeatherStore` 自己有 10 分钟缓存窗，
+        // 但"缓存在窗口内"不等于"屏幕上的数是对的"—— 这里要的是按时回源。
+        //
+        // 循环用 `do/catch { break }` 而**不是** `try?`：`try?` 会把
+        // `CancellationError` 一起吞掉，于是视图消失、任务被取消之后循环还会继续转，
+        // 变成一只看不见的耗电虫子（`Task.isCancelled` 也拦不住，因为循环根本没退出）。
+        .task {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 600 * 1_000_000_000 * 10)
+                } catch {
+                    break
+                }
+                // 页面开着的时候人也可能在移动（车里架着手机看天）：每轮先过一遍定位闸门。
+                // 这一步是这次修复的另一半 —— 只刷天气不刷位置，会得到"新数据 + 旧坐标"。
+                // 代价可以忽略：内部有 15 分钟有效期 + 60 秒冷却，绝大多数轮次是纯短路返回。
+                await LocationStore.shared.refreshIfNeeded()
+                await WeatherStore.shared.load(force: true)
+                await MinutelyStore.shared.refresh(force: true)
+                // 预警不强制：它自己有 10 分钟窗口，正好与本轮同频；
+                // `force: true` 会绕过那个窗口，反而把额度用在重复请求上
+                await AlertStore.shared.refresh(force: false)
+            }
         }
         .onAppear {
             startAmbient()
@@ -578,27 +626,27 @@ struct SkyRoomView: View {
     /// 播报里念的城市名。
     ///
     /// 只取第一段（"上海市 · 浦东新区" → "上海市"）：念全称像在报收货地址。
-    /// 定位关着 / 还没反查出地名时给 nil —— `SpeechStore.weatherSentence` 会整句省掉城市，
-    /// 而不是把"定位中…"或"上次位置"念出来（那是给眼睛看的，不是说给人听的）。
+    /// 读 `displayName` 而不是 `placeName`（3.26.0）：指定城市时用户要听的是他选的那座城，
+    /// 而不是设备恰好在的地方 —— 那两个值可以完全不同。
+    /// 定位关着 / 还没反查出地名 / 也没指定城市时给 nil —— `SpeechStore.weatherSentence`
+    /// 会整句省掉城市，而不是把"定位中…"或"上次位置"念出来（那是给眼睛看的，不是说给人听的）。
     private var speechPlace: String? {
-        guard location.isEnabled, let name = location.placeName else { return nil }
+        guard let name = location.displayName else { return nil }
         let city = name.components(separatedBy: " · ").first ?? name
         return city.isEmpty ? nil : city
     }
 
     /// 顶栏那行位置文案。
     ///
-    /// - 定位开着且有地名 → "上海市 · 浦东新区"
+    /// - 有名字（`displayName`：指定城市优先，其次反查出的地名）→ 直接用它
     /// - 定位开着但还没反查出来 → "定位中…"（不显示经纬度，那对用户没有意义）
     /// - 定位关着 → 说清"天气用的是哪个位置"，见 `fallbackPlaceLabel`
     ///
-    /// 3.17.0：关定位后天气用的是 `HomeCoordinate.cached()`（上次上报的位置），
-    /// 所以文案必须跟着说"上次位置"，不能继续写"默认位置 · 郑州" —— 那是在骗用户。
+    /// 3.26.0 起第一判据从 `placeName` 换成 `displayName`：`fixed` 模式下
+    /// 天气取的是用户指定的那个坐标，顶栏若还显示设备所在地，就是又一处"两处不是同一个地方"。
     private var placeLabel: String {
+        if let name = location.displayName { return name }
         guard location.isEnabled else { return fallbackPlaceLabel }
-        if location.coordinate != nil, let name = location.placeName {
-            return name
-        }
         // 权限被拒 / 定位失败要说清楚，否则会永久停在"定位中…"——
         // 那比"没定位"更糟：用户会以为它一直在努力，实际永远不会成功。
         switch location.status {

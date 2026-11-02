@@ -32,12 +32,16 @@ import Foundation
 /// 它们各自按 Timeline 直接请求，本类只服务主 App。
 ///
 /// ## 3.7.0：跟着设备位置走
-/// 请求前读一次 `LocationStore.shared.coordinate`，有就带给 `API.weather(lat:lon:)`。
+/// 请求前读一次位置，有就带给 `API.weather(lat:lon:)`。
 ///
 /// ## 3.17.0：没有定位时用「家」坐标
 /// 没有设备定位（开关关着 / 权限被拒 / 还没拿到）时，改用 `HomeCoordinate.cached()`
 /// —— 那是 App 上次上报给服务端、桌面小组件也在读的同一条记录（见 `resolvedCoordinate()`）。
 /// 两个都没有才不带坐标，服务端回落默认值，与 3.7.0 之前的行为完全一致。没权限时不弹错误 UI，静默回落。
+///
+/// ## 3.26.0：优先级搬进了 `LocationStore`
+/// 多了「用户指定城市」这一档之后，`resolvedCoordinate()` 直接返回
+/// `LocationStore.shared.effectiveCoordinate` —— 本类不再自己决定"用哪个坐标"。
 @MainActor
 final class WeatherStore: ObservableObject {
 
@@ -106,6 +110,12 @@ final class WeatherStore: ObservableObject {
     /// 否则用户会在大西洋两岸的天气之间来回看到同一个幻觉。
     private var lastQueryCoordinate: CLLocationCoordinate2D?
 
+    /// "有一次强制刷新因为上一发还没回来而被挡下了，收尾时补做"（3.26.0）。
+    ///
+    /// 只在 `force == true` 被 `isLoading` 挡回时置位，由当前请求的 `defer` 消费。
+    /// 没有它，用户刚选完城市看到的就是上一座城市的天气 —— 那正是这次要修的 bug 的形态。
+    private var needsForcedReload = false
+
     private let client: APIClient
 
     init(client: APIClient = .shared) {
@@ -147,8 +157,17 @@ final class WeatherStore: ObservableObject {
     ///
     /// 两个缓存窗各自独立：天气在窗口内而能见度过期了，就只补能见度那一发。
     func load(force: Bool = false) async {
-        // 上一发还在飞：直接返回，别叠加请求
-        guard !isLoading else { return }
+        // 上一发还在飞：直接返回，别叠加请求。
+        //
+        // 但 `force` 不能就这么丢掉（3.26.0）：用户刚在设置里选完城市，`setFixed` 会带着
+        // 新坐标调 `load(force: true)`；如果此刻正好有一发请求在路上（最长 15 秒超时），
+        // 这一发被丢掉就等于"点了没反应" —— 屏幕还停在上一座城市，要等天光页的 10 分钟
+        // 循环才自愈。10 分钟的自愈等于没修，所以这里只记一个"欠一次强制刷新"，
+        // 由当前请求收尾时补上（见下面的 `defer`）。
+        guard !isLoading else {
+            if force { needsForcedReload = true }
+            return
+        }
 
         // 这次请求实际要用的坐标：设备定位优先，没有就回落到「家」坐标的本地缓存
         // （`HomeCoordinate` —— App 开定位时上报给服务端、桌面小组件也读同一条记录的那份）。
@@ -183,7 +202,16 @@ final class WeatherStore: ObservableObject {
         if weatherFresh && visibilityFresh { return }
 
         isLoading = true
-        defer { isLoading = false }
+        // 收尾两步的**顺序不能换**：先落 `isLoading = false`，再决定要不要补那一发。
+        // 反过来的话，`Task` 里的 `load` 会在 `isLoading` 还是 true 时开跑，
+        // 又被上面那条 guard 拦住 —— 欠的这一次永远补不上（标记还被清零了）。
+        defer {
+            isLoading = false
+            if needsForcedReload {
+                needsForcedReload = false   // 先清零再起任务：递归进来的那次不会再挂标记，不会无限递归
+                Task { await self.load(force: true) }
+            }
+        }
 
         // 3.19.0：能见度不再和天气**并发**打了。
         //
@@ -250,23 +278,24 @@ final class WeatherStore: ObservableObject {
 
     // MARK: - 坐标
 
-    /// 这次请求实际要用的坐标：设备定位优先，「家」坐标的本地缓存兜底。
+    /// 这次请求实际要用的坐标：**委托给 `LocationStore.effectiveCoordinate`**（3.26.0）。
     ///
-    /// - 定位可用（开关开着且 6 小时内的坐标）→ 用它，与 3.7.0 起的行为逐字一致；
-    /// - 定位不可用 → 用 `HomeCoordinate.cached()`：那是 App 上次上报给服务端、
-    ///   桌面小组件此刻正在读的同一条记录，于是两处落在同一个城市；
-    /// - 两个都没有（从没开过定位）→ nil，`API.weather(lat:lon:)` 不带参数，
-    ///   服务端回落默认坐标，与 3.7.0 之前完全一样。
+    /// 那里维护着完整的优先级：指定城市 → 设备定位 → `HomeCoordinate.cached()`
+    /// （App 上次上报给服务端、桌面小组件此刻正在读的同一条记录，于是两处落在同一个城市）。
+    /// 全部都没有（从没开过定位、也从没指定过城市）→ nil，`API.weather(lat:lon:)` 不带参数，
+    /// 服务端回落默认坐标。
+    ///
+    /// 为什么把优先级搬进 `LocationStore` 而不是留在这里：3.26.0 多了"指定城市"这一档，
+    /// 而 `AlertStore` / `MinutelyStore` 也在调本方法 —— 优先级写在这里，三处自动一致；
+    /// 写成"这里判一次、那里判一次"，就一定会有一处漏掉，于是"天气卡是登封、
+    /// 预警还在按郑州发"，而那种错位用户几乎描述不清楚。
     ///
     /// `LocationStore` 与 `WeatherStore` 都是 `@MainActor`，这里可以直接读，不需要显式跳 actor。
     ///
     /// 3.19.0 起由 `private` 改为 internal：`AlertStore` / `MinutelyStore` 必须用**完全相同的**
-    /// 坐标去请求各自端点。各写一份的话，只要有一处忘了回落 `HomeCoordinate`，
-    /// 预警就会盯着默认城市（郑州）报，而天气卡显示的是当地 —— 那种不一致最难被发现。
+    /// 坐标去请求各自端点。
     static func resolvedCoordinate() -> CLLocationCoordinate2D? {
-        if let device = LocationStore.shared.coordinate { return device }
-        guard let home = HomeCoordinate.cached() else { return nil }
-        return CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon)
+        return LocationStore.shared.effectiveCoordinate
     }
 
     // MARK: - 落盘

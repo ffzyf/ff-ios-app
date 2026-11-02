@@ -102,8 +102,18 @@ struct FFWangApp: App {
             // 内部有 60 秒防抖（`refreshOnForeground`）—— 切出去回条消息再回来
             // 不该再打一次接口，那是白烧高德配额；而真正隔了几分钟再打开，
             // 用户看到的一定是新数据（缓存窗 30 分钟只约束"不刷新时"的重复调用）。
+            //
+            // 3.26.0 在拉天气**之前**先补一次定位：人可能是在后台这段时间里换了城市，
+            // 只刷天气会让"新坐标"和"旧城市"错过彼此 —— 先定位、再由
+            // `didUpdateLocations` 里那条距离判定强制重取，顺序才对。
+            //
+            // 为什么这里有 `await`：`.task` 的闭包是非隔离的 `@Sendable async`，
+            // 而 `refreshIfNeeded()` / `refreshOnForeground()` 都在 `@MainActor` 的
+            // `LocationStore` / `WeatherStore` 上 —— 由编译器插一次 hop（见 `RootView` 里
+            // 那段同样的注释）。它内部有 60 秒冷却，所以这一行在频繁切前台时几乎零成本。
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
+                await LocationStore.shared.refreshIfNeeded()
                 await WeatherStore.shared.refreshOnForeground()
             }
             // 天气预警 + 分钟降水（3.19.0）：与天气同一个 scenePhase 信号，但各自 10 分钟闸门。

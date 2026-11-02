@@ -30,6 +30,13 @@ final class MinutelyStore: ObservableObject {
     private var inFlight = false
     private var pollTask: Task<Void, Never>?
 
+    /// "有一次强制刷新因为上一发还在回来而被挡下了，收尾时补做"（3.26.0）。
+    ///
+    /// 与 `WeatherStore.needsForcedReload` 同一个毛病：换城市时 `LocationStore` 会连推
+    /// 天气 / 预警 / 分钟降水三份，任何一份被 `inFlight` 挡掉，屏幕上就留着**旧城市**的雨
+    /// 直到下一轮 10 分钟轮询 —— 用户刚点完城市，那 10 分钟里看到的是一句假话。
+    private var needsForcedReload = false
+
     init(client: APIClient = .shared) {
         self.client = client
     }
@@ -70,7 +77,12 @@ final class MinutelyStore: ObservableObject {
     ///
     /// - Parameter force: `true` 时忽略 10 分钟窗口。
     func refresh(force: Bool = false) async {
-        guard !inFlight else { return }
+        // 上一发还在飞：`force` 不能丢（理由见 `needsForcedReload`）。
+        // 非强制的那种被挡掉没关系 —— 它下一次轮询还会自己来。
+        guard !inFlight else {
+            if force { needsForcedReload = true }
+            return
+        }
         if !force, let last = lastFetchAt, Date().timeIntervalSince(last) < Self.pollInterval {
             return
         }
@@ -79,7 +91,15 @@ final class MinutelyStore: ObservableObject {
         guard let url = API.minutely(lat: coordinate?.latitude, lon: coordinate?.longitude) else { return }
 
         inFlight = true
-        defer { inFlight = false }
+        // 顺序不能换：先落 `inFlight`，再补那一发。反过来的话 `Task` 会在 `inFlight`
+        // 还是 true 时开跑，又被上面那条 guard 拦住 —— 欠的这次永远补不上。
+        defer {
+            inFlight = false
+            if needsForcedReload {
+                needsForcedReload = false   // 先清零：递归进来的那次不会再挂标记，不会无限递归
+                Task { await self.refresh(force: true) }
+            }
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

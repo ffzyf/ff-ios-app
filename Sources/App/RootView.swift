@@ -113,7 +113,7 @@ struct RootView: View {
         // 天气定位（3.7.0）：进 App 时补一次。
         //
         // 这里**只挂一个 `.task`**（视图出现时跑一次），不放进任何按帧 / 按秒的路径：
-        // `refreshIfNeeded()` 内部会在"开关关着"或"坐标还在 6 小时有效期内"时直接短路，
+        // `refreshIfNeeded()` 内部会在"开关关着"或"15 分钟内刚定过位"时直接短路，
         // 所以默认安装（开关默认关闭）**不会**弹权限框，也不会多一次定位。
         .task {
             // `LocationStore` 是 `@MainActor`，`refreshIfNeeded()` 是主 actor 上的同步方法；

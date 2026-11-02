@@ -282,7 +282,7 @@ struct SkyRoomAlertStatusRow: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             Spacer(minLength: 6)
-            // 右侧小字可缺：`.none` 且 `updatedAt == nil` 时只留「和风天气」，
+            // 右侧小字可缺：`.none` 且 `updatedAt == nil` 时只留「预警」，
             // `.unknown` 时它是一句承诺（我们真的会自动重试，见 `AlertStore.startPolling`）
             Text(detail)
                 .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
@@ -313,14 +313,20 @@ struct SkyRoomAlertStatusRow: View {
         }
     }
 
-    /// 右侧小字。`.none` 时是「和风天气 · 18:20 更新」，时间那半句按 `updatedAt` 有无拼接 ——
-    /// **不要**写成 `"和风天气 · \(time) · 更新"`，`updatedAt` 为 nil 时会渲染出
-    /// 「和风天气 ·  · 更新」这种空占位（自查项 2）。
+    /// 右侧小字。`.none` 时是「预警 · 18:20 更新」，时间那半句按 `updatedAt` 有无拼接 ——
+    /// **不要**写成 `"预警 · \(time) · 更新"`，`updatedAt` 为 nil 时会渲染出
+    /// 「预警 ·  · 更新」这种空占位（自查项 2）。
+    ///
+    /// 3.26.0 把「和风天气」改成「预警」：这一行左边已经写着"当前无天气预警"，
+    /// 右边再挂一个数据源名，用户会把那个时刻读成**天气**的更新时间 ——
+    /// 而这个时刻其实是预警请求的时刻（`AlertStore.updatedAt`，10 分钟一轮）。
+    /// 于是"顶部 23:30 更新、底部 22:37 更新"被当成同一个数出了两个值，
+    /// 报上来是"天气下面的时间不刷新"。时刻的归属必须写在它自己身上。
     private var detail: String {
         switch state {
         case .none:
-            guard let updatedAt else { return "和风天气" }
-            return "和风天气 · " + Formatters.timeHHmm(updatedAt) + " 更新"
+            guard let updatedAt else { return "预警" }
+            return "预警 · " + Formatters.timeHHmm(updatedAt) + " 更新"
         case .unknown:
             return "稍后自动重试"
         }
@@ -359,10 +365,17 @@ struct SkyRoomMinutelyCard: View {
     }
 
     /// 右上角辅注：现在下没下。
+    ///
+    /// 3.26.0 起分三档，**与主文案用同一个判据**（`rain.isWet`）：
+    /// `isWet` 为真而第一帧是干的，说明雨在稍后 —— 这时写"正在下"是错的，
+    /// 写"暂无降水"又与正文"约 20 分钟后可能有小雨"打架。文字说稍后有雨、
+    /// 角标说暂无降水，正是用户最容易失去信任的那种自相矛盾。
     private var accessoryText: String? {
         guard let points = rain.points, !points.isEmpty else { return nil }
-        if rain.isWet { return "正在下" }
-        return "暂无降水"
+        guard rain.isWet else { return "暂无降水" }
+        // 只认第一帧：第一帧就湿 = 此刻就湿；否则是"稍后有雨"
+        if let first = points.first, first.p >= 0.05 { return "正在下" }
+        return "稍后有雨"
     }
 
     /// 24 根柱子，每根 5 分钟。
@@ -535,10 +548,12 @@ struct SkyRoomSourceFooter: View {
         }
         if let updated = weather.updatedAt {
             out.append("\(Formatters.timeHHmm(updated)) 更新")
-            // 观测时间超过 3 小时说明上游很久没刷新（或我们读到的是旧缓存），
-            // 这时「几小时前」比钟点更有信息量，两个都给出来
+            // 相对时间回答的是"这份数据多久没动了"。阈值 3 小时 → **5 分钟**（3.26.0）：
+            // 用户拿"23:30 更新"和"22:37 更新"来问"到底哪个在动"时，钟点本身没有说服力 ——
+            // 差 53 分钟在两个都"看起来还行"的时刻之间是看不出来的，
+            // 而"53 分钟前"一眼就说明数据停了。天气的正常节奏是小时级，5 分钟没动就是可疑。
             let age = now.timeIntervalSince(updated)
-            if age >= 3 * 3600 {
+            if age >= 300 {
                 out.append(Formatters.relative(updated, now: now))
             }
         }

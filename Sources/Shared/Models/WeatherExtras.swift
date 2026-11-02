@@ -194,14 +194,40 @@ struct MinutelyRain: Decodable, Equatable, Sendable {
     /// 有没有在下（或即将下）。
     ///
     /// 优先用服务端的 `wet`（它和 `summary` 是同一个判据算出来的，两者不会互相矛盾）。
-    /// 没有时按柱子自己判 —— **阈值必须和后端一致（0.05mm/5min）**：
-    /// 后端用 0.05 判定「不下雨」并改写 summary 为「未来两小时无降水」，
-    /// 而这里若用 0.01，就会出现「文字说无降水、柱状图却一片柱子」的自相矛盾。
+    /// 缺省时（老版本后端）才按柱子自己判 —— **判据必须与后端 `mapMinutely` 一致**：
+    /// 连续 ≥ 3 帧（≥15 分钟）**且**段内累计 ≥ 0.2mm，两个条件同时成立才算一段真雨。
+    ///
+    /// 为什么不再是"任何一帧 ≥ 0.05"（3.26.0 修）：雷达外推的末端常有一两帧 0.1mm 的孤立小柱，
+    /// 单看它"有雨"，但它只是噪声 —— 上游 `summary` 却会把它渲染成
+    /// "65 分钟后开始下小雨，70分钟后就停了"，而窗外一片干。两条阈值只要有一条对不上，
+    /// 就会出现"文字说要下雨、柱状图只有两根细柱"这种谁也不信的结论。
     var isWet: Bool {
         if let wet { return wet }
-        guard let points else { return false }
-        return points.contains { $0.p >= 0.05 }
+        guard let points, !points.isEmpty else { return false }
+        // 逐点扫一遍连续湿段：帧数够了但雨量不够（一片毛毛点）不算，
+        // 雨量够了但只有一两帧（孤立噪声）也不算
+        var runFrames = 0
+        var runTotal = 0.0
+        for point in points {
+            if point.p >= 0.05 {
+                runFrames += 1
+                runTotal += point.p
+                if runFrames >= Self.minWetFrames && runTotal >= Self.minWetTotal {
+                    return true
+                }
+            } else {
+                runFrames = 0
+                runTotal = 0
+            }
+        }
+        return false
     }
+
+    /// 一段"真雨"至少需要的连续帧数（每帧 5 分钟 → 15 分钟）
+    private static let minWetFrames = 3
+    /// 一段"真雨"至少需要的累计降水（毫米）。
+    /// 3 帧各 0.05 只有 0.15 —— 那是"探测器看见了湿气"，不是"会淋到人"。
+    private static let minWetTotal = 0.2
 
     /// 柱状图归一化用的最大值（至少 0.5，避免全是毛毛雨时柱子被拉到满格）。
     var scaleMax: Double {

@@ -13,6 +13,20 @@ enum WeatherLocationSetting {
     /// 设置里「用我的位置」的开关。**没设置过 = 关闭**（`UserDefaults.bool` 的缺省值就是 false）
     static let enabledKey = "weather.useLocation"
 
+    /// 定位模式（3.26.0）：`follow` 跟随设备 / `fixed` 用户指定城市
+    static let modeKey = "weather.locationMode"
+
+    /// `fixed` 模式下的城市名与坐标（3.26.0）。
+    ///
+    /// 与下面的 `latKey` / `lonKey` **分开存**是刻意的：那一对是"设备上一次定到的位置"，
+    /// 冷启动时会被 `WeatherStore.restoreFromDisk` 拿去校验盘上那份天气属不属于这里。
+    /// 指定城市一旦混进同一对键，"取消指定 → 回到跟随定位"的第一帧就会拿一个
+    /// 用户从没去过（也不需要去过）的坐标去比，盘上的天气被无端作废一次；
+    /// 更糟的是 `init` 会把它当成"设备就在这里"，把定位这件事整个跳过。
+    static let fixedNameKey = "weather.fixedName"
+    static let fixedLatKey = "weather.fixedLat"
+    static let fixedLonKey = "weather.fixedLon"
+
     /// 上次定位到的纬度 / 经度（度）
     static let latKey = "weather.lat"
     static let lonKey = "weather.lon"
@@ -22,9 +36,28 @@ enum WeatherLocationSetting {
 
     /// 缓存有效期：6 小时。
     ///
-    /// 天气按公里级网格、小时级粒度算，位置不需要"实时"。6 小时的意义是：
-    /// 早上出门打开 App 定一次，中午、下午再打开直接用缓存，一天最多定位一两次。
+    /// **3.26.0 起它只管一件事**：冷启动时能不能直接把盘上那个坐标拿来用
+    /// （见 `LocationStore.init` 的还原逻辑）。它**不再**是"要不要重新定位"的闸门 ——
+    /// 那条闸门是下面的 `reFixInterval`。
+    /// 为什么必须拆开：原来的实现拿 6 小时判"要不要重新定位"，于是人从郑州开车到登封
+    /// （一小时），App 全程认为"6 小时内，不用动"，天气、温度、降雨一直是郑州的。
     static let cacheLifetime: TimeInterval = 6 * 60 * 60
+
+    /// 重定位间隔：15 分钟。
+    ///
+    /// 取值是三件事的交点：
+    /// 1. **跟得上移动** —— 郑州 ↔ 登封 车程约 1 小时，15 分钟内必然跟上；
+    /// 2. **不白耗电** —— 每次只 `requestLocation()` 一个点就停（见类型注释 ②），
+    ///    单次成本是几十毫秒 GPS + 一发反查，15 分钟一次在一天的耗电里看不出来；
+    /// 3. **不比天气本身更勤** —— 天气按小时级更新，定位比天气勤太多没有意义。
+    static let reFixInterval: TimeInterval = 15 * 60
+
+    /// 两次定位请求之间的最短间隔（秒）。
+    ///
+    /// 前台每切回来一次都会调 `refreshIfNeeded()`（`FFWangApp` 的 `scenePhase` task）。
+    /// 没有这道闸门，用户"切出去看眼地图又切回来"的循环会把 GPS 反复唤醒 ——
+    /// 那是纯浪费，因为几秒钟内位置不可能变得有意义。
+    static let requestCooldown: TimeInterval = 60
 
     // MARK: - 地名（"这里是哪"，3.16.0）
 
@@ -46,11 +79,31 @@ enum WeatherLocationSetting {
     static let placeTolerance: Double = 0.02
 }
 
-/// 设备定位的唯一状态源 —— 只服务一件事：让天气接口带上用户当前所在坐标。
+/// 天气位置从哪儿来（3.26.0）。
 ///
-/// 对外只有四样东西：`status`（开关 + 权限的综合状态）、`coordinate`（可用的坐标，可能为 nil）、
-/// `isEnabled`（用户偏好）、`placeName`（"这里是哪"的两级地名，可能为 nil）。
-/// 谁需要坐标谁自己读，本类不发请求、不认识天气。
+/// 与 `WeatherLocationSetting` 一样放在 `@MainActor` 类**外面**：`LocationStore.init()`
+/// 是 `nonisolated` 的，类上的嵌套枚举对它来说是隔离的（和 `static let` 同一个坑）。
+enum LocationMode: String {
+
+    /// 跟着设备走（默认）。移动超过 `WeatherLocationSetting.placeTolerance` 就重新取天气
+    case follow
+
+    /// 用户指定了城市。设备动到哪儿都不影响天气，也不再周期性发定位请求 ——
+    /// 用户已经明确回答了"我要看哪儿的天"，再定位就只是耗电，且会让顶栏地名
+    /// 在他自己的选择上跳来跳去。
+    case fixed
+}
+
+/// 设备定位的唯一状态源 —— 主要服务一件事：让天气接口带上用户当前所在（或指定）的坐标。
+///
+/// 对外的东西分三类：
+/// · **偏好**：`isEnabled`（要不要读设备位置）、`mode` / `setFixed` / `clearFixed`（看哪儿的天）；
+/// · **结果**：`status`、`coordinate`、`placeName`、`fixedName`、`lastFixedAt`；
+/// · **合并后的答案**（UI 与天气一律读这两个）：`effectiveCoordinate`（坐标）、`displayName`（地名）。
+///
+/// 谁需要坐标谁自己读，不要各自拼优先级 —— 优先级只有一处定义（见 `effectiveCoordinate`）。
+/// 本类**不发天气请求**，只在"位置真的变了"时通知三个 Store 去重取（见 `refreshWeatherSources`），
+/// 因为那个时机只有它知道。
 ///
 /// ## ① 为什么默认关闭
 /// 定位是最敏感的一类权限。一装就弹框，等于在用户还不知道有天气卡片时就先要位置 ——
@@ -89,6 +142,19 @@ enum WeatherLocationSetting {
 /// **不要**换成 `nonisolated` + `MainActor.assumeIsolated`：那会把 4 个 delegate 方法体都改成
 /// 一段"假设自己在主线程"的闭包，其中任何一个在新的回调路径上假设错了就是运行时崩溃 ——
 /// 用一行标注换掉这个陷阱，代价只是"编译器不再帮你查这一处"。
+///
+/// ## ⑤ 位置要跟着人走（3.26.0）
+/// 3.25.0 及之前，`refreshIfNeeded()` 用 6 小时的缓存有效期当"要不要重新定位"的闸门，
+/// 于是人从郑州开车到登封，App 全程认为"6 小时内不用动"，天气、温度、降雨一直是郑州的；
+/// 而 `refreshIfNeeded()` 只挂在 `RootView` 的 `.task` 上，一次启动只跑一次 ——
+/// 前台切回来也不会重新定位。
+///
+/// 现在有两条路：
+/// 1. **跟随模式**（默认）：`reFixInterval`（15 分钟）到了就静默重定位；距离超过
+///    `placeTolerance` 时顺带强制刷新天气 / 预警 / 分钟降水。回前台也会触发一次。
+/// 2. **指定城市**：用户自己选了地方（`setFixed`），设备动到哪儿都不再影响天气。
+///    这条路同时是"我就想看老家的天"的唯一出口 —— 没有它，用户只能靠关定位来固定位置，
+///    而关定位后天气会回落到 `HomeCoordinate.cached()`，那是个他控制不了的坐标。
 @MainActor
 final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
 
@@ -130,7 +196,28 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// **开关关着**（→"上次位置 · …"，服务端没有任何记录时才是"默认位置 · 郑州"）。
     @Published private(set) var placeName: String?
 
+    /// 天气位置从哪儿来（3.26.0）。`fixed` 时一切"位置"相关的读取都优先看指定坐标
+    @Published private(set) var mode: LocationMode
+
+    /// `fixed` 模式下用户指定的城市名（"登封" / "郑州 · 惠济区"）。
+    /// UI 一律通过 `displayName` 读，不要直接读它 —— `follow` 模式下这里恒为 nil。
+    @Published private(set) var fixedName: String?
+
+    /// `fixed` 模式下的坐标。与 `fixedName` 同生共死（`setFixed` / `clearFixed` 一起写）
+    private var fixedCoordinate: CLLocationCoordinate2D?
+
+    /// 上一次**设备定位成功**的时刻（读 `weather.fixedAt` 还原，`persist` 时同步）。
+    ///
+    /// 与 `status` 分开的理由：`status == .ready` 只说"有坐标可用"，回答不了
+    /// "这个坐标是多久以前的"。而"15 分钟该重新定位了"和设置页的"定位于 N 分钟前"
+    /// 都必须要一个时刻。
+    @Published private(set) var lastFixedAt: Date?
+
     // MARK: - 内部状态
+
+    /// 上一次发起定位请求的时刻。防止前台反复切换时把 GPS 反复唤醒
+    /// （闸门长度见 `WeatherLocationSetting.requestCooldown`）
+    private var lastRequestAt: Date?
 
     private let defaults: UserDefaults
 
@@ -181,7 +268,7 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
 
     /// 为什么是 `nonisolated`：与 `SurveyStore` / `ScrollLightStore` 同一条纪律 ——
     /// View 的属性初始化器在 Swift 5 的 minimal 并发检查下不保证是隔离上下文。
-    /// 本 init 只做两件事：读缓存、初始化三个 `@Published` 的底层存储，都不需要主 actor。
+    /// 本 init 只做两件事：读缓存、初始化那几个 `@Published` 的底层存储，都不需要主 actor。
     ///
     /// 为什么还要 `override`（3.7.0 首次编译报错的一处）：本类是 `NSObject` 子类，
     /// `NSObject` 自带 `init()`，所以这里的 `init()` 不是"新声明"而是**覆盖**父类的那个。
@@ -191,6 +278,34 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// 那是另一类编译错误。所以两个修饰符都要，且必须在同一行。
     nonisolated override init() {
         let defaults = UserDefaults.standard
+
+        // 模式还原：读不懂的字符串（升级上来的旧版本 / 手改过的 plist）一律当 `follow`，
+        // 那是这个功能上线前的行为，也是唯一不需要额外假设的默认值。
+        let savedMode = LocationMode(rawValue: defaults.string(forKey: WeatherLocationSetting.modeKey) ?? "")
+            ?? .follow
+
+        // 指定城市还原。`mode == .fixed` 但拿不出可用坐标（plist 被清了一半）时**退回 follow**：
+        // 留着 `fixed` 却没有坐标，等于让 `effectiveCoordinate` 静默回落到设备位置，
+        // 而界面上还写着"固定在登封" —— 那种谎最难被发现。
+        var restoredFixed: CLLocationCoordinate2D?
+        var restoredFixedName: String?
+        var restoredMode = savedMode
+        if savedMode == .fixed {
+            if let lat = defaults.object(forKey: WeatherLocationSetting.fixedLatKey) as? Double,
+               let lon = defaults.object(forKey: WeatherLocationSetting.fixedLonKey) as? Double {
+                let candidate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                if CLLocationCoordinate2DIsValid(candidate), !(lat == 0 && lon == 0) {
+                    restoredFixed = candidate
+                    let raw = defaults.string(forKey: WeatherLocationSetting.fixedNameKey)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    restoredFixedName = (raw?.isEmpty == false) ? raw : nil
+                } else {
+                    restoredMode = .follow
+                }
+            } else {
+                restoredMode = .follow
+            }
+        }
 
         // 缓存还原：开关开着 + 坐标存在 + 6 小时内 → 直接可用，避免每次冷启动都定位一次。
         // 过期（或开关已关）就当没有：不后台补定位，等下次打开 App 由 `refreshIfNeeded()` 重取。
@@ -222,8 +337,14 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         }
 
         self.defaults = defaults
+        self.fixedCoordinate = restoredFixed
+        _mode = Published(initialValue: restoredMode)
+        _fixedName = Published(initialValue: restoredFixedName)
+        _lastFixedAt = Published(initialValue: defaults.object(forKey: WeatherLocationSetting.fixedAtKey) as? Date)
         _coordinate = Published(initialValue: restored)
-        _status = Published(initialValue: restored == nil ? .off : .ready)
+        // 指定城市不需要设备坐标就已经"可用"：状态直接给 `.ready`，
+        // 否则设置页副标题会一直停在"定位中…"
+        _status = Published(initialValue: (restoredMode == .fixed || restored != nil) ? .ready : .off)
         _placeName = Published(initialValue: restoredPlace)
         super.init()
     }
@@ -235,6 +356,31 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     var isEnabled: Bool {
         get { defaults.bool(forKey: WeatherLocationSetting.enabledKey) }
         set { setEnabled(newValue) }
+    }
+
+    /// 全 App **唯一**该拿来请求天气的坐标（3.26.0）。
+    ///
+    /// 优先级：指定城市 → 设备坐标 → `HomeCoordinate.cached()`。
+    ///
+    /// 为什么要有这个属性，而不是让调用方各自拼：`WeatherStore.resolvedCoordinate()`、
+    /// 预警、分钟降水三处都按同一套优先级取值，任何一处漏掉"指定城市优先"，
+    /// 就会出现"天气卡是登封、预警还在按郑州发"的错位 —— 而那种错位用户几乎不可能描述清楚。
+    /// `WeatherStore.resolvedCoordinate()` 现在直接返回它，调用点一行都不用动。
+    var effectiveCoordinate: CLLocationCoordinate2D? {
+        // 指定城市优先，且**不依赖开关**：用户选了城市就是想看那儿的天，
+        // 开关管的是"要不要读设备位置"，与这个选择无关
+        if mode == .fixed, let fixed = fixedCoordinate { return fixed }
+        if let device = coordinate { return device }
+        guard let home = HomeCoordinate.cached() else { return nil }
+        return CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon)
+    }
+
+    /// 给 UI 用的地名（3.26.0）：指定城市优先，其次才是反查出来的当前位置。
+    ///
+    /// 天光页顶栏、设置页副标题都读它。别再让 UI 自己判 `mode` ——
+    /// 那种判断一散到三处，就一定会有一处忘了改。
+    var displayName: String? {
+        return fixedName ?? placeName
     }
 
     /// 开关动作。
@@ -249,25 +395,131 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
             reset()
             return
         }
+        // 明确操作不该被 `requestCooldown` 挡掉（3.26.0 修）：用户先关再开、或刚关掉不到 60 秒
+        // 又打开时，上一发请求留下的 `lastRequestAt` 会把这一次吞掉 —— 而 `reset()` 刚把状态
+        // 写成 `.off`，界面于是停在"定位中…"，并且要等到下次回前台才会重试。
+        // 与 `clearFixed()` 同一个写法：冷却只管"前台自动触发"，不管用户点的那一下。
+        lastRequestAt = nil
         requestPermissionOrLocation()
     }
 
-    /// 启动时补一次：**已启用且缓存过期**才真正定位，其余情况纯短路（不会弹权限框）。
+    // MARK: - 指定城市（3.26.0）
+
+    /// 把天气位置固定在某个城市。
     ///
-    /// 只该挂在进入 App 的 `.task` 上 —— 这是"一天关心一次"的频率，
-    /// 放进按帧 / 按秒的路径会变成耗电大户。
+    /// 三件事必须同时发生，少一件就会出现"两处显示不同城市"：
+    /// 1. **写盘 + 改模式** —— 冷启动才不会又跑回设备位置；
+    /// 2. **`status = .ready`** —— 指定城市本身就是一个可用的位置，没有等待期；
+    /// 3. **主动 `publishHome` 一次** —— 小组件读的是服务端那条 `home:current` 记录。
+    ///    只改本地不报，App 会显示登封、桌面小组件显示郑州，一直挂到下一条定位上报为止。
+    ///
+    /// 调用方（设置页的城市选择弹层）已经校验过输入，这里再校验一次：坐标来自
+    /// `CLGeocoder` / 手写常量，不排除某个 placemark 给出 (0, 0)。
+    func setFixed(name: String, lat: Double, lon: Double) {
+        let candidate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        guard CLLocationCoordinate2DIsValid(candidate), !(lat == 0 && lon == 0) else { return }
+
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed.isEmpty ? nil : trimmed
+
+        mode = .fixed
+        fixedName = label
+        fixedCoordinate = candidate
+        defaults.set(LocationMode.fixed.rawValue, forKey: WeatherLocationSetting.modeKey)
+        defaults.set(label, forKey: WeatherLocationSetting.fixedNameKey)
+        defaults.set(lat, forKey: WeatherLocationSetting.fixedLatKey)
+        defaults.set(lon, forKey: WeatherLocationSetting.fixedLonKey)
+        status = .ready
+
+        // 小组件那条记录跟上（name 一起报，否则小组件只有坐标没有地名）
+        publishHome(candidate, name: label)
+
+        // 位置换了，屏幕上那三份数据全部作废重取。不主动推这一下的话，
+        // 用户选完城市回到天光页，看到的还是上一座城市的温度 —— 直到下一次轮询（最长 10 分钟）。
+        refreshWeatherSources()
+    }
+
+    /// 取消指定，回到"跟着设备走"。
+    ///
+    /// 必须先清键再请求定位：`refreshIfNeeded()` / `effectiveCoordinate` 都以 `mode` 为第一判据，
+    /// 键留在盘上就表示"下次冷启动还是指定城市"。
+    func clearFixed() {
+        mode = .follow
+        fixedName = nil
+        fixedCoordinate = nil
+        defaults.removeObject(forKey: WeatherLocationSetting.modeKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.fixedNameKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.fixedLatKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.fixedLonKey)
+
+        // 用户刚点的那一下必须立刻有反应：`requestCooldown` 是给"前台自动触发"用的，
+        // 不该把一次明确的操作挡在外面。
+        //
+        // 但**开关关着时一发都不能发**（3.26.0 修）：`requestPermissionOrLocation()` 不看
+        // `isEnabled`，而 `clearFixed()` 是用户随时会点的（取消指定城市回到跟随）——
+        // 一个从没打开过定位开关、权限还是 `notDetermined` 的用户，只要点一下
+        // 城市弹层里的「恢复跟随定位」，就会被弹一次系统权限框。那正是类型注释 ① 里
+        // "一装就弹框"要避免的情形，只是换了个入口。
+        if isEnabled {
+            lastRequestAt = nil
+            requestPermissionOrLocation()
+        } else {
+            // 开关关着：状态回到 `.off`，设置页副标题才不会说"跟随设备定位"
+            status = .off
+        }
+
+        // 天气同样要立刻回到设备所在地（此时 `effectiveCoordinate` 已不再返回指定坐标）。
+        // 定位结果回来还会再推一次，但定位可能失败 / 被拒 —— 那一路也必须有数据可显示。
+        refreshWeatherSources()
+    }
+
+    /// 位置变了之后强制重取三份数据。
+    ///
+    /// 为什么三份都要：天气卡（`WeatherStore`）、预警（`AlertStore`）、分钟降水（`MinutelyStore`）
+    /// 各自有独立的内存缓存窗（30 / 10 / 10 分钟），且都不认识"位置"这件事 ——
+    /// 只推天气的话，人到了登封会看到"登封的温度 + 郑州的暴雨预警"，比不刷新更糟。
+    ///
+    /// 用 `Task` 而不是让调用方 `await`：`setFixed` / `clearFixed` 是 UI 动作的同步出口，
+    /// 调用点（delegate 回调、sheet 按钮）不该为三次网络请求挂在那里等。
+    private func refreshWeatherSources() {
+        Task {
+            await WeatherStore.shared.load(force: true)
+            await AlertStore.shared.refresh(force: true)
+            await MinutelyStore.shared.refresh(force: true)
+        }
+    }
+
+    /// 补一次定位。**跟着人走**（3.26.0 重写）。
+    ///
+    /// 三个入口都调它：进 App（`RootView.task`）、回前台（`FFWangApp` 的 `scenePhase` task）、
+    /// 以及切开关。既然回前台都会调，它就必须自己扛住"别把 GPS 反复唤醒"这件事 ——
+    /// 闸门在 `requestPermissionOrLocation()` 里（60 秒冷却）。
+    ///
+    /// 三道判断，顺序不能换：
+    /// 1. 开关关着 → `reset()`，一步都不往下走（**不会**弹权限框）；
+    /// 2. `fixed` 模式 → 直接返回。用户已经指定了城市，再定位只是耗电，
+    ///    而且拿到了也不能用 —— 用了才是 bug；
+    /// 3. 有缓存但过了 `reFixInterval`（15 分钟）→ **继续往下走**去重新定位。
+    ///    这一条正是 3.25.0 那个 bug 的修复点：以前这里看的是 6 小时的 `cacheLifetime`，
+    ///    于是 6 小时内一律短路，人换城市了天气也不换。
     func refreshIfNeeded() {
         guard isEnabled else {
             reset()
             return
         }
-        if let coordinate = coordinate, hasFreshCache {
+        if mode == .fixed {
+            // 指定城市是用户明确的选择，设备动到哪儿都与它无关
+            status = .ready
+            return
+        }
+        if let coordinate = coordinate, hasFreshCache, hasRecentFix {
             status = .ready
             // 坐标是冷启动还原的，地名可能还没反查过（首装升级 / 上次反查失败）：
-            // 这里补一次，否则顶栏会一直停在"定位中…"，直到 6 小时后重新定位。
+            // 这里补一次，否则顶栏会一直停在"定位中…"。
             resolvePlaceNameIfNeeded(coordinate)
             return
         }
+        // 静默刷新：失败时 `didFailWithError` 保留旧坐标，用户看不到任何错误，只是位置停在上一次
         requestPermissionOrLocation()
     }
 
@@ -278,6 +530,14 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         // 开关没开：无论系统里是什么权限，都不该让这里悄悄变成 ready
         guard isEnabled else {
             status = .off
+            return
+        }
+
+        // 指定城市：权限状态与天气无关，这里既不该请求定位也不该改写状态。
+        // 少了这一条，用户在"指定城市"期间去系统设置改了权限，会顺带打一发定位 ——
+        // 而那一发的结果落地时会把服务端那条共享记录改回设备位置（见 `didUpdateLocations`）。
+        if mode == .fixed {
+            status = .ready
             return
         }
 
@@ -303,6 +563,10 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         // 用户已经关掉开关，而这一发请求还在路上：结果直接丢弃，不写状态
         guard isEnabled else { return }
+        // 指定城市：这一发是 `setFixed` 之前就发出去的，结果一律丢弃。
+        // **尤其不能 `publishHome`** —— 服务端只有一条共享记录，设备坐标盖上去之后
+        // 小组件会跟着设备走，而 App 显示的是用户选的那座城，正是这次要消灭的分叉。
+        guard mode == .follow else { return }
         guard let latest = locations.last else { return }
 
         let next = latest.coordinate
@@ -317,22 +581,19 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         // 换城市时**必须**把内存里的地名清掉：`placeName` 是上一座城市反查出来的结果，
         // 而这里只更新坐标（只有 `dropCoordinate` 才会连带清它）。不清就会出现
         // "定位已到上海、反查还在路上（或 `CLGeocoder` 一直失败）"，而天光页
-        // `placeLabel` 的 `if location.coordinate != nil, let name = location.placeName`
-        // 会继续显示"郑州市 · 金水区" —— 连"定位中…"都等不到。
+        // `placeLabel` 会继续显示"郑州市 · 金水区" —— 连"定位中…"都等不到。
         //
-        // 阈值与 `publishHome` 的节流同口径（都用 `WeatherLocationSetting.placeTolerance`）：
-        // "还算不算同一个地方"在整个 App 里只该有一个定义，这里换个数就会出现
-        // "上报认为换城市了、地名却还留着"的错位。2km 内保留旧地名，
-        // 免得同城挪两步就让顶栏闪一下"定位中…"。
+        // "算不算换了地方"要在更新坐标**之前**算出来（更新之后就无从比较了），
+        // 判据与 `publishHome` 的节流同口径（都用 `WeatherLocationSetting.placeTolerance`）：
+        // 这个定义在整个 App 里只该有一处，换个数就会出现"上报认为换城市了、
+        // 地名却还留着"的错位。2km 内保留旧地名，免得同城挪两步就让顶栏闪一下"定位中…"。
         //
-        // **落盘的地名三键（`placeNameKey` / `placeLatKey` / `placeLonKey`）刻意不清**：
+        // **落盘的地名三键刻意不清**（`placeNameKey` / `placeLatKey` / `placeLonKey`）：
         // 那是给下次冷启动的兜底，`init` 还原时会校验"地名 + 它自己的坐标"对不对得上，
         // 对不上自然不用。清了只会让顶栏变空，不会让它更准。
-        if let previous = coordinate,
-           (abs(previous.latitude - next.latitude) > WeatherLocationSetting.placeTolerance
-            || abs(previous.longitude - next.longitude) > WeatherLocationSetting.placeTolerance) {
-            placeName = nil
-        }
+        let moved = Self.hasMoved(from: coordinate, to: next)
+
+        if moved { placeName = nil }
 
         coordinate = next
         persist(next, at: Date())
@@ -352,19 +613,58 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
 
         // 地名反查要打网络，别卡住 delegate 回调：丢进任务里，2km 内的重复坐标直接跳过
         resolvePlaceNameIfNeeded(next)
+
+        // 换地方了：屏幕上那三份数据都是上一座城市的，必须立刻重取（3.26.0）。
+        //
+        // 为什么不能等下一次轮询：天气 30 分钟、预警 / 分钟降水各 10 分钟。用户开车到登封
+        // 打开 App，看到的会是"郑州的温度 + 郑州的暴雨预警"，最长要错半小时。
+        //
+        // 为什么放在 `publishHome` 之后、并且丢进 `Task`：delegate 回调必须尽快返回，
+        // 这里没有任何一步的结果是本次回调需要的。
+        if moved {
+            refreshWeatherSources()
+        }
     }
 
     /// 定位失败：**已有坐标时什么都不做**，保留上一次的位置。
     /// 天气卡片是装饰性信息，不该因为一次"暂时定位不到"就偷偷退回默认城市。
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        guard coordinate == nil else { return }
+        // 指定城市时坐标不是必需品，失败不该把状态改成 `.failed`（那会让设置页
+        // 莫名其妙出现"定位失败"，而当前根本不需要定位）
+        guard mode == .follow else { return }
+        guard coordinate == nil else {
+            // 还有旧坐标可用：**保留**它，但状态必须回到 `.ready`。
+            // 停在 `.asking` 会让界面一直显示"定位中…"（`placeLabel` 就是这么读的），
+            // 而屏幕上明明有当地天气 —— 那是自相矛盾的一种。
+            status = .ready
+            return
+        }
         status = .failed
     }
 
     // MARK: - 私有
 
-    /// 按当前授权状态决定"申请权限"还是"直接定位"。两个入口（用户切开关 / 权限变化）共用。
+    /// 按当前授权状态决定"申请权限"还是"直接定位"。三个入口（用户切开关 / 权限变化 /
+    /// 回前台）共用，所以"防连点"必须在这里，而不是在调用点各写一遍。
+    ///
+    /// 闸门只有**冷却时间**一条（60 秒），没有单独判 `status == .asking`：
+    /// 后者听着更直接，但它有个致命副作用 —— 万一某次请求既没回调成功也没回调失败
+    /// （CoreLocation 在室内 / 刚切飞行模式时确实会静默吞掉一次），`status` 会永久停在
+    /// `.asking`，而这条判断会让定位从此再也不发起 —— 用户看到的是"位置卡住不动"，
+    /// 与这次要修的 bug 症状一模一样。冷却时间天然自愈：60 秒后下一次前台切换就重试。
     private func requestPermissionOrLocation() {
+        // 指定城市时**根本不发请求**：拿到了也不能用，只是白耗电。
+        // 这条闸门放在最前面（早于防连点），否则"指定城市 + 打开开关"会白白弹一次权限框，
+        // 而那个权限对这个模式毫无用处。
+        if mode == .fixed {
+            status = .ready
+            return
+        }
+        if let last = lastRequestAt, Date().timeIntervalSince(last) < WeatherLocationSetting.requestCooldown {
+            return
+        }
+        lastRequestAt = Date()
+
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
             status = .asking
@@ -380,12 +680,21 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         }
     }
 
-    /// 落盘缓存是否还在 6 小时有效期内
+    /// 落盘缓存是否还在 6 小时有效期内（只管"冷启动能不能直接用"，见 `refreshIfNeeded`）
     private var hasFreshCache: Bool {
         guard let fixedAt = defaults.object(forKey: WeatherLocationSetting.fixedAtKey) as? Date else {
             return false
         }
         return Date().timeIntervalSince(fixedAt) < WeatherLocationSetting.cacheLifetime
+    }
+
+    /// 上一次定位距今是否还在 `reFixInterval`（15 分钟）内 —— 决定"要不要再去定一次"
+    ///
+    /// 与 `hasFreshCache` 分开：那个是 6 小时（能不用网络就别用），
+    /// 这个是 15 分钟（位置会不会已经变了）。两个问题，两个数字。
+    private var hasRecentFix: Bool {
+        guard let last = lastFixedAt else { return false }
+        return Date().timeIntervalSince(last) < WeatherLocationSetting.reFixInterval
     }
 
     /// 关掉开关：内存与落盘一起清，状态回 `.off`
@@ -402,6 +711,8 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         coordinate = nil
         placeName = nil
         geocodedCoordinate = nil
+        // 坐标没了，"上一次定位于何时"也不再指向任何真实位置，一起清掉
+        lastFixedAt = nil
         defaults.removeObject(forKey: WeatherLocationSetting.latKey)
         defaults.removeObject(forKey: WeatherLocationSetting.lonKey)
         defaults.removeObject(forKey: WeatherLocationSetting.fixedAtKey)
@@ -414,9 +725,24 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         defaults.set(coordinate.latitude, forKey: WeatherLocationSetting.latKey)
         defaults.set(coordinate.longitude, forKey: WeatherLocationSetting.lonKey)
         defaults.set(date, forKey: WeatherLocationSetting.fixedAtKey)
+        // 内存与盘上同步：`refreshIfNeeded` 判 15 分钟、设置页显示"定位于 N 分钟前"都读它
+        lastFixedAt = date
     }
 
     // MARK: - 地名反查
+
+    /// 两个坐标算不算"换了地方"（`placeTolerance` 容差内算同一个地方）。
+    ///
+    /// 单独抽成一个静态方法，是为了让"清地名 / 上报节流 / 强制刷新"三处**判据完全一致**。
+    /// 三种输入各自的意义也要一致：
+    /// · 旧值 nil（第一次定位 / 刚被清）→ 算换了：第一次拿到的位置本来就"不知道原来在哪"；
+    /// · 旧值有、新值必然有（`next` 已经过合法性校验）→ 按容差比。
+    private static func hasMoved(from previous: CLLocationCoordinate2D?,
+                                 to next: CLLocationCoordinate2D) -> Bool {
+        guard let previous else { return true }
+        return abs(previous.latitude - next.latitude) > WeatherLocationSetting.placeTolerance
+            || abs(previous.longitude - next.longitude) > WeatherLocationSetting.placeTolerance
+    }
 
     /// 需不需要为这个坐标反查一次地名（2km 内不重复打接口）
     private func needsResolve(_ coordinate: CLLocationCoordinate2D) -> Bool {
