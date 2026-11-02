@@ -558,8 +558,15 @@ struct SkyRoomView: View {
 
     /// 四张卡：天光进度（身份卡）→ 气温范围 →（风 | 云量）。
     /// 接口只有这几组数据，就只做这几张卡 —— 没有的数据不放假卡。
+    ///
+    /// ## 3.18.0：底板随滚动显现
+    ///
+    /// `reveal` 是本页唯一给卡片的视觉输入：0 = 底板全透明（只剩文字），1 = 白色毛玻璃全显。
+    /// 曲线取 `progress` 的 0.2…0.8 段再叠一次 smoothstep —— 起步那一段手指刚动，
+    /// 玻璃就"啪"地出现会很脏；缓入缓出读起来才像天光在慢慢沉淀下来。
     private func cards(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
-        VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
+        let reveal = cardReveal(height: frame.height)
+        return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
             if let times = sunTimes(now: now) {
                 SkyRoomDaylightCard(now: now,
                                     sunrise: times.sunrise,
@@ -577,6 +584,14 @@ struct SkyRoomView: View {
         }
         .frame(width: frame.cardColumnWidth)
         .frame(maxWidth: .infinity)
+        .environment(\.skyRoomGlassReveal, reveal)
+    }
+
+    /// 卡片底板的显现进度（0…1），见 `cards(sky:frame:now:)` 的注释。
+    private func cardReveal(height: CGFloat) -> CGFloat {
+        let progress = scrollProgress(height: height)
+        let raw = min(max((progress - 0.2) / 0.6, 0), 1)
+        return raw * raw * (3 - 2 * raw)
     }
 
     // MARK: - 天气时刻（hero 行与天光卡共用）

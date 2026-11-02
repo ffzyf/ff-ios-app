@@ -98,6 +98,14 @@ struct FFWangApp: App {
                 guard scenePhase == .active else { return }
                 await DaylightActivityCoordinator.shared.monitorForeground()
             }
+            // 天气（3.18.0）：每次回到前台都拉一次「当地此刻」的天气。
+            // 内部有 60 秒防抖（`refreshOnForeground`）—— 切出去回条消息再回来
+            // 不该再打一次接口，那是白烧高德配额；而真正隔了几分钟再打开，
+            // 用户看到的一定是新数据（缓存窗 30 分钟只约束"不刷新时"的重复调用）。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await WeatherStore.shared.refreshOnForeground()
+            }
             // 远程配置（3.9.0）：挂在云控更新**之前**的第四个同 id task ——
             // 配置（minBuild / installGuideURL）是更新判定的输入，先到先备好。
             // 1 小时闸门在 `refreshIfNeeded()` 内部；失败静默、不清空旧值。

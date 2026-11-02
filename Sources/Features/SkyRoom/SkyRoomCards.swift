@@ -12,8 +12,37 @@ import SwiftUI
 /// 3. 颜色全部走 `Theme` token 与 `sky` 六 token，本文件零颜色字面量。
 // MARK: - 卡片外壳
 
+/// 卡片底板「随滚动显现」的程度（0…1）。由 `SkyRoomView` 按滚动进度注入，
+/// 卡片壳自己读 —— 这样 4 张卡片的构造点一个参数都不用加。
+///
+/// 为什么走 Environment 而不是逐张传参：卡片是 `SkyRoomCardShell` 的内部细节，
+/// 调用方（`SkyRoomDaylightCard` 等）不该知道"底板现在有多实"。加参数等于把
+/// 一个纯视觉状态漏进 4 个组件的公开 API，以后第 5 张卡还得再传一遍。
+private struct SkyRoomGlassRevealKey: EnvironmentKey {
+    /// 默认 1（全显）：不在天光页里用这套卡片时，行为与 3.17.0 完全一致
+    static let defaultValue: CGFloat = 1
+}
+
+extension EnvironmentValues {
+    var skyRoomGlassReveal: CGFloat {
+        get { self[SkyRoomGlassRevealKey.self] }
+        set { self[SkyRoomGlassRevealKey.self] = newValue }
+    }
+}
+
 /// 统一的玻璃卡壳：标题行（标题 + 右侧辅注）+ 内容。
-/// 材质与全 App 同源（`glassSurface(.card)`），读起来是 Pixel 天气那套"悬浮卡"。
+///
+/// ## 3.18.0：底板与内容分离，底板随滚动"长出来"
+///
+/// 用户原话：「正常时它是透明的只显示文字，如果上滑，让它的可见度高一些，
+/// 把白色毛玻璃显示出来」。所以底板不再是卡片的一部分，而是**内容后面的一层**：
+///
+/// · `reveal == 0` → 底板完全透明，卡片只剩文字浮在天上（首屏就是这样）；
+/// · 上滑 → `reveal` 涨到 1，白色毛玻璃（浅色）/ 淡白雾（深色）显出来。
+///
+/// 颜色仍然全部走 `Theme` 的玻璃 token（`glassFill` 浅色是白 72%、深色是白 6%），
+/// 于是"白天白玻璃、夜里深玻璃"是 token 自动给的，本文件不需要判断 `colorScheme`
+/// （主题闸门第 2 条也禁止在 View 层判断）。
 struct SkyRoomCardShell<Content: View>: View {
 
     let title: String
@@ -21,6 +50,9 @@ struct SkyRoomCardShell<Content: View>: View {
     var accessory: String? = nil
     let scale: CGFloat
     @ViewBuilder let content: () -> Content
+
+    /// 底板显现程度（见 `SkyRoomGlassRevealKey`）
+    @Environment(\.skyRoomGlassReveal) private var reveal
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,7 +74,23 @@ struct SkyRoomCardShell<Content: View>: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassSurface(.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .background { plate }
+    }
+
+    /// 底板：毛玻璃材质 + 一层主题白纱 + 1pt 顶缘描边 + 柔和投影。
+    ///
+    /// 为什么不用 `glassSurface`：那个入口的投影与描边都绑在材质上，整套一起 `opacity`
+    /// 淡出没问题，但 iOS 26 的 `glassEffect` 在 0 透明度时会**仍然采样背景**并留一点
+    /// 边框残影 —— 用户要的"完全透明、只剩文字"就做不到。手搓这一层反而是跨版本一致的。
+    private var plate: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        return shape
+            .fill(.ultraThinMaterial)          // 毛玻璃本体（采样背后那片天）
+            .overlay(shape.fill(Theme.glassFill))   // 主题白纱：浅色白 72%、深色白 6%
+            .overlay(shape.strokeBorder(Theme.glassStrokeTop, lineWidth: 1))
+            .shadow(color: Theme.glassShadowSoft, radius: 18, y: 6)
+            .opacity(Double(reveal))
+            .allowsHitTesting(false)
     }
 }
 

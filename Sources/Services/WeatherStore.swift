@@ -5,14 +5,14 @@ import Foundation
 ///
 /// 只做三件事：
 /// 1. 拉一次天气，成功就替换 `current`；
-/// 2. 内存里扛 10 分钟，期间重复调用直接返回；
+/// 2. 内存里扛 30 分钟，期间重复调用直接返回（回前台会强制穿一次，见 `refreshOnForeground()`）；
 /// 3. 失败**保留上一次的 `current`**、**不报错**。
 ///
 /// 3.16.0 起多带一个数：`visibilityMeters`（能见度，米）。它与天气**并发**请求、
 /// 独立落账 —— 见 `load(force:)` 与 `visibilityMeters` 的注释。
 ///
 /// 三条策略各自的理由：
-/// · **10 分钟内存缓存**：与后端 KV 的 TTL 对齐（上游 Open-Meteo 也是 5~10 分钟粒度）。
+/// · **30 分钟内存缓存**（3.18.0 由 10 分钟放宽）：与后端 KV 的 TTL 对齐。
 ///   比 TTL 更短只是白打接口，更长就会拿着过期天气画天空 —— 两者都没有意义，
 ///   所以干脆对齐，用户下拉刷新想看到新数据时后端也确实有新数据。
 /// · **失败保留旧值**：天气是卡片上的装饰性背景。拉失败就让卡片退化成"无天气"，
@@ -37,8 +37,21 @@ final class WeatherStore: ObservableObject {
 
     static let shared = WeatherStore()
 
-    /// 内存缓存窗口（秒）。与后端 KV 的 TTL 对齐，见类型注释
-    private static let freshWindow: TimeInterval = 600
+    /// 内存缓存窗口（秒）。与后端 KV 的 TTL 对齐，见类型注释。
+    ///
+    /// 3.18.0：600 → **1800**（30 分钟）。用户要求「这个天气能不能 30 分钟刷新一次」，
+    /// 同时后端 `weather.js` 的 KV TTL 也改成了 1800 —— 两边必须同一个数：
+    /// App 比后端短，只是把同一份缓存多读几次；App 比后端长，用户就会看到
+    /// 「后端已经换了天，卡片还是旧的」。高德实况本身就是小时级更新，
+    /// 30 分钟既够新、也够省额度（个人开发者配额按次计）。
+    private static let freshWindow: TimeInterval = 1800
+
+    /// 回到前台时允许强制刷新的最小间隔（秒）。
+    ///
+    /// 用户要的是「每次打开 App 都拉一次当地的天气」，但"打开"在系统里
+    /// 包含切出去回条消息再回来 —— 60 秒内来回切三次不该打三次接口
+    /// （高德配额按次算）。60 秒之后才认为这是一次真正的"重新打开"。
+    private static let foregroundDebounce: TimeInterval = 60
 
     /// 坐标变化的作废阈值（0.05° ≈ 5.5km）。
     ///
@@ -82,6 +95,20 @@ final class WeatherStore: ObservableObject {
     /// 有没有可显示的天气（决定卡片画天空还是走"天气未知"的降级外观）
     var hasData: Bool {
         return current != nil
+    }
+
+    /// 回到前台时调一次：**每次都重新拉当地天气**（3.18.0）。
+    ///
+    /// 与 `load(force: true)` 的区别只有一个 `foregroundDebounce` 闸门：
+    /// 下拉刷新 / 设置页改定位要的是"立刻"，回前台要的是"每次打开都新"——
+    /// 但两者都会落到同一个 `load`，不需要第二套请求逻辑。
+    ///
+    /// 冷启动也走这里：`lastSuccessAt` 是内存值，进程新起时必为 nil，闸门直接放行。
+    func refreshOnForeground() async {
+        if let last = lastSuccessAt, Date().timeIntervalSince(last) < Self.foregroundDebounce {
+            return
+        }
+        await load(force: true)
     }
 
     /// 拉一次天气（顺带一次能见度）。
