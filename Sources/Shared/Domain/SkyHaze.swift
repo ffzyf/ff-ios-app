@@ -33,6 +33,11 @@ enum SkyHaze {
     /// 观测点与用户所在位置常常差着几公里，雾的边界又极不规则。宁可雾重一点，
     /// 也不要出现"App 说有大雾、天空却一片澄澈"这种自相矛盾。
     ///
+    /// **降水天先夹一个上限再进曲线**（3.25.0）：见 `ceiling(for:)` 与
+    /// `effectiveVisibility(_:kind:)` —— 雨幕的消光不会被气象站的水平能见度反映，
+    /// 不夹这一下，大雨天会拿到 10km 的观测值，`max(curve, base)` 于是只剩 `.rain` 的 0.30，
+    /// 画面依旧通透，用户的原话就是「下雨时看起来还是太透」。
+    ///
     /// - Parameters:
     ///   - visibilityMeters: 水平能见度（米）。nil = 没有数据（不是 0、也不是 24km）
     ///   - kind: 天气类型。`WeatherKind.from(code:)` 认不出代码时也是 nil
@@ -40,7 +45,74 @@ enum SkyHaze {
     static func level(visibilityMeters: Double?, kind: WeatherKind?) -> Double {
         let fallback = kind.map { baseLevel(for: $0) } ?? 0
         guard let meters = visibilityMeters, meters.isFinite else { return fallback }
-        return max(curveLevel(meters), fallback)
+        let effective = effectiveVisibility(meters, kind: kind)
+        return max(curveLevel(effective), fallback)
+    }
+
+    /// 降水能见度上限（米）：进曲线**之前**先把 `meters` 夹到它。
+    ///
+    /// ## 为什么需要这一张表（不是"为了好看调参"）
+    ///
+    /// 上游（和风 / 气象站）的 `visibility` 是**站点观测的水平能见度**，它描述的是
+    /// 「大气本身有多浑」，而雨幕造成的看不清是**几何遮挡** —— 雨滴是实体，
+    /// 它挡光、挡视线的机理和雾滴的气溶胶散射不是一回事，站点那套观测里根本没有这一项。
+    /// 所以同一场中雨，站里照样报 10km（因为它测的是"雾不雾"），而人站在雨里只能看 2~3km。
+    ///
+    /// 于是 `max(curveLevel(10_000) = 0.20, baseLevel(.rain) = 0.30)` 得到 0.30 ——
+    /// 天空只掉一点点饱和、雾层几乎不出现，雨丝的粒子层孤零零地贴在通透的天上，
+    /// 这正是"下雨时天光卡看起来还是太透"的根因。把被上游低估的那部分补回来的唯一办法，
+    /// 就是承认"有降水时能见度不可能好于某一档"，先把 `meters` 夹到那一档再进曲线。
+    ///
+    /// ## 取值依据（一眼可核）
+    ///
+    /// | 降水类型 | 上限 | 现实参照 |
+    /// |---|---|---|
+    /// | 毛毛雨 | 6 km | 雨滴极小、数密度低，损失最轻；6 km → 曲线 0.36，才看得出"有点糊" |
+    /// | 雨 | 5 km | 中雨的能见度量级；大雨更差，但 `kind` 分不出量级，取一个保守中值 |
+    /// | 雪 | 3 km | 雪片比雨滴大一个量级，同样的降水率挡得更多 |
+    /// | 雷雨 | 2.5 km | 雨幕最密 + 云底最低，是这四档里最差的 |
+    ///
+    /// 注意这张表给的是**上限**（`min`），不是设定值：观测值比它还差时（真·暴雨 1km）
+    /// 原样进曲线，我们只补"被低估"的那一段，绝不像素级改写上游已经更差的情况。
+    ///
+    /// - Parameter kind: 天气类型；非降水（晴 / 多云 / 阴 / 雾）返回 nil = 不夹
+    private static func ceiling(for kind: WeatherKind) -> Double? {
+        switch kind {
+        case .drizzle:
+            // 毛毛雨：雨滴极小、数密度低，能见度损失最轻的一档。
+            //
+            // 为什么是 **6 km**（3.26.0 从 8 km 下调）：8 km 落在曲线 0.28 上，而
+            // `baseLevel(.drizzle) = 0.24` —— `max(curve, base)` 之后只差 0.04，等于
+            // 这一档**根本没有效果**（毛毛雨天调不调这条上限，画面一模一样）。
+            // 6 km 对应曲线的 0.36 锚点，比底值高 0.12，毛毛雨才看得出"天有点糊"。
+            //
+            // 为什么不是更狠的 5 km：`kind` 只给了"毛毛雨"这一个类型（61 号代码），
+            // 分不出轻重；5 km 已经是 `.rain` 的上限，会把小毛毛雨当成中雨压浑。
+            // 所以取**能让这一档产生可见差异的保守上限**。
+            return 6_000
+        case .rain:
+            // 雨：中雨的能见度量级（`kind` 分不出小 / 中 / 大，取保守中值）
+            return 5_000
+        case .snow:
+            // 雪：雪片直径比雨滴大一个量级，同降水率下挡得更多
+            return 3_000
+        case .thunder:
+            // 雷雨：雨幕最密、云底最低，四档里最差
+            return 2_500
+        case .clear, .partly, .overcast, .fog:
+            // 雾**不夹**：雾的能见度就是站点直接测的那个量，它就是这条曲线的本职。
+            // 晴 / 多云 / 阴根本没有降水，没有任何理由动它们的观测值。
+            return nil
+        }
+    }
+
+    /// 夹上下限之后真正进曲线的能见度（米）。
+    ///
+    /// 单独抽成一个函数是为了让 `level` 里那两行读起来就是一句话：
+    /// 「先夹到降水上限，再进曲线，最后和天气类型的底值取大」。
+    private static func effectiveVisibility(_ meters: Double, kind: WeatherKind?) -> Double {
+        guard let kind = kind, let bound = ceiling(for: kind) else { return meters }
+        return Swift.min(meters, bound)
     }
 
     /// 雾层的颜色：白天 / 黄昏用近白，夜里用冷灰。
@@ -117,6 +189,10 @@ enum SkyHaze {
     ///
     /// 为什么不给 rain 更高的值：雨天的能见度损失主要体现在**降水粒子**上，
     /// 而天光页不画雨丝（那是天气组件的事）—— 这一层只负责大气浑浊度。
+    ///
+    /// 3.25.0 起这一档**不再是雨天的天花板**：真正把雨天"压浑"的是 `ceiling(for:)` 那张
+    /// 降水能见度上限表（雨 5km → 曲线 0.42）。底值只是"连能见度都没有"时的保守兜底，
+    /// 所以这里一个数都没动 —— 动了它，没有能见度数据的那一半帧反而会突然变浑。
     private static func baseLevel(for kind: WeatherKind) -> Double {
         switch kind {
         case .fog:

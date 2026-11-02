@@ -303,6 +303,79 @@ enum BriefMetrics {
         return (sky: sky, ground: count - sky)
     }
 
+    // MARK: 分钟级降水（3.25.0）
+    //
+    // 用户原话："我大部分的降水啥的都是从……小组件里面看到更全面一些……放进简报"。
+    // 这一块是**新增的一条信息**，所以要跟 158pt 高的画布抢地方。中号卡的纵向预算
+    // （内容高 158 − 12×2 = 134）逐项是：
+    //   顶行 14 + 间距 6 + 天气块 38 + 间距 4 + 弱化正文 14 + 弹性 + 轨迹 12 + 间距 6 + 注脚 14 = 108
+    //   → 弹性留白 26pt。
+    // 所以中号的柱区定 **24pt**（+4pt 间距 = 28pt 一条），正好吃掉那 26pt 加上天气块那 2pt 余量：
+    // 再多 2pt 就会把注脚顶出卡片（`VStack` 里没有第二个弹性件能吸收）。
+    // 大号有 354pt 高、弹性留白约 90pt，柱区给到 32pt，眼睛看得出来。
+
+    /// 中号柱区高度（pt）
+    static let minutelyBarMediumHeight: CGFloat = 24
+    /// 大号柱区高度（pt）
+    static let minutelyBarLargeHeight: CGFloat = 32
+    /// 柱间距（pt）。1pt 是"分得开"与"不散架"的平衡：24 根柱子去掉 23pt 间隙后
+    /// 还剩约 296pt，每根约 11pt 宽
+    static let minutelyBarGap: CGFloat = 1
+    /// 柱子的最小高度：湿格兜底 2pt（0.05mm 的毛毛雨也要看得见一截）
+    static let minutelyBarMinHeight: CGFloat = 2
+    /// 过去格子的底纹高度（pt）。塌成一截 1.5pt 的短线 —— 它只负责说"这一格已经过去了"
+    static let minutelyPastHeight: CGFloat = 1.5
+    /// 湿格的不透明度（与 App 内那张卡的 0.78 同量级）
+    static let minutelyBarAlpha: Double = 0.72
+    /// 未来干格的不透明度：只留一道极淡的基线，读者才知道"这段时间不下"而不是"图没画完"
+    static let minutelyDryAlpha: Double = 0.20
+    /// 过去格子的不透明度（**比干格还淡**：已经发生的事不该抢未来的注意力）
+    static let minutelyPastAlpha: Double = 0.12
+    /// 无降水那句小字的不透明度
+    static let minutelyDryTextAlpha: Double = 0.55
+    /// 小号那行结论的不透明度（比无降水那句高：它是判断，不是注脚）
+    static let minutelySummaryAlpha: Double = 0.85
+    /// 小号结论的字号。「23 分钟后雨停」8 个汉字在 136pt 宽里放得下
+    static let minutelySummarySize: CGFloat = 11
+    /// 柱状图与小号结论的块外间距（块 → 轨迹）
+    static let minutelyGap: CGFloat = 4
+    /// 降水负载的满格值：2.0 mm / 5min ≈ 24 mm/h（大雨）。
+    /// 峰值到这个量，粒子层的密度与落速都吃满（见 `BriefMinutely.load`）
+    static let minutelyPeakFull: Double = 2.0
+    /// 落雨相位的循环格数（7 格 × 5 分钟 = 35 分钟一轮）。
+    ///
+    /// **为什么是 7 而不是 6**：时间窗之外那些帧是 **60 分钟**一格 = 12 个 5 分钟槽位，
+    /// 而 `12 % 6 == 0` —— 用 6 的话，窗外的每一帧相位都相同，雨会完全冻住。
+    /// 7 与 12 互质，于是 5 分钟帧推进 1/7、60 分钟帧推进 5/7，两种帧距下都看得到雨在动。
+    static let rainFallSlots: Int = 7
+    /// 「雨在靠近」那层斜纹的条数（7 条：够读出"一片湿气"，又不会变成"已经在下了"）
+    static let approachHatchCount: Int = 7
+    /// 「雨在靠近」斜纹的不透明度：**只有正常雨丝的 1/2 还弱**。
+    /// 它不是雨，是"空气里开始有东西"的预兆 —— 画满屏雨会变成"现在就在下"的假象
+    static let approachHatchAlpha: Double = 0.11
+    /// 「雨在靠近」斜纹带的高度（pt）：贴着卡底那一条
+    static let approachBandHeight: CGFloat = 22
+    /// "多快算快到了"：20 分钟。
+    /// 依据是用户能行动的时间尺度 —— 20 分钟内还来得及收衣服 / 出门带伞
+    static let approachWindow: TimeInterval = 20 * 60
+
+    /// 小号那行结论的字号（按画布短边缩放）
+    static func minutelySummaryScaled(_ scale: CGFloat) -> Font {
+        return Font.system(size: minutelySummarySize * scale, weight: .medium)
+    }
+
+    /// 柱区高度（三档：大号 32 / 中号 24 / 小号 0 —— 小号放一行结论，不画图）
+    static func minutelyBarHeight(_ family: WidgetFamily) -> CGFloat {
+        switch family {
+        case .systemLarge:
+            return minutelyBarLargeHeight
+        case .systemSmall:
+            return 0
+        default:
+            return minutelyBarMediumHeight
+        }
+    }
+
     // MARK: 按尺寸取档
 
     /// 左右内边距（三档：大号 18 / 中号 14 / 小号 11）
@@ -529,7 +602,11 @@ struct BriefFace: View {
                 BriefWeatherLayer(kind: today,
                                   date: entry.date,
                                   family: family,
-                                  paper: paperMode)
+                                  paper: paperMode,
+                                  // 3.25.0：粒子的密度 / 落速按分钟降水的 peak 走，
+                                  // 不再只看 WMO code（那个只知道"雨"这个类型，不知道多大）。
+                                  // 窗口外的帧这里是 nil → 退回只认 code 的原有画法。
+                                  minutely: entry.minutely)
             }
         }
         // 画布测量：`.background` 不参与布局，`content` 的 proposal 与不挂时完全相同。
@@ -594,6 +671,14 @@ struct BriefFace: View {
             // 其余间距全是固定 PT —— 正文多少都不会把轨迹挤出画布。
             Spacer(minLength: 0)
 
+            // 未来两小时降水（3.25.0）：小号一行结论，中号底部 24 格柱状图。
+            // 放在弹性留白**之后**、轨迹**之前** —— 它回答"接下来会怎样"，
+            // 压在"今天过了多少"那条轨迹上方，读到的顺序才合逻辑（也说"更远的事"）。
+            if minutelyVisible {
+                minutelyBlock
+                    .padding(.bottom, BriefMetrics.minutelyGap)
+            }
+
             BriefTrack(progress: dayProgress,
                        dotCount: BriefMetrics.dotCount(family),
                        ink: ink)
@@ -641,6 +726,14 @@ struct BriefFace: View {
                 .padding(.top, BriefMetrics.largeSectionGap)
 
             Spacer(minLength: 0)
+
+            // 大号的柱区更高（32pt，见 `minutelyBarHeight`）：大号那 90pt 弹性留白
+            // 就是给它和下面的 chips 的。中号 / 大号共用同一个 `minutelyBlock`，
+            // 只有高度与字号跟着 `family` 走 —— 两档各写一份必然出现两套判空逻辑。
+            if minutelyVisible {
+                minutelyBlock
+                    .padding(.bottom, BriefMetrics.largeSectionGap)
+            }
 
             ritualChips
 
@@ -1029,6 +1122,52 @@ struct BriefFace: View {
         return entry.sunTexts()
     }
 
+    // MARK: - 未来两小时降水（3.25.0）
+
+    /// 这一帧有没有值得画的降水块。
+    ///
+    /// 三种状态逐个对应，**不能合并**：
+    /// · `minutely == nil` → 没拿到（超时 / 境外无雷达外推）→ **整块不画**；
+    /// · 拿到了但这一帧之后全干 → 中号画一行「未来两小时无降水」（这是一个**结论**，不是缺数据）；
+    /// · 拿到了且这一帧之后有湿格 → 中号画柱子，小号画结论。
+    ///
+    /// 小号多一个条件：`BriefMinutely.label` 给不出话（连时间窗都解不出）就整行不画 ——
+    /// 正方形画布上一行空白比少一行更难读（这条规律与宜忌注脚一致，见 `hasFooter`）。
+    ///
+    /// **这里不再看 `entry.minutely?.summary`**：服务端那句是相对句，只在签发后 12 分钟内
+    /// 还成立（见 `BriefMinutely.summaryFreshWindow`）；过期后小号改说绝对时刻，一样有话说。
+    /// 拿"有没有 summary"当可见性条件，会让小号在窗口的绝大部分时间里凭空消失。
+    private var minutelyVisible: Bool {
+        guard let rain = entry.minutely else { return false }
+        // 小号：`label` 给得出话才占位（给不出 = 连时间窗都解不出，一行空白比不画更糟）；
+        // 中号 / 大号：解析不出一格（`.unknown`）就整块不画，绝不写成「未来两小时无降水」
+        if isSmall { return BriefMinutely.label(rain, at: entry.date) != nil }
+        return BriefMinutely.ahead(rain, at: entry.date) != .unknown
+    }
+
+    /// 小号：一行结论（新鲜时说「23 分钟后雨停」，过期后说「19:12 有雨」）；
+    /// 中号：底部 24 格柱状图。
+    ///
+    /// 为什么小号不画图：158×158 画 24 根柱，每根不到 4pt 宽，读不出强度差，
+    /// 还占掉正文与轨迹的位置。一句话回答"要不要现在出门"才是正方形画布该干的事。
+    @ViewBuilder
+    private var minutelyBlock: some View {
+        if let rain = entry.minutely {
+            if isSmall {
+                BriefMinutelySummary(rain: rain,
+                                     date: entry.date,
+                                     font: BriefMetrics.minutelySummaryScaled(s),
+                                     ink: ink)
+            } else {
+                BriefMinutelyBars(rain: rain,
+                                  date: entry.date,
+                                  height: BriefMetrics.minutelyBarHeight(family),
+                                  ink: ink,
+                                  font: BriefMetrics.minutelySummaryScaled(s))
+            }
+        }
+    }
+
     // MARK: - 轨迹进度
 
     /// 今天已经过去的比例（00:00 → 0，24:00 → 1）。
@@ -1225,6 +1364,12 @@ private struct BriefCanvas: View {
 /// 每帧的云位置由这一帧的 `date` 算出来（见 `drift`），一天走完 0.35 个卡宽。
 /// 到点系统自己换下一帧，看起来就是"每小时挪一点点"。**不要**改成 `withAnimation`：
 /// Widget 里没有任何动画时钟，写了也是一段死代码（还要多一份 review 成本）。
+///
+/// **3.25.0：雨也"落"起来了，用的是同一套手法**（见 `fallPhase`）。
+/// 降水帧从 60 分钟一格加密到 5 分钟一格（时间窗内），每换一帧雨滴整体下移一点，
+/// 于是"雨在落"这件事第一次有了可读的动感 —— 仍然是预渲染，仍然零 Timer。
+/// 同时粒子层的**密度与落速改由 minutely 的 `peak` 驱动**（见 `rainLoad`）：
+/// WMO code 只知道"这是雨"，不知道"雨多大"，而屏幕上的雨丝条理应和真实的雨量一致。
 private struct BriefWeatherLayer: View {
 
     /// 天气类型（非可选：由 `BriefFace` 判空后才创建本层）
@@ -1235,6 +1380,17 @@ private struct BriefWeatherLayer: View {
     let family: WidgetFamily
     /// 纸面档位：粒子的颜色要压在**这张纸**上才立得住（浅色纸上近白的雨丝是看不见的）
     let paper: Theme.Weather.Paper
+    /// 这一帧的分钟级降水。nil = 没拿到 / 这一帧在时间窗之外（见 `BriefProvider.entries`）。
+    ///
+    /// 它在这一层只干两件事，**都不是"画柱子"**（柱子归 `BriefMinutelyBars`）：
+    /// 1. 用 `peak` 调雨丝的**密度与落速**（`rainLoad`）—— 比 WMO code 精确一个量级；
+    /// 2. 现在没在下、但 20 分钟内要下时，画一层极淡的**预兆斜纹**（`isApproaching`）。
+    ///
+    /// 一个已知边界：本层只在**拿到天气类型**时才会创建（`BriefFace` 的 `.background` 那处
+    /// `if let today = kind`），所以"天气类型未知 + minutely 说快下雨"不会有预兆层。
+    /// 这是有意的 —— 这一层的每个颜色都从 `Theme.Weather.of(kind, paper:)` 里取，
+    /// 没有 kind 就没有可用的墨色，硬画只能自造一支颜色（违反"颜色只有两个来源"）。
+    let minutely: MinutelyRain?
 
     /// 这一档天气压在**这张纸**上的三色（`glow` 与 `ink` 是粒子的全部颜色来源）
     private var mood: (top: Color, glow: Color, ink: Color) {
@@ -1393,9 +1549,25 @@ private struct BriefWeatherLayer: View {
 
     // MARK: 降水（fog / drizzle / rain / snow / thunder）
 
+    /// 降水层 = **落下来的东西** + **可能快要落的东西**。
+    ///
+    /// 3.25.0 拆成两层叠在一起：
+    /// · `falling`：八档天气各自的粒子（原样保留）；
+    /// · `approachHatch`：「现在没在下，但 20 分钟内要下」那一层极淡的斜纹。
+    ///   它不是雨 —— 画满屏雨会变成"现在就在下"的假象（用户要的正是"别骗我"），
+    ///   所以只给贴着卡底的一条淡纹，读作"空气里开始有东西了"。
     @ViewBuilder
     private func precipitation(in size: CGSize) -> some View {
         let bands = precipitationBands(in: size)
+        ZStack(alignment: .topLeading) {
+            falling(in: size, bands: bands)
+            approachHatch(in: bands)
+        }
+    }
+
+    /// 这一档天气"落下来"的东西（3.6.0 / V3.7 的原有画法，几何一点没动）。
+    @ViewBuilder
+    private func falling(in size: CGSize, bands: (sky: CGRect, ground: CGRect)) -> some View {
         switch kind {
         case .clear, .partly, .overcast:
             // 这三档天上不掉东西。晴更是一颗粒子都没有
@@ -1405,14 +1577,14 @@ private struct BriefWeatherLayer: View {
             fogBand(in: size, band: bands.ground)
         case .drizzle:
             streaks(in: bands,
-                    count: BriefMetrics.drizzleCount,
+                    count: scaledCount(BriefMetrics.drizzleCount),
                     lengthMin: BriefMetrics.drizzleLengthMin,
                     lengthMax: BriefMetrics.drizzleLengthMax,
                     alpha: 0.18,
                     tilt: 0)
         case .rain:
             streaks(in: bands,
-                    count: BriefMetrics.rainCount,
+                    count: scaledCount(BriefMetrics.rainCount),
                     lengthMin: BriefMetrics.rainLengthMin,
                     lengthMax: BriefMetrics.rainLengthMax,
                     alpha: 0.22,
@@ -1422,7 +1594,7 @@ private struct BriefWeatherLayer: View {
         case .thunder:
             ZStack(alignment: .topLeading) {
                 streaks(in: bands,
-                        count: BriefMetrics.thunderRainCount,
+                        count: scaledCount(BriefMetrics.thunderRainCount),
                         lengthMin: BriefMetrics.rainLengthMin,
                         lengthMax: BriefMetrics.rainLengthMax,
                         alpha: 0.22,
@@ -1431,6 +1603,100 @@ private struct BriefWeatherLayer: View {
                 lightning(in: bands.ground)
             }
         }
+    }
+
+    // MARK: 「雨在靠近」的预兆（3.25.0）
+
+    /// 现在没在下、但 minutely 说 **20 分钟内**就要下。
+    ///
+    /// 三个条件缺一不可：
+    /// 1. 当前天气**没有降水粒子**（`kind.precipitation == nil`）—— 已经在下了就不需要预兆；
+    /// 2. 这一帧之后还有湿格（`firstWetDate(_:from:)` 以 `date` 为原点，含当前格）——
+    ///    只认"还挂在未来"的那一格，不信签发时刻的旧结论；
+    /// 3. 第一格"湿"落在 0…20 分钟内。已经过点的（`delta < 0`）也不算：
+    ///    那说明这一帧本该已经在下，此时画预兆反而是在说"还没下"。
+    private var isApproaching: Bool {
+        guard kind.precipitation == nil else { return false }
+        guard let rain = minutely else { return false }
+        guard let first = BriefMinutely.firstWetDate(rain, from: date) else { return false }
+        let delta = first.timeIntervalSince(date)
+        return delta >= 0 && delta <= BriefMetrics.approachWindow
+    }
+
+    /// 一条极淡的斜纹带。**不画柱子、不画雨丝**，只画 7 根短线贴在地面段底部。
+    ///
+    /// 为什么贴着卡底：雨是从天上来的，但"快要下"这件事在画面上只能占用最不抢眼的
+    /// 那块地方 —— 一旦放到正文下方一大片，它就会读成"正在下雨"。
+    @ViewBuilder
+    private func approachHatch(in bands: (sky: CGRect, ground: CGRect)) -> some View {
+        if isApproaching {
+            ForEach(0..<BriefMetrics.approachHatchCount, id: \.self) { index in
+                hatchLine(index: index, band: bands.ground)
+            }
+        }
+    }
+
+    /// 一根预兆斜纹：位置用"半格等距"（比雨丝更整齐 —— 它是一条"趋势"，不是雨滴）
+    private func hatchLine(index: Int, band: CGRect) -> some View {
+        let bandHeight = min(band.height, BriefMetrics.approachBandHeight)
+        let length = bandHeight * 0.55
+        let column = (Double(index) + 0.5) / Double(BriefMetrics.approachHatchCount)
+        let x = band.minX + band.width * CGFloat(column)
+        let y = band.maxY - bandHeight / 2
+
+        return Capsule()
+            .fill(particle(BriefMetrics.approachHatchAlpha))
+            .frame(width: 1, height: length)
+            .rotationEffect(.degrees(BriefMetrics.rainTilt))
+            .position(x: x, y: y)
+    }
+
+    // MARK: 降水负载（3.25.0）
+
+    /// 这一帧的降水负载（0.35…1.6）。**1 = 没有 minutely 数据时的基准密度**。
+    ///
+    /// 为什么需要它：`WeatherKind.intensity(code:)` 只有"类型"这一层信息，
+    /// 而 61（小雨）与 65（大雨）在 code 里是分开的、minutely 里却只知道"peak = 0.1mm"。
+    /// 后者的分辨率高一个量级（5 分钟一格），所以有它就以它为准：
+    /// **peak 越大，雨丝越密、每帧落得越远**。
+    private var rainLoad: Double {
+        return BriefMinutely.load(minutely)
+    }
+
+    /// 按负载缩放粒子条数。
+    ///
+    /// **上限就是 `base`**：数量封顶是这张卡的硬约束（见类型注释第 2 条）。
+    /// 负载只往**下**调（0.55 × base … base），所以"小雨 14 条 / 大雨 20 条"，
+    /// 既看得出差别，又不会在暴雨时糊成一片。
+    private func scaledCount(_ base: Int) -> Int {
+        let factor = min(0.55 + 0.45 * rainLoad, 1)
+        return max(1, Int((Double(base) * factor).rounded()))
+    }
+
+    /// 雨丝长度缩放：1 = 原长（无 minutely 时不动一个像素）
+    private var lengthScale: CGFloat {
+        return CGFloat(1 + 0.25 * (rainLoad - 1))
+    }
+
+    /// 这一帧雨滴整体下移的比例（占 band 高度的百分比）。
+    ///
+    /// 它**就是"落速"**：预排帧里没有时间轴，雨滴"走多快"只能表现为
+    /// "换一帧时它位移多少"。peak 越大位移越大 → 大雨看起来下得更急。
+    private var fallTravel: CGFloat {
+        return CGFloat(0.55 + 0.45 * min(rainLoad, 1.6))
+    }
+
+    /// 这一帧的落雨相位（0…1）。
+    ///
+    /// 为什么用"5 分钟槽位序号对 6 取模"，而不是 `date.timeIntervalSince1970` 的小数部分：
+    /// 预排帧的时刻**正好落在 5 分钟刻度上**，取小数部分永远是 0 —— 那样雨一滴都不会动。
+    /// 用槽位序号取模，每换一帧相位前进 1/7（`rainFallSlots`），35 分钟一个循环：到点系统换帧，
+    /// 肉眼就是"雨在往下走"，而它仍然是一帧**静态画面**（零 Timer、零 withAnimation）。
+    private var fallPhase: CGFloat {
+        let slot = Int((date.timeIntervalSince1970 / WidgetTimeline.briefMinutelyStep).rounded(.down))
+        let steps = BriefMetrics.rainFallSlots
+        let wrapped = ((slot % steps) + steps) % steps
+        return CGFloat(wrapped) / CGFloat(steps)
     }
 
     /// 雨丝 / 毛毛雨：一排极细的 `Capsule`，按 `tilt` 倾斜。
@@ -1475,6 +1741,12 @@ private struct BriefWeatherLayer: View {
     /// 一段雨丝。位置用"一半网格 + 一点抖动"：纯等距能看出排队，纯随机会结块，
     /// 混合之后才像真的雨。抖动值来自 `scattered`，**同一个 index 永远同一个值** ——
     /// Widget 每帧都重画，用 `random()` 会让整片雨每小时重排一次，看起来像闪。
+    ///
+    /// 3.25.0 加了两件事，都是"预排帧"框架内的事：
+    /// · 长度乘 `lengthScale`（peak 越大越长）；
+    /// · 纵向位置加一份 `fallPhase × fallTravel` 的位移 —— 每换一帧雨滴整体下移，
+    ///   对可动区间取模后从底边绕回顶边，读作"雨在落"。
+    ///   位置仍然是**可复现的**（同一帧永远同一个位置），这是预渲染帧的前提。
     private func streakSection(in band: CGRect,
                                base: Int,
                                count: Int,
@@ -1485,15 +1757,18 @@ private struct BriefWeatherLayer: View {
         ForEach(0..<count, id: \.self) { slot in
             let index = base + slot
             let seed = scattered(index, 1.7)
-            let length = lengthMin + (lengthMax - lengthMin) * CGFloat(scattered(index, 3.1))
+            let length = (lengthMin + (lengthMax - lengthMin) * CGFloat(scattered(index, 3.1)))
+                * lengthScale
             let column = (Double(slot) + 0.5) / Double(max(count, 1))
             let x = band.minX + band.width * CGFloat(column + 0.22 * (seed - 0.5))
             // 纵向：先上下各让出 particleTiltGuard，再在剩余空间里取一段。
             // 那 1pt 是给"倾斜后的包围盒"的（12° 时最多外溢 0.016pt，余量 60 倍）——
             // 没有它，"净空带里一颗粒子都没有"就只是"算出来差不多"。
+            // `offset` 已经是"静态抖动 + 这一帧的落雨位移"对可动区间取模的结果，
+            // 所以它一定落在 [0, slack) 内，倾斜后的包围盒依然出不了净空带。
             let slack = max(band.height - length - BriefMetrics.particleTiltGuard * 2, 0)
-            let y = band.minY + BriefMetrics.particleTiltGuard + length / 2
-                + slack * CGFloat(scattered(index, 5.3))
+            let offset = fallOffset(index: index, slack: slack, bandHeight: band.height)
+            let y = band.minY + BriefMetrics.particleTiltGuard + length / 2 + offset
 
             Capsule()
                 .fill(particle(alpha))
@@ -1501,6 +1776,22 @@ private struct BriefWeatherLayer: View {
                 .rotationEffect(.degrees(tilt))
                 .position(x: x, y: y)
         }
+    }
+
+    /// 一根雨丝在可动区间里的纵向位置（0…slack）。
+    ///
+    /// 两件事相加再取模：
+    /// · `slack × scattered(...)` 是**静态抖动** —— 没有它，雨丝会排成几条等距的竖线；
+    /// · `fallPhase × bandHeight × fallTravel` 是**这一帧落到哪儿** —— 每 5 分钟一帧推进 1/7 圈。
+    /// 取模而不是夹紧：夹紧会让雨滴全堆在底边（看起来像"雨停了，水珠挂在下面"）。
+    /// `slack <= 0` 时（段太矮，放不下一根雨丝）返回 0，不参与取模（除以 0 会得到 NaN，
+    /// 而 NaN 位置在 Widget 里表现为"这一帧少了几根雨丝"，很难查）。
+    private func fallOffset(index: Int, slack: CGFloat, bandHeight: CGFloat) -> CGFloat {
+        guard slack > 0 else { return 0 }
+        let staticPart = slack * CGFloat(scattered(index, 5.3))
+        let travelPart = fallPhase * bandHeight * fallTravel
+        let wrapped = (staticPart + travelPart).truncatingRemainder(dividingBy: slack)
+        return wrapped < 0 ? wrapped + slack : wrapped
     }
 
     /// 雾带：一条上下淡出的横向带子（**不用 blur**，柔边靠渐变两端透明）
@@ -1530,11 +1821,16 @@ private struct BriefWeatherLayer: View {
     private func snowDots(in size: CGSize) -> some View {
         let bands = precipitationBands(in: size)
 
-        return ForEach(0..<BriefMetrics.snowCount, id: \.self) { index in
+        return ForEach(0..<scaledCount(BriefMetrics.snowCount), id: \.self) { index in
             let inSky = bands.sky.height >= BriefMetrics.minFilledBand && index % 3 == 0
             let area = inSky ? bands.sky : bands.ground
             let x = area.minX + area.width * CGFloat(0.04 + 0.92 * scattered(index, 7.9))
-            let y = area.minY + area.height * CGFloat(0.10 + 0.80 * scattered(index, 9.4))
+            // 雪也"落"（3.25.0）：同一套预排帧相位，纵向按 `fallTravel` 推进一小段，
+            // 对 [0.02, 0.94] 取模后从顶部绕回 —— 雪片比雨滴慢，所以系数压到 0.5。
+            let base = 0.10 + 0.80 * scattered(index, 9.4)
+            let shifted = (base + 0.5 * Double(fallPhase * fallTravel))
+                .truncatingRemainder(dividingBy: 0.92)
+            let y = area.minY + area.height * CGFloat(0.02 + shifted)
 
             Circle()
                 .fill(ink.opacity(0.35))

@@ -53,7 +53,8 @@ enum WidgetDeepLink {
 /// 档与档之间**没有插值** —— 想让天空"随时间自然过渡"，唯一的办法是让 entry 跟着时间走，
 /// 让系统到点自己换上下一帧。Timeline 里的多个 entry 是**预渲染帧**，
 /// 不消耗刷新预算（预算算的是「重新跑一次 getTimeline、又发一轮网络请求」），
-/// 所以这里是"多帧、少请求"：一天 40 多帧，但真正发请求的只有 2 次。
+/// 所以这里是"多帧、少请求"：简报卡一轮约 48 帧（1 小时网格 + 未来两小时的 5 分钟网格），
+/// 但真正发请求的是每两小时那一次。
 enum WidgetTimeline {
 
     /// 简报卡的刻度：**60 分钟**。
@@ -66,13 +67,36 @@ enum WidgetTimeline {
     /// 时刻算出来，见 `BriefFace` 的 `BriefWeatherLayer.drift`），到点系统自己换画面。
     static let briefStep: TimeInterval = 60 * 60
 
-    /// 简报卡的视野：**24 小时**（24 帧）。到点 `.atEnd` 再取一轮（含两次网络请求：
-    /// 简报 + 天气），一天 1 次，离 iOS 每天 40–70 次的预算上限差着两个数量级。
+    /// 简报卡的视野：**24 小时**（24 帧）。到点按 `briefRefresh`（2 小时）再取一轮
+    /// （含三次网络请求：简报 + 天气 + 分钟降水），一天约 12 次，
+    /// 离 iOS 每天 40–70 次的预算上限还有一个量级的余量。
     ///
     /// 为什么铺满一整天而不是 12 小时：天气一天只有"白天/夜里"和"变天"这几次变化，
     /// 视野短于一天就会出现"用户在晚上 11 点看不到明天早上那一帧"的断档，
     /// 而多出来的帧全是预渲染，不发请求。
     static let briefHorizon: TimeInterval = 24 * 3600
+
+    /// 分钟级降水的视野：**2 小时**（24 格 × 5 分钟）。
+    ///
+    /// 它也顺带决定简报卡的**重取间隔**（见 `briefRefresh`）：柱状图讲的是"未来两小时"，
+    /// 两小时后再取一轮，图上永远有一段真实的未来 —— 而旧的那 24 帧在这一刻正好全部走完。
+    static let briefMinutelyHorizon: TimeInterval = 2 * 3600
+
+    /// 分钟级降水的刻度：**5 分钟**。
+    ///
+    /// 上游（和风 `/v7/minutely/5m`）就是 5 分钟一格，所以帧表直接照抄 `points` 的时刻。
+    /// 这个常量真正的用处是两处**换算**：
+    /// 1. `BriefMinutely.Window` 的异常防护（窗口不该远长于 2 小时）；
+    /// 2. `BriefWeatherLayer.fallPhase` 把帧时刻推进到"第几个 5 分钟槽位"——
+    ///    那是雨滴"在落"的唯一来源（预排帧里没有动画时钟）。
+    static let briefMinutelyStep: TimeInterval = 5 * 60
+
+    /// 简报卡重新取一轮的间隔：**2 小时**。
+    ///
+    /// 为什么不是 `.atEnd`：timeline 铺 24 小时，`.atEnd` 意味着**要等 24 小时**才会重取，
+    /// 底部的柱状图会旧 22 小时（画的全是"过去"，一根柱子都不剩）。
+    /// 2 小时一轮 = 一天 12 次，仍在 iOS 每天 40–70 次的预算里（3.25.0 前是 1 次/天）。
+    static let briefRefresh: TimeInterval = 2 * 3600
 
     /// 红石卡的刻度：30 分钟（与简报统一 —— 两张卡并排放在桌面上，刷新节奏不该有两个脾气）
     static let rockStep: TimeInterval = 30 * 60
@@ -310,6 +334,36 @@ enum WidgetFetch {
         let home = await HomeCoordinate.resolved()
         guard let url = API.weather(lat: home?.lat, lon: home?.lon) else { return nil }
         guard let response = await get(WeatherNow.self, url: url, timeout: 8) else { return nil }
+        return response.ok ? response : nil
+    }
+
+    /// 拉一次分钟级降水（`GET /api/app/minutely`，匿名只读）。
+    ///
+    /// 五个刻意的选择，与 `weather()` 一条条对齐（两者是同一台机器上的兄弟接口）：
+    /// 1. **6 秒超时**（比天气的 8 秒还短）：它只画简报卡底部那条 24 格的柱子，
+    ///    是**装饰层**，而且就摆在首屏 —— 让一张桌面上已经排好的卡为它多等，
+    ///    用户看到的就是"这张卡比旁边那张晚出现一截"。
+    /// 2. **不进快照**：5 分钟一格的数据落盘，第二天早上会变成一张**全灰的柱状图**
+    ///    （所有格子都是"过去"），而卡片看起来完全正常 —— 这是最难被发现的那种错。
+    ///    失败就 nil，整块不画。
+    /// 3. **`ok == false` 也算失败**：和风的分钟降水是雷达外推，**境外坐标直接无数据**，
+    ///    服务端用 `ok:false` 表达。把"没有这项服务"画成「未来两小时无降水」是一句假承诺，
+    ///    所以这里必须把它吞成 nil（口径与 App 内 `MinutelyStore.refresh` 一致）。
+    /// 4. **坐标同一套**：`HomeCoordinate.resolved()` 拿 App 上报的「家」坐标，
+    ///    与 `weather()` 逐字相同 —— 两个接口若用了不同坐标，就会出现
+    ///    "上面写小雨、下面 24 根空柱"这种自相矛盾的卡。
+    /// 5. **解码用 `WidgetJSON.decoder`**：Widget target 只编译 `Widget` + `Shared`，
+    ///    看不到 `Services` 里的 `APIJSON`。
+    /// 6. **与 `weather()` 各自解析一次坐标**：缓存命中（45 分钟内）时两次都是内存读；
+    ///    冷缓存时这一轮最多多发一个 4 秒超时的 `GET /api/app/home`，
+    ///    而写回的是同一条记录 —— 为了省这一个请求去改 `weather()` 的签名不值得
+    ///    （它还有两个既有调用点，改动面比收益大）。
+    static func minutely() async -> MinutelyRain? {
+        // 坐标先于请求：URL 依赖它（与 `weather()` 同一个理由，也是唯一一处真串行的依赖）
+        let home = await HomeCoordinate.resolved()
+        guard let url = API.minutely(lat: home?.lat, lon: home?.lon) else { return nil }
+        // 泛型调用写法与 `weather()` 一致：`get(_:url:timeout:)`，只是超时更短
+        guard let response = await get(MinutelyRain.self, url: url, timeout: 6) else { return nil }
         return response.ok ? response : nil
     }
 
@@ -698,6 +752,21 @@ struct BriefEntry: TimelineEntry {
     /// 这是纯追加字段，`BriefEntry` 原有的 12 个字段一个都没动。
     let weather: WeatherNow?
 
+    /// 未来两小时的分钟级降水（`GET /api/app/minutely`）。**纯追加字段**：
+    /// 上面 13 个字段（含 3.10.0 追加的 `weather`）一个都没动（3.25.0）。
+    ///
+    /// ## 为什么它随帧而变，而不是整轮共用一个值
+    /// `weather` 是"今天是晴是雨"，一天之内不会变；minutely 是**逐 5 分钟的预报**，
+    /// 每一帧读到的都是"从现在起的两小时"。所以它只发给**落在时间窗内的帧**，
+    /// 窗口外的帧一律 nil（见 `BriefProvider.entries` 与 `BriefMinutely.Window.covers`）——
+    /// 否则两小时后的帧会把一份过期降水当成"未来两小时"继续画。
+    ///
+    /// ## nil 的三种来源，语义都是「没拿到」，不是「无降水」
+    /// 请求超时 / `ok == false`（境外无雷达外推数据）/ 后端没给 `points`。
+    /// 三者都让底部的柱状图**整块不画** —— `wet == false` 才是「确实不下」，
+    /// 那时画一行「未来两小时无降水」。这两种状态绝不能合并。
+    let minutely: MinutelyRain?
+
     /// 页脚文案：「今日已推送 07:02」/「今日未推送」。没有简报数据时整条页脚不画
     var footerText: String? {
         guard hasData else { return nil }
@@ -746,7 +815,10 @@ struct BriefEntry: TimelineEntry {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func make(date: Date, payload: BriefCachePayload?, weather: WeatherNow? = nil) -> BriefEntry {
+    static func make(date: Date,
+                     payload: BriefCachePayload?,
+                     weather: WeatherNow? = nil,
+                     minutely: MinutelyRain? = nil) -> BriefEntry {
         guard let payload = payload else {
             return BriefEntry(
                 date: date,
@@ -761,7 +833,10 @@ struct BriefEntry: TimelineEntry {
                 ji: [],
                 sunrise: nil,
                 sunset: nil,
-                weather: weather
+                weather: weather,
+                // 没有简报数据也照样画降水柱：这两件事互不依赖（雨天早上简报没生成，
+                // 「23 分钟后雨停」依然是用户最想看的那条信息）
+                minutely: minutely
             )
         }
         return BriefEntry(
@@ -777,7 +852,8 @@ struct BriefEntry: TimelineEntry {
             ji: payload.ji,
             sunrise: payload.sunrise,
             sunset: payload.sunset,
-            weather: weather
+            weather: weather,
+            minutely: minutely
         )
     }
 }
@@ -924,7 +1000,8 @@ struct RedstoneProvider: TimelineProvider {
 
 /// 简报小组件（中号 / 小号）。
 ///
-/// 刷新策略：**每 60 分钟一条 entry，铺满未来 24 小时**（24 帧），`.atEnd` 再取一轮。
+/// 刷新策略：**帧的并集 = 60 分钟网格（24 小时）∪ 未来两小时的 5 分钟网格**，
+/// 约 48 帧；两条时间线都不够用之后按 `.after(now + 2h)` 重取一轮。
 ///
 /// 为什么从"30 分钟一帧铺 12 小时"放宽（V3.7）：V3.3 那张卡的底色跟着**时段**变
 /// （`SkyPhase` 七档），必须靠密集的帧去推进日出日落；V3.7 起底色跟着**当天的天气**走，
@@ -934,9 +1011,18 @@ struct RedstoneProvider: TimelineProvider {
 /// 而云"飘"靠的是**预排帧**（每帧云位置由这一帧时刻算出，见 `BriefWeatherLayer.drift`），
 /// 与唤醒频率无关，所以放宽帧距不会让云停住。
 ///
+/// 3.25.0 起多了一件事：底部那条 24 格的降水柱要 **5 分钟粒度**。它不能靠"每 5 分钟拉一次"
+/// （288 次/天，系统直接忽略），只能**预排**：一次请求拿回 24 格，把它自己的时刻排进帧表，
+/// 到点系统自己换帧，柱子就一格一格地塌成底纹（"图往前推"）。
+/// 于是帧表 = 24 帧（1 小时网格）+ 24 帧（5 分钟网格）≈ 48 帧，全是预渲染，不发请求。
+///
 /// 会不会被限流：不会。Timeline 里的多条 entry 是**预渲染帧**，系统到点直接换帧，不发请求；
-/// 真正吃预算的是 `getTimeline`（一次要打 `/api/app/brief` + `/api/app/weather`）。
-/// 24 小时一轮 `.atEnd`，一天约 1 次，而 iOS 给的是 40–70 次/天。
+/// 真正吃预算的是 `getTimeline`（一次要打 `/api/app/brief` + `/api/app/weather`
+/// + `/api/app/minutely`）。到点用 `.after(now + 2h)` 重取，一天约 12 次，
+/// iOS 给的是 40–70 次/天。
+///
+/// **不要改回 `.atEnd`**：timeline 铺 24 小时，`.atEnd` 要等**24 小时**才重取，
+/// 底部柱状图会旧 22 小时（一格"未来"都不剩，全是被画成底纹的过去）。
 struct BriefProvider: TimelineProvider {
 
     func placeholder(in context: Context) -> BriefEntry {
@@ -951,41 +1037,67 @@ struct BriefProvider: TimelineProvider {
         Task {
             let now = Date()
 
-            // 并发而不是串行：两个请求互不依赖，串行会让卡片多等一个 RTT。
-            // `async let` 的 `weather` 分支**永不抛错**（`WidgetFetch.weather()` 内部把
-            // 超时 / 解码失败 / `ok == false` 全部吞成 nil），所以天气挂了不会拖累整条 timeline ——
-            // 主题是简报正文，天气只是氛围。
+            // **三样并发**（3.25.0 起是三项；`async let` 在声明那一刻就踢出去跑）。
+            // 三个请求互不依赖，串行会让卡片多等两个 RTT。
+            // 三条分支**永不抛错**：`WidgetFetch.*` 内部把超时 / 解码失败 / `ok == false`
+            // 全部吞成 nil，所以任何一路挂了都不会拖累整条 timeline ——
+            // 主题是简报正文，天气与降水都是叠加层。
             async let briefPayload: BriefCachePayload? = WidgetFetch.brief(now: now)
             async let currentWeather: WeatherNow? = WidgetFetch.weather()
+            async let currentRain: MinutelyRain? = WidgetFetch.minutely()
 
             let payload = await briefPayload
             let weather = await currentWeather
+            let rain = await currentRain
 
-            let entries = BriefProvider.entries(payload: payload, weather: weather, now: now)
-            completion(Timeline(entries: entries, policy: .atEnd))
+            let entries = BriefProvider.entries(payload: payload,
+                                                weather: weather,
+                                                minutely: rain,
+                                                now: now)
+            // `.after(now + 2h)` 而不是 `.atEnd`：柱状图讲的是"未来两小时"，
+            // 两小时后必须重新问一次，否则图上再没有一格未来（理由见类型注释）。
+            completion(Timeline(entries: entries,
+                                policy: .after(now.addingTimeInterval(WidgetTimeline.briefRefresh))))
         }
     }
 
     /// 生成 entry 序列（导出成 static 便于自检与将来写单测）
     ///
-    /// 时间点 = 60 分钟网格，铺满未来 24 小时（含 `now`），去重后升序，约 24 条。
+    /// 时间点 = 60 分钟网格（铺满 24 小时）∪ 未来两小时的 5 分钟网格，
+    /// 去重后**升序**（`Timeline` 要求 entries 时间递增，乱序会被系统直接丢掉），约 48 条。
     ///
     /// 每一条 entry 都带**同一个** `weather`：一天之内天气不会半小时变一次，
     /// 而每帧各拉一次意味着 24 次网络请求 —— 那是把"装饰"的成本做到比"主体"还高。
-    /// 新数据靠下一次 `getTimeline`（一小时到一天后）带进来；
-    /// 用户想看最新的，点一下卡片进 App，那边有下拉刷新。
+    /// `minutely` 相反：它**只发给时间窗内的帧**（见下面逐帧判定的注释）。
     ///
     /// V3.7 起**不再插天色切档时刻**：那张卡的底色已经不跟 `SkyPhase` 走了（跟天气走），
     /// 切档时刻的帧渲染出来与相邻网格帧一模一样 —— 那是纯粹的浪费帧。
-    static func entries(payload: BriefCachePayload?, weather: WeatherNow?, now: Date) -> [BriefEntry] {
-        let stamps = WidgetTimeline.stamps(now: now,
+    ///
+    /// - Parameters:
+    ///   - minutely: 这一轮拉到的分钟降水。nil = 没拿到（境外 / 上游挂了 / 超时），
+    ///     此时帧表退回"只有 60 分钟网格"的老形态（约 24 帧），柱状图整块不画。
+    static func entries(payload: BriefCachePayload?,
+                        weather: WeatherNow?,
+                        minutely: MinutelyRain? = nil,
+                        now: Date) -> [BriefEntry] {
+        var stamps = WidgetTimeline.stamps(now: now,
                                            horizon: WidgetTimeline.briefHorizon,
                                            step: WidgetTimeline.briefStep)
+
+        // 分钟降水的帧：直接取 `points` 自己的时刻（上游就是 5 分钟一格，
+        // 照抄它的时刻才能与数据逐格对齐 —— 自己再铺一条网格就会差半格）
+        let window = BriefMinutely.window(of: minutely)
+        if let window = window {
+            stamps.append(contentsOf: window.stamps)
+        }
 
         // 去重后升序，并保证不出现过去的帧
         let ordered = Array(Set(stamps.filter { $0 >= now })).sorted()
         return ordered.map { stamp in
-            BriefEntry.make(date: stamp, payload: payload, weather: weather)
+            // **只有时间窗内的帧带 minutely**：窗口外（两小时后）的帧若继续带同一份数据，
+            // 柱状图就会把两个小时前的预报当成"未来两小时"画 —— 那时它已经全部是过去。
+            let rain = (window?.covers(stamp) ?? false) ? minutely : nil
+            return BriefEntry.make(date: stamp, payload: payload, weather: weather, minutely: rain)
         }
     }
 }
