@@ -284,19 +284,31 @@ enum WidgetFetch {
 
     /// 拉一次天气实况（`GET /api/app/weather`，匿名只读）。
     ///
-    /// 三条刻意的选择：
+    /// 四条刻意的选择：
     /// 1. **8 秒超时**（比简报的 12 秒短）：天气只决定卡片画什么粒子，是装饰；
     ///    简报才是主体。让装饰多等 4 秒，用户眼里的卡片就晚 4 秒出现，不划算。
     /// 2. **不进快照**：天气是分钟级数据，落盘只会在第二天早上给用户一张昨天的"晴"——
     ///    那是最糟的错误（看起来完全正常，没人会怀疑）。拉失败就 nil，卡片退回无天气形态。
     /// 3. **`ok == false` 也算失败**：服务端业务失败时 HTTP 仍是 200（`{"ok":false}`），
     ///    传输层判不出来，只能看这个字段 —— 否则会把一份空响应当成"天气是空的"。
+    /// 4. **坐标来自服务端中转的「家」坐标**（3.17.0；3.17.0 改为单条记录）：App 定位一拿到就把坐标
+    ///    `POST /api/app/home`，Widget `GET` **同一条**记录读回来（见 `HomeCoordinate`）。
+    ///    服务端只有一条记录、不需要任何设备标识（不要用 IDFV：侧载安装下
+    ///    主程序与扩展推导出的值不同，App 报的坐标 Widget 永远读不到且完全静默），
+    ///    所以桌面小组件与 App 显示同一个城市 —— 这正是
+    ///    用户「app和小组件天气和可见度都应该在同一个地区啊！」的修法。
+    ///    从没上报过（或缓存过期且网络失败）时 `home == nil`，请求不带 `lat/lon`，
+    ///    服务端回落自己的默认坐标 —— 与 3.16.0 及之前的行为一致。
     ///
     /// 解码用 `WidgetJSON.decoder`（不是 `APIJSON.decoder`）：后者在 `Sources/Services`，
     /// **Widget target 不编译 Services**。两者的 ISO8601 带毫秒策略完全一致，
     /// 这里沿用 Widget 侧唯一那份解码器，避免出现第三份日期策略。
     static func weather() async -> WeatherNow? {
-        guard let url = API.weather() else { return nil }
+        // 坐标来自 App 上报的共享记录（见 `HomeCoordinate`）；拿不到就交给服务端默认值。
+        // 为什么先取坐标再取天气、不做并发：weather 的 URL 依赖坐标，这是唯一一处
+        // 真正串行的依赖。`HomeCoordinate` 有 45 分钟本地缓存，绝大多数刷新只多一次内存读取。
+        let home = await HomeCoordinate.resolved()
+        guard let url = API.weather(lat: home?.lat, lon: home?.lon) else { return nil }
         guard let response = await get(WeatherNow.self, url: url, timeout: 8) else { return nil }
         return response.ok ? response : nil
     }

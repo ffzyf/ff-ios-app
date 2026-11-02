@@ -339,7 +339,8 @@ struct SkyRoomView: View {
     ///    不再套 `.glassSurface(.floating, in: Circle())` —— 理由同 `fixedTopBar`；
     /// 2. **多一行"这里是哪"**：用户换城市之后看不出这个 App 的定位落在哪儿
     ///    （"我现在不在郑州了，不知道它这个定位在哪儿"）。定位关着时如实写
-    ///    "默认位置 · 郑州"，不能让用户以为它定位到了自己所在的城市。
+    ///    "上次位置 · …"（3.17.0 起天气用的就是上次上报的位置，见 `fallbackPlaceLabel`），
+    ///    不能让用户以为它定位到了自己所在的城市。
     /// 3. **关闭按钮左边多一个喇叭**：天气朗读（见 `speechButton`）。
     ///    它与关闭按钮是**同一个按钮形态**，只是图标与动作不同 —— 顶栏只该有一种"按钮长什么样"。
     private func topBar(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
@@ -476,9 +477,12 @@ struct SkyRoomView: View {
     ///
     /// - 定位开着且有地名 → "上海市 · 浦东新区"
     /// - 定位开着但还没反查出来 → "定位中…"（不显示经纬度，那对用户没有意义）
-    /// - 定位关着 → "默认位置 · 郑州"（如实说用的是哪里，不要让用户以为定位在他所在城市）
+    /// - 定位关着 → 说清"天气用的是哪个位置"，见 `fallbackPlaceLabel`
+    ///
+    /// 3.17.0：关定位后天气用的是 `HomeCoordinate.cached()`（上次上报的位置），
+    /// 所以文案必须跟着说"上次位置"，不能继续写"默认位置 · 郑州" —— 那是在骗用户。
     private var placeLabel: String {
-        guard location.isEnabled else { return "默认位置 · 郑州" }
+        guard location.isEnabled else { return fallbackPlaceLabel }
         if location.coordinate != nil, let name = location.placeName {
             return name
         }
@@ -486,12 +490,27 @@ struct SkyRoomView: View {
         // 那比"没定位"更糟：用户会以为它一直在努力，实际永远不会成功。
         switch location.status {
         case .denied:
-            return "定位未开启 · 默认位置 · 郑州"
+            return "定位未开启 · " + fallbackPlaceLabel
         case .failed:
-            return "定位失败 · 默认位置 · 郑州"
+            return "定位失败 · " + fallbackPlaceLabel
         case .off, .asking, .ready:
             return "定位中…"
         }
+    }
+
+    /// 定位拿不到时，天气**实际**用的是哪个位置 —— 三处文案共用这一份判断。
+    ///
+    /// 优先级与服务端对齐：有过上报记录 → 上次上报的位置（上海）；
+    /// 一条记录都没有（从没开过定位）→ 服务端默认城市（郑州），这才是真的"默认位置"。
+    private var fallbackPlaceLabel: String {
+        guard let cached = HomeCoordinate.cached() else {
+            return "默认位置 · 郑州"
+        }
+        guard let name = cached.name else {
+            // 有坐标但地名还没反查出来：天气用的确实是这条，只是叫不出名字
+            return "上次位置"
+        }
+        return "上次位置 · \(name)"
     }
 
     /// 顶部倒计时的紧凑格式：`2:59` / `1 时 05 分`。

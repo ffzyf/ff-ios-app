@@ -282,14 +282,24 @@ struct SkyLightProvider: TimelineProvider {
         Task {
             let now = Date()
 
+            // 「家」坐标：App 上报、服务端中转、6 小时本地缓存（见 `HomeCoordinate`）。
+            //
+            // 为什么放在两个 `async let` **之前**：天气与能见度都要用它，而它本身有本地缓存，
+            // 绝大多数刷新是同步返回。塞进并发里也并发不了 —— 那两发的 URL 都依赖这个值。
+            // 多一次 await 换来的是一致性：**天气与能见度必须用完全相同的坐标**，
+            // 否则就会出现"天气按上海、能见度按郑州"—— 那正是用户抱怨的同一类错误。
+            let home = await HomeCoordinate.resolved()
+
             // 天气与插帧**并发**：`async let` 在声明那一刻就把子任务踢出去跑了，
             // 所以下面算时间戳（纯 CPU）与等天气（最多 8 秒网络）是重叠的，
             // 而不是"先等 8 秒网络，再算帧" —— 天光卡的刷新不能被天气拖长。
-            async let pendingWeather = SkyLightWeatherFeed.fetch()
-            // 能见度：独立上游（Open-Meteo），与天气并发。
-            // 坐标传 nil 走 Zhengzhou 默认 —— 小组件进程没有 App Group，读不到 App 的定位缓存，
-            // 而它本来就用默认坐标的天气；能见度和这份天气用同一个坐标，才不会"天气郑州、能见度上海"。
-            async let pendingVisibility = VisibilityProbe.fetch(latitude: nil, longitude: nil)
+            async let pendingWeather = SkyLightWeatherFeed.fetch(latitude: home?.lat,
+                                                                longitude: home?.lon)
+            // 能见度：独立上游（Open-Meteo），与天气并发，坐标与上面那一发**完全一致**。
+            // `home == nil` 只在"从没上报过"（或缓存过期且网络失败）时出现：
+            // 那时两发一起退到各自的默认坐标，仍然落在同一个城市（郑州）。
+            async let pendingVisibility = VisibilityProbe.fetch(latitude: home?.lat,
+                                                                longitude: home?.lon)
             let stamps = SkyLightProvider.stamps(now: now)
             let weather = await pendingWeather
             let visibilityMeters = await pendingVisibility
@@ -379,13 +389,21 @@ enum SkyLightWeatherFeed {
 
     /// 拉一次天气实况。**任何失败都返回 nil**，绝不 throw、绝不兜底成晴天。
     ///
+    /// - Parameters:
+    ///   - latitude: 纬度（度）。nil = 没有坐标 → 服务端用默认坐标（见 `API.weather(lat:lon:)`）。
+    ///   - longitude: 经度（度）。同上，与 `latitude` **成对**传入。
+    ///
+    /// 坐标由调用方（`SkyLightProvider.getTimeline`）从 `HomeCoordinate` 取，
+    /// 并**与能见度那一发共用同一对值**：两处各取一次就可能差一轮刷新，
+    /// 而"天气按上海、能见度按郑州"正是这次要消灭的那类错误。
+    ///
     /// 三条失败分支都走同一个出口：
     /// - 拼不出 URL（配置坏了）/ 网络错误 / 超时；
     /// - HTTP 非 2xx；
     /// - 业务失败（HTTP 200 + `ok == false`）—— 它只代表"这次没拿到"，
     ///   不代表"天气变好了"，所以同样不下任何结论。
-    static func fetch() async -> WeatherNow? {
-        guard let url = API.weather() else { return nil }
+    static func fetch(latitude: Double? = nil, longitude: Double? = nil) async -> WeatherNow? {
+        guard let url = API.weather(lat: latitude, lon: longitude) else { return nil }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

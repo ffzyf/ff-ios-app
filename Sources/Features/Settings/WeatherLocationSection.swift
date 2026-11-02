@@ -28,9 +28,11 @@ struct WeatherLocationSection: View {
         VStack(spacing: 8) {
             toggleRow
 
-            // 小组件拿不到这份坐标是**已知限制**（没有 App Group），
-            // 与其让用户以为是 bug，不如在这里直接说清。
-            Text("桌面小组件拿不到这份坐标，始终用默认城市；定位只在 App 里的天气卡片生效。")
+            // 3.17.0 修：小组件不再"始终用默认城市"。App 定位一拿到就把坐标上报到
+            // `/api/app/home`，小组件读**同一条**记录（服务端只有一条，不需要设备标识，
+            // 见 `Shared/Domain/HomeCoordinate.swift`）。这条脚注必须跟着改，
+            // 否则界面在骗用户 —— 而"两边不是同一个地方"正是这次要修的那个问题。
+            Text("App 与桌面小组件用同一个位置：定位成功后会上报一次，小组件读同一份记录。关闭后两者都沿用上次的位置。")
                 .font(Typography.captionXS)
                 .foregroundStyle(Theme.textTertiary)
                 .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
@@ -93,10 +95,14 @@ struct WeatherLocationSection: View {
     }
 
     /// 副标题：正常态说"能做什么"，拒绝态说"为什么没生效 + 怎么修"
+    ///
+    /// 两处都必须与上面那条脚注同一套说法（"关闭后沿用上次的位置"）。
+    /// 写"关闭时用默认城市"就是自相矛盾 —— 而且假的是副标题：
+    /// `WeatherStore.resolvedCoordinate()` 在定位关着时用的是 `HomeCoordinate.cached()`。
     private var subtitle: String {
         guard store.status != .denied else {
-            return "定位权限被关闭，去 系统设置 › 隐私与安全性 › 定位服务 打开，或先用默认城市。"
+            return "定位权限被关闭，去 系统设置 › 隐私与安全性 › 定位服务 打开，或先沿用上次的位置。"
         }
-        return "用当前定位取当地天气；关闭时用默认城市。"
+        return "用当前定位取当地天气；关闭后沿用上次的位置。"
     }
 }

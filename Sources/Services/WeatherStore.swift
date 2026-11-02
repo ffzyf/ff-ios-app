@@ -26,9 +26,12 @@ import Foundation
 /// 它们各自按 Timeline 直接请求，本类只服务主 App。
 ///
 /// ## 3.7.0：跟着设备位置走
-/// 请求前读一次 `LocationStore.shared.coordinate`，有就带给 `API.weather(lat:lon:)`，
-/// 没有（开关关着 / 权限被拒 / 还没拿到）就不带 —— 服务端回落默认坐标，
-/// 与 3.7.0 之前的行为完全一致。没权限时不弹任何错误 UI，静默回落。
+/// 请求前读一次 `LocationStore.shared.coordinate`，有就带给 `API.weather(lat:lon:)`。
+///
+/// ## 3.17.0：没有定位时用「家」坐标
+/// 没有设备定位（开关关着 / 权限被拒 / 还没拿到）时，改用 `HomeCoordinate.cached()`
+/// —— 那是 App 上次上报给服务端、桌面小组件也在读的同一条记录（见 `resolvedCoordinate()`）。
+/// 两个都没有才不带坐标，服务端回落默认值，与 3.7.0 之前的行为完全一致。没权限时不弹错误 UI，静默回落。
 @MainActor
 final class WeatherStore: ObservableObject {
 
@@ -99,9 +102,13 @@ final class WeatherStore: ObservableObject {
         // 上一发还在飞：直接返回，别叠加请求
         guard !isLoading else { return }
 
-        // 设备定位（可能为 nil）。`LocationStore` 与 `WeatherStore` 都是 `@MainActor`，
-        // 这里可以直接读，不需要显式跳 actor。
-        let coordinate = LocationStore.shared.coordinate
+        // 这次请求实际要用的坐标：设备定位优先，没有就回落到「家」坐标的本地缓存
+        // （`HomeCoordinate` —— App 开定位时上报给服务端、桌面小组件也读同一条记录的那份）。
+        //
+        // 为什么必须回落：定位关着时如果直接用服务端默认坐标，App 会显示郑州，
+        // 而小组件用"上次上报的城市"—— 同一块桌面上两个城市，正是这次要修的问题。
+        // `HomeCoordinate.cached()` 是同步读 `UserDefaults`，不引入 await。
+        let coordinate = Self.resolvedCoordinate()
 
         // 地点变了 → 内存里那份天气不是"这里"的天气，必须作废。
         // 不做这一步的话，用户飞到另一个城市后卡片会继续显示出发地的天空 —— 而且看起来完全正常。
@@ -176,6 +183,23 @@ final class WeatherStore: ObservableObject {
         return await VisibilityProbe.fetch(latitude: latitude, longitude: longitude)
     }
 
+    // MARK: - 坐标
+
+    /// 这次请求实际要用的坐标：设备定位优先，「家」坐标的本地缓存兜底。
+    ///
+    /// - 定位可用（开关开着且 6 小时内的坐标）→ 用它，与 3.7.0 起的行为逐字一致；
+    /// - 定位不可用 → 用 `HomeCoordinate.cached()`：那是 App 上次上报给服务端、
+    ///   桌面小组件此刻正在读的同一条记录，于是两处落在同一个城市；
+    /// - 两个都没有（从没开过定位）→ nil，`API.weather(lat:lon:)` 不带参数，
+    ///   服务端回落默认坐标，与 3.7.0 之前完全一样。
+    ///
+    /// `LocationStore` 与 `WeatherStore` 都是 `@MainActor`，这里可以直接读，不需要显式跳 actor。
+    private static func resolvedCoordinate() -> CLLocationCoordinate2D? {
+        if let device = LocationStore.shared.coordinate { return device }
+        guard let home = HomeCoordinate.cached() else { return nil }
+        return CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon)
+    }
+
     // MARK: - 坐标变了没有
 
     /// 两次请求之间的坐标是否算"换了地方"（见 `coordinateTolerance`）。
@@ -185,7 +209,8 @@ final class WeatherStore: ObservableObject {
     /// · 都有坐标 → 差得超过 0.05° 才算换（同城内的移动不换天气）；
     /// · 一边有一边没有 → **算换**。这是最容易漏的一条：从"有坐标"变成"没有"
     ///   （用户关了开关）如果不作废缓存，卡片会继续显示当地天气，
-    ///   而开关的文案说的是"关闭时用默认城市"。
+    ///   而设置页的文案说的是"关闭后沿用上次的位置"（`WeatherLocationSection`），
+    ///   两者必须同时成立 —— 关掉开关那一刻就重拉一次，卡片与文案才不会各说各话。
     private static func hasMoved(from previous: CLLocationCoordinate2D?,
                                  to current: CLLocationCoordinate2D?) -> Bool {
         switch (previous, current) {

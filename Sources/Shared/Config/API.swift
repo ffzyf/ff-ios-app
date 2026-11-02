@@ -62,8 +62,10 @@ enum API {
     ///
     /// ## 为什么要保留两个默认值
     /// 服务端不带 `lat/lon` 时用自己写死的默认坐标 —— 这正是 3.7.0 之前的行为。
-    /// 所以 `WidgetFetch.weather()` 这类"拿不到设备定位"的调用点照旧写 `API.weather()`，
-    /// 一个字符都不用改，行为与今天逐字一致（小组件没有 App Group，读不到设备坐标）。
+    /// 仍然需要这条兜底：`HomeCoordinate` 没有记录（服务端从没收到过上报，即从没开过定位）时，
+    /// 小组件与 App 都只能不带坐标，此时服务端默认坐标就是"唯一能给的东西"。
+    /// 3.17.0 起两个 target 都会先读 `HomeCoordinate`，**有坐标就不再走这条默认路径** ——
+    /// 这正是"App 和小组件天气在同一个地区"的修法。
     ///
     /// ## 为什么只保留两位小数
     /// 天气按公里级网格算，0.01° ≈ 1.1km，两位小数已经比网格细。
@@ -98,6 +100,34 @@ enum API {
     /// 所以这里只给 URL，播放交给 `AVPlayer` 流式取，App 不需要缓存音频。
     static func tts() -> URL? {
         return Endpoint.url(base: briefHost, path: Endpoint.ttsPath)
+    }
+
+    // MARK: - 共享「家」坐标（3.17.0，3.17.0 改为单条记录）
+
+    /// 读取「当前位置」（**Widget 用**）。`GET /api/app/home`，**不带任何 query**。
+    ///
+    /// base 用 `briefHost`：与 `weather()` 同一台机器、同一份记录 ——
+    /// 拆到别的站根就等于把"两边用同一个坐标"这件事拆散。
+    ///
+    /// 服务端只有**一条**记录，两端读的是同一条，所以不需要任何设备标识
+    /// （为什么不用 IDFV：见 `HomeCoordinate` 的类型注释）。
+    ///
+    /// 业务失败 / 没有记录时服务端仍返回 HTTP 200（`{"ok":true,"lat":null,…}`），
+    /// 由 `HomeCoordinate.resolved()` 判，本层只拼地址。
+    static func homeRead() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.homePath)
+    }
+
+    /// 上报坐标（**App 用**）。`POST /api/app/home`。
+    ///
+    /// 请求体（`{lat, lon, name}`，**没有 id**）、超时、失败处理都由 `HomeCoordinate.publish` 负责 ——
+    /// 本层只拼地址，与 `weather()` / `tts()` 同一个分工。
+    ///
+    /// 与 `homeRead()` **分开命名**（而不是同名重载）：调用处一眼能看出是读还是写。
+    /// 两者的 base + path 必须永远一致（读写同一条记录），所以都引用 `Endpoint.homePath`，
+    /// 不各写一遍字符串 —— 改路径时不会只改一半。
+    static func homeWrite() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.homePath)
     }
 
     // MARK: - 红石站（批次 2）

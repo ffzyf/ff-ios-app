@@ -64,6 +64,16 @@ enum Endpoint {
     /// App 侧直接交给 `AVPlayer`，不落盘（见 `Services/SpeechStore.swift`）。
     /// 归简报站而不另开域名：它读的是同一份服务端密钥，拆到别的站根等于多一套部署。
     static let ttsPath = "/api/app/tts"
+    /// 主 App 与桌面小组件共享的「家」坐标（3.17.0；3.17.0 改为**单条记录**）。
+    ///
+    /// `POST {lat, lon, name}` 由 App 上报，`GET`（**无 query**）由 Widget 读取 ——
+    /// 服务端只存一条「当前位置」，两端读同一条，所以**不需要任何设备标识**
+    /// （不要用 IDFV：侧载安装下主程序与扩展推导出的值不同，
+    /// 详见 `Shared/Domain/HomeCoordinate.swift` 的类型注释）。
+    ///
+    /// 归简报站（与 `weatherPath` 同一台机器）：它存在的唯一目的就是让天气 / 能见度
+    /// 与 App 用同一个坐标，换到别的站根等于把这条因果关系拆散。
+    static let homePath = "/api/app/home"
     /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
     static let earningsPath = "/api/app/earnings"
     /// 追加一笔收益条目（`POST`，同样**需要 `ce_auth`**）。

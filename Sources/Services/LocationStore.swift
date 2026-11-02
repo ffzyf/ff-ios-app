@@ -1,6 +1,7 @@
 import Combine
 import CoreLocation
 import Foundation
+import WidgetKit
 
 /// 定位偏好的持久化键与常量。
 ///
@@ -62,10 +63,17 @@ enum WeatherLocationSetting {
 /// 同理**不申请** Always 权限、**不开** `allowsBackgroundLocationUpdates`：
 /// 后台定位既不是这个功能需要的，也会平白拖出审核问题。
 ///
-/// ## ③ 已知限制：小组件拿不到这份坐标（不是 bug）
-/// 桌面小组件跑在独立进程里，读不到本 App 的 `UserDefaults`（无 App Group，
-/// 无签名 CI 也开不了 App Group）。所以小组件始终用服务端默认坐标，
-/// 只有 App 内的天气卡片会跟着用户走。设置页的脚注把这条写给了用户。
+/// ## ③ 与桌面小组件的一致性（3.17.0 首次尝试，3.17.0 改用单条记录）
+/// 桌面小组件跑在独立进程里，读不到本 App 的 `UserDefaults`（无 App Group，无签名 CI 也开不了）。
+/// 3.16.0 及之前的结果是：App 显示上海、小组件显示服务端默认的郑州 —— 用户原话
+/// 「app和小组件天气和可见度都应该在同一个地区啊！」。
+///
+/// 现在靠**服务端中转**对齐：定位一拿到就把坐标 `POST /api/app/home`，地名反查成功后再补报一次
+/// （带上 name），小组件 `GET` 同一条记录。服务端只存**一条**「当前位置」，两端读写同一条，
+/// 因此不需要任何设备标识 —— 见 `Shared/Domain/HomeCoordinate.swift` 里「为什么不需要设备标识」。
+/// （3.17.0 曾用 IDFV 当设备键，侧载安装下两端推导出的值不同，
+/// App 报的坐标小组件永远读不到，且完全静默 —— 这条路不要再走。）
+/// 上报有节流（2km / 6h / name 变化放行，见 `publishHome`），失败不推进节流。
 ///
 /// ## ④ 为什么协议前面有 `@preconcurrency`（3.7.0 修）
 /// `CLLocationManagerDelegate` 是 ObjC 协议，它的 requirement 全是 nonisolated；而本类是
@@ -119,7 +127,7 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// 天光页只读它，不做任何判断。
     ///
     /// nil 有两种含义，UI 要分开表达：**还没反查出来**（开关开着→"定位中…"）、
-    /// **开关关着**（→"默认位置 · 郑州"）。
+    /// **开关关着**（→"上次位置 · …"，服务端没有任何记录时才是"默认位置 · 郑州"）。
     @Published private(set) var placeName: String?
 
     // MARK: - 内部状态
@@ -138,6 +146,19 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// 反查在飞。`requestLocation()` 偶尔会连着给两三个点，
     /// 没有这个闸门就会连发三次反查（商业接口有配额）。
     private var isResolvingPlace = false
+
+    /// 上一次**上报给服务端**的坐标（`nil` = 还没报成功过）。与 `geocodedCoordinate` 分开：
+    /// 那个管"要不要再反查"（2km 容差），这个管"要不要再上报"（2km + 6h + name 未变，全部满足才跳过）。
+    /// 只在**上报成功后**才推进（见 `publishHome`）。
+    private var lastPublished: CLLocationCoordinate2D?
+
+    /// 上一次上报成功的时刻。与 `lastPublished` 一起构成节流判定 —— 见 `publishHome(_:name:)`。
+    private var lastPublishedAt: Date?
+
+    /// 上一次上报成功的**地名**。用来实现「name 变了就放行」这条节流豁免：
+    /// 同一座城市里换区（坐标差不到 2km、时间不到 6h，但"浦东新区"→"黄浦区"）必须报得上去，
+    /// 否则小组件那边会一直挂着旧区名。
+    private var lastPublishedName: String?
 
     /// 懒创建真正的 `CLLocationManager`。
     ///
@@ -293,9 +314,42 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
             return
         }
 
+        // 换城市时**必须**把内存里的地名清掉：`placeName` 是上一座城市反查出来的结果，
+        // 而这里只更新坐标（只有 `dropCoordinate` 才会连带清它）。不清就会出现
+        // "定位已到上海、反查还在路上（或 `CLGeocoder` 一直失败）"，而天光页
+        // `placeLabel` 的 `if location.coordinate != nil, let name = location.placeName`
+        // 会继续显示"郑州市 · 金水区" —— 连"定位中…"都等不到。
+        //
+        // 阈值与 `publishHome` 的节流同口径（都用 `WeatherLocationSetting.placeTolerance`）：
+        // "还算不算同一个地方"在整个 App 里只该有一个定义，这里换个数就会出现
+        // "上报认为换城市了、地名却还留着"的错位。2km 内保留旧地名，
+        // 免得同城挪两步就让顶栏闪一下"定位中…"。
+        //
+        // **落盘的地名三键（`placeNameKey` / `placeLatKey` / `placeLonKey`）刻意不清**：
+        // 那是给下次冷启动的兜底，`init` 还原时会校验"地名 + 它自己的坐标"对不对得上，
+        // 对不上自然不用。清了只会让顶栏变空，不会让它更准。
+        if let previous = coordinate,
+           (abs(previous.latitude - next.latitude) > WeatherLocationSetting.placeTolerance
+            || abs(previous.longitude - next.longitude) > WeatherLocationSetting.placeTolerance) {
+            placeName = nil
+        }
+
         coordinate = next
         persist(next, at: Date())
         status = .ready
+
+        // 3.17.0：坐标一到**立刻**上报，不等地名反查。
+        // 反查（`CLGeocoder`）会在室内 / 无网 / 配额耗尽时失败，3.17.0 把它当上报的前置条件，
+        // 于是"反查一失败就完全不上报" —— App 用本地实时坐标（上海）、小组件用服务端默认（郑州），
+        // 正是要修的那个 bug。`placeName` 此刻可能还是 nil，服务端允许。
+        //
+        // 这里刻意不传 `placeName`：它可能是上一座城市的名字（反查还没回来），
+        // 拿它配新坐标会把「上海坐标 + 郑州市」写进服务端与本地缓存 ——
+        // `HomeCoordinate.carriedName` 的 0.02° 距离保护只在 name 为 nil 时生效，
+        // 传一个非 nil 的旧城市名等于直接绕过它。
+        // 地名等 `resolvePlaceName` 成功后再补报（下面那条调用点）。
+        publishHome(next, name: nil)
+
         // 地名反查要打网络，别卡住 delegate 回调：丢进任务里，2km 内的重复坐标直接跳过
         resolvePlaceNameIfNeeded(next)
     }
@@ -401,10 +455,88 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
             defaults.set(label, forKey: WeatherLocationSetting.placeNameKey)
             defaults.set(coordinate.latitude, forKey: WeatherLocationSetting.placeLatKey)
             defaults.set(coordinate.longitude, forKey: WeatherLocationSetting.placeLonKey)
+            // **补报**：坐标在 `didUpdateLocations` 里已经报过一次（那次 name 可能是 nil），
+            // 这里把刚反查到的地名补上去 —— 小组件迟早要显示"上海市 · 浦东新区"，
+            // 而那时再补一次反查就意味着在 extension 里调 CoreLocation（弹不出权限框，只会静默失败）。
+            // 坐标没变、name 变了：`publishHome` 的"name 变化放行"会放过这一发。
+            publishHome(coordinate, name: label)
         } catch {
             // 网络失败 / 配额 / 该坐标没有行政区划：什么都不做。
             // 清空 `placeName` 会让顶栏从"上海市"跳回"定位中…"，那是退步
             return
+        }
+    }
+
+    // MARK: - 上报共享坐标（3.17.0，3.17.0 改造）
+
+    /// 把「位置」上报给服务端，让桌面小组件与 App 显示同一个城市。
+    ///
+    /// ## 节流（三条**同时**满足才跳过）
+    /// 1. 新坐标与上次成功上报的坐标距离 < 0.02°（约 2km）；
+    /// 2. **且**距上次成功上报不到 6 小时；
+    /// 3. **且** `name` 与上次上报的相同（新加的豁免，见 `lastPublishedName`）。
+    ///
+    /// 只用第 1 条会让"同一城市内换区"永远报不上去（地名变了，小组件那边还是旧区名）；
+    /// 只用第 2 条等于每 6 小时盲报一次，用户在城市里挪两步就白打一发。
+    ///
+    /// ## 失败（含被服务端限频）不推进节流
+    /// 先 `await` 服务端确认，**只有 `HomeCoordinate.publish` 返回 `true`**（服务端真收下了，
+    /// 或回 `unchanged` 表示已有记录就是这次这个点）才写 `lastPublished*`。
+    /// `throttled` 与网络失败一样返回 `false`：地铁里第一发失败、或 60 秒窗口内换城市，
+    /// 都不能当成"6 小时内不再重试" —— 那正好是 App 与小组件分叉最长 6 小时的原因。
+    ///
+    /// ## 上报成功后推一次小组件（本次修复）
+    /// 小组件的一轮 timeline 覆盖 24 小时（`.atEnd`），期间不会自己重新拉数据。跨城不推，
+    /// 桌面就一直挂着旧城市：App 几分钟就变上海，小组件能挂一整天郑州。
+    /// 但 `reloadAllTimelines()` 花的是系统给这个 App 的**刷新预算**，所以必须加条件 ——
+    /// 只在"新坐标与上次成功上报的坐标差超过 2km"时推：为同城挪了 500 米刷一次是纯浪费；
+    /// 而跨城不刷，用户会看到一整天的旧城市，那正是这次要修的 bug。
+    /// 首次上报（`lastPublished == nil`）也不推：App 刚装，小组件大概率还没被加到桌面。
+    ///
+    /// ## 为什么是 `Task` 而不是 `await`
+    /// 本方法跑在 `CLLocationManagerDelegate` 的回调链上（`didUpdateLocations` → 反查 → 这里），
+    /// 上报是纯附属动作：让它多等一个 RTT 只会推迟 delegate 返回，对用户没有任何好处。
+    /// 失败不打扰用户，但**不吞掉节流状态**（见上）。
+    ///
+    /// ## 为什么节流放在这里而不是 `HomeCoordinate` 里
+    /// 那边只负责"把一条坐标送出去"；"多久送一次"是本类的事（它才知道定位何时发生）。
+    private func publishHome(_ coordinate: CLLocationCoordinate2D, name: String?) {
+        let now = Date()
+        if let last = lastPublished,
+           let lastAt = lastPublishedAt,
+           abs(last.latitude - coordinate.latitude) <= WeatherLocationSetting.placeTolerance,
+           abs(last.longitude - coordinate.longitude) <= WeatherLocationSetting.placeTolerance,
+           now.timeIntervalSince(lastAt) < WeatherLocationSetting.cacheLifetime,
+           name == lastPublishedName {
+            return
+        }
+
+        // 只把两个 `Double` 与字符串带进任务（`CLLocationCoordinate2D` 不必跨任务传）
+        let lat = coordinate.latitude
+        let lon = coordinate.longitude
+        Task {
+            let ok = await HomeCoordinate.publish(lat: lat, lon: lon, name: name)
+            guard ok else { return }        // 未接受（含 throttled）：下次定位还会重试
+
+            // 「上次成功上报的坐标」必须在**更新这一步之前**读：它代表"推小组件之前，
+            // 小组件那份数据站的位置"。放在 `Task` 里读（而不是进任务前读成常量）还有一个用处：
+            // 连续两次定位各起一个任务时，后完成的那个读到的是先完成那个刚写下的坐标，
+            // 距离为 0 → 不会再推一次，天然去重。
+            let previous = lastPublished
+            lastPublished = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            lastPublishedAt = now
+            lastPublishedName = name
+
+            // 首次上报（App 刚装 / 刚打开定位）：小组件大概率还没加到桌面，不值得花一次预算
+            guard let previous = previous else { return }
+            // 同城挪动（≤ 2km）不推 —— 理由见方法注释「上报成功后推一次小组件」。
+            // 阈值与节流、与 `LocationStore` 清地名的判定同口径（`placeTolerance`）。
+            let moved = abs(previous.latitude - lat) > WeatherLocationSetting.placeTolerance
+                || abs(previous.longitude - lon) > WeatherLocationSetting.placeTolerance
+            guard moved else { return }
+
+            // 跨城且已被服务端接受：现在不推，用户就要看一整天的旧城市
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
