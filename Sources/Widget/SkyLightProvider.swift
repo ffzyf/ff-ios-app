@@ -22,6 +22,19 @@ struct SkyLightEntry: TimelineEntry {
     let date: Date
     /// 这一帧属于哪一档天色（七档，见 `SunClock` 文件头的时段定义）
     let phase: SkyPhase
+    /// 这一帧的**天气判定**（三档，见 `SkyViewing`）。nil = 没拿到数据。
+    ///
+    /// ## 为什么存"观测"而不存"词"
+    ///
+    /// 渲染层要说的话是 `phase.label(viewing: viewing)` —— 一个**纯函数**的结果。
+    /// 如果这里改存 `phaseLabel: String`，同一句话就有了两个真值来源：
+    /// `phase` 变了（时间线换帧、门控降级）而 `phaseLabel` 没跟着变，卡片就会
+    /// 写着「黄金时刻」却配着白天的蓝 —— 而且没有任何编译错误提醒谁去同步。
+    /// 存观测则相反：词永远是这一帧 `phase` × `viewing` 现场算出来的，漂不了。
+    ///
+    /// 这里只放 `Verdict`（`String` 原始值的枚举、纯 Foundation、`Sendable`），
+    /// 不引入 SwiftUI 类型 —— `SkyViewing.swift` 与 Widget target 共用。
+    let viewing: SkyViewing.Verdict?
     /// 倒计时要数到的时刻：**下一阶段的起点**。夜里是下一次日出
     let deadline: Date?
     /// 这一帧所在"一天"的日出（北京时间）；极昼极夜为 nil，地面区整块不画
@@ -101,10 +114,13 @@ struct SkyLightEntry: TimelineEntry {
         // **只降 `phase`，不动上面那张边界表**：边界是"这一帧在几点重排"的时间网格，
         // 与天气无关。若让边界跟着降级，一天会凭空少掉 7:24 那一帧，
         // 而那张表还要负责跨子夜、跨年 —— 那种改动不值得。
+        //
+        // 判定只算一次、两处用：`phase` 要吃它（黄金时刻 → 白天），渲染层还要吃它换词
+        // （阴天的「蓝调剩余」→「入夜剩余」）。所以它必须**跟着 entry 一起走**，
+        // 见 `SkyLightEntry.viewing` —— 用完即弃的话，桌面卡片就说不出那句话该怎么说。
+        let viewing = SkyViewing.verdict(of: weather, visibilityMeters: visibilityMeters)
         let rawPhase = SunClock.phase(at: date)
-        let phase = rawPhase.effective(
-            viewing: SkyViewing.verdict(of: weather, visibilityMeters: visibilityMeters)
-        )
+        let phase = rawPhase.effective(viewing: viewing)
         // 显式写类型名：参数 sunTimes 与同名静态方法重名，局部名会遮蔽方法名。
         var times = SkyLightEntry.sunTimes(for: date, phase: phase)
         // 实际值只驱动**同一天**的帧：这一轮 timeline 铺 24 小时，明天的帧拿不到
@@ -116,6 +132,7 @@ struct SkyLightEntry: TimelineEntry {
         return SkyLightEntry(
             date: date,
             phase: phase,
+            viewing: viewing,
             deadline: deadline(for: date, phase: phase),
             sunrise: times?.sunrise,
             sunset: times?.sunset,

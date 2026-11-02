@@ -448,7 +448,31 @@ struct RedstoneEntry: TimelineEntry {
     /// `SkyLightProvider` 会破坏这条契约），而 `SkyLightFace` 吃的是 `SkyLightEntry`。
     /// 同进程同 target，直接用 `SkyLightEntry.make(date:)`（纯函数、零网络）造一帧
     /// 带在身上即可。有场次的日子它根本不会被读到，成本只是几次日出日落三角函数。
+    ///
+    /// **3.23.0 修**：这里曾经的调用点只传 `date`，天气取第二个参数的默认值 nil →
+    /// `SkyViewing.verdict(of: nil) == nil` → `claimsColor == false` → 这张天光面
+    /// **永远**写「入夜剩余」，晴天傍晚也一样；早晨的「黄金时刻」也永远不出现。
+    /// 现在天气由 `RedstoneProvider.getTimeline` 拉好后逐帧传进来（见 `weatherFreshness`），
+    /// 与天光卡用同一个 `SkyLightWeatherFeed`（同一个 `/api/app/weather`，服务端 10 分钟缓存）。
+    ///
+    /// 天气判定不另存一份：它已经躺在 `daylight.viewing` 里（`SkyLightEntry` 的既有字段），
+    /// 再往 `RedstoneEntry` 上加一个 `viewing` 就有了两个真值来源 —— 词只能从
+    /// `daylight.phase.label(viewing: daylight.viewing)` 这一处派生。
     let daylight: SkyLightEntry?
+
+    /// 一份天气观测最多往后认多久（秒）。
+    ///
+    /// 为什么红石卡需要这个上限、天光卡不需要：天光卡一轮 timeline 到**下一个阶段边界**
+    /// 就重排一轮（最多几小时就换一份新观测）；红石卡一轮铺满 24 小时、只在 `.atEnd`
+    /// 再取，如果照单全收，早上六点的一次观测会被画到深夜的天上 —— 温度、云量、
+    /// 以及「黄金时刻 / 蓝调剩余」这类**承诺颜色**的词一起过期，正是本轮要消灭的那类假话。
+    ///
+    /// 3 小时的依据：`/api/app/weather` 服务端缓存 10 分钟，所以载荷本身的观测龄很短；
+    /// 真正会拉长的是"这一帧离我们拉取时刻有多远"。三小时是"同一次天气过程的量级"
+    /// —— 再往后云系真的会换，我们没有数据，就该退回纯天文说法（`nil` → 不说颜色）。
+    /// 超限的帧退回 `nil`：词变成「晨光剩余」/「入夜剩余」，天气摘要与云层整块不画，
+    /// 也就是**现在这种缺数据形态**，不会比现状更差。
+    static let weatherFreshness: TimeInterval = 3 * 3600
 
     /// 「本周排期」（3.11.0，大号卡下半部那 3–4 行）。
     ///
@@ -484,7 +508,15 @@ struct RedstoneWeekRow: Identifiable, Equatable {
 extension RedstoneEntry {
 
     /// 用一份排期数据 + 指定时刻造一条 entry
-    static func make(date: Date, days: [RedstoneDay], updated: Int) -> RedstoneEntry {
+    ///
+    /// - Parameters:
+    ///   - weather: 这一轮拉到的天气实况（`RedstoneProvider.getTimeline` 负责拉）。
+    ///     默认 nil = 没有天气上下文（组件库预览 / 快照 / 自检）—— 那时天光面
+    ///     只说纯时间的词，绝不承诺颜色。与 `SkyLightEntry.make` 的默认值口径一致。
+    static func make(date: Date,
+                     days: [RedstoneDay],
+                     updated: Int,
+                     weather: WeatherNow? = nil) -> RedstoneEntry {
         let occurrences = RedstoneTimeline.occurrences(in: days)
         let todayKey = RedstoneClock.dayKey(date)
         let today = occurrences.filter { $0.date == todayKey }
@@ -501,13 +533,16 @@ extension RedstoneEntry {
             todayOccurrences: today,
             todayCount: today.count,
             needsCheck: today.contains { $0.needsCheck },
-            daylight: SkyLightEntry.make(date: date),
+            daylight: SkyLightEntry.make(date: date, weather: weather),
             weekRows: weekRows(from: occurrences, now: date)
         )
     }
 
     /// 空态 entry（没数据 / 首次安装）。同样带上天光帧：空窗期整卡换成天光面
-    static func empty(date: Date) -> RedstoneEntry {
+    ///
+    /// 空态**照样**要天气：这天光面是用户唯一能看见的东西，没有天气判定就会永远
+    /// 说「入夜剩余」（见 `daylight` 的注释）。拉失败时传 nil，退回纯时间说法。
+    static func empty(date: Date, weather: WeatherNow? = nil) -> RedstoneEntry {
         return RedstoneEntry(
             date: date,
             hasData: false,
@@ -516,7 +551,7 @@ extension RedstoneEntry {
             todayOccurrences: [],
             todayCount: 0,
             needsCheck: false,
-            daylight: SkyLightEntry.make(date: date),
+            daylight: SkyLightEntry.make(date: date, weather: weather),
             weekRows: []
         )
     }
@@ -541,7 +576,15 @@ extension RedstoneEntry {
     ///
     /// 大号下半部是「本周排期」4 行、小/中号只有 1–2 行位子。让样例帧按 family 决定行数，
     /// 三个尺寸的预览才各自"长得对"（DESIGN-RULES §3：一档一版式，不是一套硬缩放）。
-    static func preview(date: Date, family: WidgetFamily) -> RedstoneEntry {
+    ///
+    /// ## 为什么 `weather` 默认 nil
+    ///
+    /// 组件库预览**不发请求**（见 `RedstoneProvider.getSnapshot` 的取舍），所以这里没有
+    /// 天气可用 —— 天光面就停在"缺数据"那一版：词是纯时间的「晨光剩余」/「入夜剩余」，
+    /// 不承诺颜色。这是安全的一侧：预览里宁可少说颜色，也不说一句样例专用的假话。
+    static func preview(date: Date,
+                        family: WidgetFamily,
+                        weather: WeatherNow? = nil) -> RedstoneEntry {
         // 场次放在 90 分钟后：倒计时一定为正（`Text(timerInterval:)` 的区间必须合法）
         let start = date.addingTimeInterval(90 * 60)
         let sample = Occurrence(date: RedstoneClock.dayKey(start),
@@ -576,7 +619,7 @@ extension RedstoneEntry {
             todayOccurrences: [sample],
             todayCount: 1,
             needsCheck: false,
-            daylight: SkyLightEntry.make(date: date),
+            daylight: SkyLightEntry.make(date: date, weather: weather),
             weekRows: rows
         )
     }
@@ -753,6 +796,8 @@ struct RedstoneProvider: TimelineProvider {
     /// "空窗期换天光面"分支，三个尺寸的预览全画成天光卡（用户因此认为"红石没有最大版"）。
     /// 现在给按 family 生成的**样例帧**：小 / 中 / 大各自渲染自己的版式，
     /// 大号在组件库里就能看到 hero 倒计时 + 本周排期。理由详见 `RedstoneEntry.preview`。
+    ///
+    /// `weather` 保持默认 nil：占位帧不发请求（见 `getSnapshot` 的同一条取舍）。
     func placeholder(in context: Context) -> RedstoneEntry {
         return RedstoneEntry.preview(date: Date(), family: context.family)
     }
@@ -767,6 +812,10 @@ struct RedstoneProvider: TimelineProvider {
     ///
     /// 为什么不发网络请求：用户只是划组件库，为每一档预览打一次请求既慢又浪费预算；
     /// 预览要的是"版式长什么样"，不是"此刻的数据对不对"。
+    ///
+    /// 同理**不拉天气**（`weather` 保持默认 nil）：这里给出的天光面因此只说纯时间的词
+    /// （「晨光剩余」/「入夜剩余」），不承诺颜色。快照不是桌面上的实时帧 ——
+    /// 桌面那一帧由 `getTimeline` 产出，天气在那里拉。
     func getSnapshot(in context: Context, completion: @escaping (RedstoneEntry) -> Void) {
         if context.isPreview {
             completion(RedstoneEntry.preview(date: Date(), family: context.family))
@@ -785,18 +834,34 @@ struct RedstoneProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<RedstoneEntry>) -> Void) {
         Task {
             let now = Date()
+
+            // 坐标在**两发之前**取：天气必须落在用户"家"的那座城市上，与天光卡同一套
+            // 解析（`HomeCoordinate`，45 分钟本地缓存，绝大多数刷新同步返回）。
+            let home = await HomeCoordinate.resolved()
+
+            // 天气与排期**并发**（`async let` 在声明那一刻就踢出去跑）：排期是这张卡的
+            // 主体，不能被一发最多 8 秒超时的天气拖长。`fetch` 任何失败都返回 nil，
+            // 而 nil 的语义是"没有判定" → 天光面只说纯时间的词，不会更差。
+            //
+            // 复用 `SkyLightWeatherFeed` 而不是 `WidgetFetch.get`：同一个
+            // `/api/app/weather`（服务端有 10 分钟缓存），超时 8 秒更适合"叠加层"这种
+            // 非主体数据；`WidgetFetch.get` 的 12 秒是给"整卡内容都来自网络"的卡定的。
+            async let pendingWeather = SkyLightWeatherFeed.fetch(latitude: home?.lat,
+                                                                longitude: home?.lon)
             let payload = await WidgetFetch.redstone(now: now)
+            let weather = await pendingWeather
             let days = payload?.days ?? []
             let updated = payload?.updated ?? 0
 
             guard !days.isEmpty else {
-                // 彻底没有数据：一条空态 entry，1 小时后再试（不刷屏、也不假装有排期）
-                let entry = RedstoneEntry.empty(date: now)
+                // 彻底没有数据：一条空态 entry，1 小时后再试（不刷屏、也不假装有排期）。
+                // 天气照样带上：空态这张卡画的就是天光面，没有判定它永远写「入夜剩余」。
+                let entry = RedstoneEntry.empty(date: now, weather: weather)
                 completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(3600))))
                 return
             }
 
-            let entries = RedstoneProvider.entries(days: days, updated: updated, now: now)
+            let entries = RedstoneProvider.entries(days: days, updated: updated, now: now, weather: weather)
             completion(Timeline(entries: entries, policy: .atEnd))
         }
     }
@@ -814,7 +879,18 @@ struct RedstoneProvider: TimelineProvider {
     ///
     /// 预算：这些都是**预渲染帧**，唯一发请求的是 `.atEnd` 触发的那一次 getTimeline，
     /// 24 小时 1 次，离 iOS 的 40–70 次/天预算差着两个数量级。
-    static func entries(days: [RedstoneDay], updated: Int, now: Date) -> [RedstoneEntry] {
+    ///
+    /// ## 天气只发给"还新鲜"的那几帧
+    ///
+    /// `weather` 是**此刻**的观测，而这条 timeline 铺 24 小时。逐帧判断
+    /// `stamp <= now + weatherFreshness`：窗口内的帧带天气（能说「黄金时刻」/「蓝调剩余」、
+    /// 能画出云与温度），窗口外的帧一律传 nil —— 那时我们没有任何数据，
+    /// 天光面退回纯天文说法。不这样做的话，早上六点的晴天会被画到深夜的雨里，
+    /// 而卡片上那句「蓝调剩余」是当时无法证伪、事后一看就假的。
+    static func entries(days: [RedstoneDay],
+                        updated: Int,
+                        now: Date,
+                        weather: WeatherNow? = nil) -> [RedstoneEntry] {
         var stamps: Set<Date> = Set(
             WidgetTimeline.stamps(now: now,
                                   horizon: WidgetTimeline.rockHorizon,
@@ -833,9 +909,13 @@ struct RedstoneProvider: TimelineProvider {
             }
         }
 
+        let freshLimit = now.addingTimeInterval(RedstoneEntry.weatherFreshness)
         let ordered = stamps.sorted()
         return ordered.map { stamp in
-            RedstoneEntry.make(date: stamp, days: days, updated: updated)
+            RedstoneEntry.make(date: stamp,
+                               days: days,
+                               updated: updated,
+                               weather: stamp <= freshLimit ? weather : nil)
         }
     }
 }

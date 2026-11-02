@@ -61,8 +61,13 @@ struct TodayBriefTrackCard: View {
         // 3.22.0：与天光页同一套门控 —— 这张卡的右上角也写着「黄金时刻」，
         // 只修天光页的话，用户回到首页还是看到同一句话。天气读单例：
         // 本卡没有自己的天气数据源，而 `WeatherStore` 是全 App 唯一那一份实况。
-        let phase = SunClock.phase(at: now)
-            .effective(viewing: SkyViewing.verdict(of: WeatherStore.shared.current))
+        //
+        // 判定只算一次、两处用：`phase` 要吃它（黄金时刻 → 白天），
+        // 左上角那个词还要吃它（阴天的「蓝调剩余」→「入夜剩余」）。分开各调一次
+        // `verdict(...)` 也没错，但那等于让同一次观测被解释两遍 ——
+        // 一处改了阈值，另一个出口就悄悄漂了。
+        let viewing = SkyViewing.verdict(of: WeatherStore.shared.current)
+        let phase = SunClock.phase(at: now).effective(viewing: viewing)
         let sky = Theme.sky(phase)
 
         return SkyCard(
@@ -70,6 +75,10 @@ struct TodayBriefTrackCard: View {
             now: now,
             sunriseText: sunText(snapshot?.sunrise, isSunrise: true, now: now),
             sunsetText: sunText(snapshot?.sunset, isSunrise: false, now: now),
+            // 词在这里定型：判定只有 `SkyViewing.swift` 一处，`SkyCard` 只负责画。
+            // 卡片自己持有 `viewing` 就等于持有"我该怎么判"的知识 —— 下一个调用方
+            // 忘了传，就会静默退回那句承诺颜色的假话。
+            phaseLabel: phase.label(viewing: viewing),
             note: ritualText,
             // 首页的是**摘要卡**（168），简报页才是 hero —— 同一份数据两页分饰两角，
             // 不能是"一样高的两张卡"（设计报告 §4.3）。

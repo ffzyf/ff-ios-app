@@ -106,16 +106,20 @@ struct SkyRoomDaylightCard: View {
     let sunset: Date
     let sky: Theme.SkyColors
     let scale: CGFloat
-    /// 此刻的时段，**已过天气门控**（3.22.0）。
+    /// 此刻时段**该说的话** —— 阶段名已过天气门控与换词（`SkyPhase.label(viewing:)`）。
     ///
-    /// 为什么由外面传进来而不是这里 `SunClock.phase(at: now)`：本卡拿不到天气，
-    /// 自己算就只能算天文时间。而右上角那枚辅注正是"黄金时刻"出现的位置之一 ——
-    /// 用户在顶栏看到它被纠正、卡片上却还写着，等于没修。
-    let phase: SkyPhase
+    /// 为什么由外面传进来而不是这里 `SkyPhase.label`：本卡拿不到天气，
+    /// 自己算就只能算天文时间。而右上角那枚辅注正是「蓝调剩余」出现的位置之一 ——
+    /// 用户在顶栏看到它被换成「入夜剩余」、卡片上却还写着蓝调，等于没修。
+    ///
+    /// 传**词**而不是 `SkyViewing.Verdict`：判据只有一处（`SkyViewing.swift` 那个
+    /// extension），卡片只负责显示。多一个 `viewing` 入参就等于让卡片也持有一份
+    /// "我该怎么判"的知识，第三个入口迟早会自己造一套。
+    let phaseLabel: String
 
     var body: some View {
         SkyRoomCardShell(title: "今日天光",
-                         accessory: phase.label,
+                         accessory: phaseLabel,
                          scale: scale) {
             VStack(alignment: .leading, spacing: 10) {
                 progressLine

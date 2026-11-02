@@ -198,18 +198,15 @@ extension SunClock {
 
 extension SkyPhase {
 
-    /// 左上角那枚圆点后面的话（照参考图的措辞）
-    var label: String {
-        switch self {
-        case .night: return "夜间"
-        case .blueDawn: return "蓝调剩余"
-        case .sunrise: return "日出"
-        case .golden: return "黄金时刻"
-        case .day: return "距离日落"
-        case .sunset: return "日落剩余"
-        case .blueDusk: return "蓝调剩余"
-        }
-    }
+    // 3.23.0 起这里**没有** `var label` 了。
+    //
+    // 那七个词（夜间 / 日出 / 黄金时刻 / 距离日落 / 日落剩余 / 入夜剩余 / 蓝调剩余）
+    // 全都搬进了 `SkyPhase.label(viewing:)`（见 `Shared/Domain/SkyViewing.swift`）：
+    // 其中三档承诺的是**颜色**，阴天/雨雾里就是假话，所以"说什么"必须与天气一起判。
+    //
+    // 删掉无参版本不是洁癖：留着它，任何一处新写的 `.label`（不带 viewing）都能编过 ——
+    // 于是"悄悄说一句假话"只需要一次手滑，而且编译器和 lint 都不会出声。
+    // 现在漏传 `viewing` 是**编译错误**，这就是这条门禁的全部意义。
 
     /// 右上角倒计时要数到的时刻；nil = 当前时段不给倒数（例如刚日出的那一刻）
     func deadline(at now: Date) -> Date? {

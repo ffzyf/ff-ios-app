@@ -84,13 +84,24 @@ enum WidgetTheme {
     /// 日出、日落都取 `sky.top` —— 那两档是唯一"橙红 / 深橙"的天色；
     /// 黄金时刻取 `sky.horizon`（暖黄），白天取 `sky.edge`（近白）。
     /// 全部是 `Theme.sky(phase)` 里的既有 token，本文件一个颜色字面量都没有。
+    ///
+    /// 蓝调两档取 `sky.horizon`（3.23.0）。原来跟着 `.sunrise` / `.sunset` 取 `sky.top`，
+    /// 是因为那时的 `blueDusk.top` 是绯红 `#C9486F` —— 一团"晚霞残余"的红光。
+    /// 3.23.0 把蓝调改成真蓝之后，两档的 `top` 一律是**天顶最深的那支**
+    /// （`#16305C` / `#0E1E42`），而光晕是 `.plusLighter` 加成混合：
+    /// 加一层 0.45α 的 `#0E1E42` 只给底色提亮约 (6,13,30)，在深色天上等于没画 ——
+    /// 用户会丢掉"太阳就差一点/刚落下去"这个唯一的亮处。
+    /// 物理上也该取 `horizon`：蓝调时刻太阳压在地平线上、下，天空最亮的地方就是地平线那条带
+    /// （民用暮光里天顶最暗、地平线最亮），`#6E9AC4` / `#44679B` 正是那支较亮的钢蓝-青蓝。
     static func sunGlow(_ sky: Theme.SkyColors, phase: SkyPhase) -> Color {
         switch phase {
-        case .sunrise, .blueDawn:
+        case .sunrise:
             return sky.top
+        case .blueDawn, .blueDusk:
+            return sky.horizon
         case .golden:
             return sky.horizon
-        case .sunset, .blueDusk:
+        case .sunset:
             return sky.top
         case .day:
             return sky.edge

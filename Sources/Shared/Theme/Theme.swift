@@ -504,6 +504,23 @@ extension Theme {
     }
 
     /// 按时段取天空色（七档，逐档手调，不用公式插值 —— 插值出来的中间色总是发灰）
+    ///
+    /// ## 蓝调两档为什么必须 R < G < B（3.23.0）
+    ///
+    /// 「蓝调时刻」是民用暮光（太阳高度 0 ~ −6°）：直射光已经没了，天里只剩瑞利散射的**短波**，
+    /// 所以抬头看到的是一家子蓝 —— 从蓝到靛，**红通道永远最低**。
+    /// 这条判据是可验证的，四支 hex 的 RGB 三值都在这里，以后改色先算一遍：
+    /// `#16305C` = 22/48/92、`#6E9AC4` = 110/154/196、
+    /// `#0E1E42` = 14/30/66、`#44679B` = 68/103/155 —— 全部严格递增。
+    /// 递增值一断（红冒到最高），这一档就不再是 blue hour 了。
+    ///
+    /// 之前错在哪：`blueDawn` 的 horizon / edge 是紫灰（`#6E4E7A` / `#C08BD0`），
+    /// `blueDusk` 的 top 更是 `#C9486F` = **201/72/111，红通道最高** —— 那是"晚霞残余"的观感，
+    /// 方向和物理刚好相反。用户原话："蓝调时刻应该是蓝的嘛，咋可能是紫色的。"
+    /// 天光的色名是**肉眼可证伪**的：抬头是蓝天（或阴天的灰），屏幕一片紫，这一档就废了。
+    ///
+    /// 两档的区分不靠色相（色相都必须是蓝），靠**明度与饱和度**：
+    /// 晨间更亮更青（天在变亮），暮间更深更靛（正在入夜）—— 一眼分得出早晚，又都还是蓝。
     static func sky(_ phase: SkyPhase) -> SkyColors {
         let ink = Color(hex: "#F5F8FF")
         let inkDim = Color(hex: "#F5F8FF").opacity(0.72)
@@ -514,8 +531,9 @@ extension Theme {
                              ground: Color(hex: "#02040A"), edge: Color(hex: "#2E4068"),
                              ink: ink, inkDim: inkDim)
         case .blueDawn:
-            return SkyColors(top: Color(hex: "#16204A"), horizon: Color(hex: "#6E4E7A"),
-                             ground: Color(hex: "#0A0710"), edge: Color(hex: "#C08BD0"),
+            // 晨间蓝调：天在变亮，蓝里带青、地平线最亮
+            return SkyColors(top: Color(hex: "#16305C"), horizon: Color(hex: "#6E9AC4"),
+                             ground: Color(hex: "#050A14"), edge: Color(hex: "#B6D4EE"),
                              ink: ink, inkDim: inkDim)
         case .sunrise:
             return SkyColors(top: Color(hex: "#E8894A"), horizon: Color(hex: "#FFD9A0"),
@@ -534,8 +552,9 @@ extension Theme {
                              ground: Color(hex: "#180A05"), edge: Color(hex: "#FFD0A0"),
                              ink: ink, inkDim: inkDim)
         case .blueDusk:
-            return SkyColors(top: Color(hex: "#C9486F"), horizon: Color(hex: "#7A4E86"),
-                             ground: Color(hex: "#0E0713"), edge: Color(hex: "#E89AC0"),
+            // 暮间蓝调：正在入夜，比晨间更深更靛，但仍是蓝
+            return SkyColors(top: Color(hex: "#0E1E42"), horizon: Color(hex: "#44679B"),
+                             ground: Color(hex: "#03060C"), edge: Color(hex: "#9DB8D6"),
                              ink: ink, inkDim: inkDim)
         }
     }

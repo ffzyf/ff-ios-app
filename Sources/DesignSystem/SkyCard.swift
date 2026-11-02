@@ -22,6 +22,14 @@ struct SkyCard<Content: View>: View {
     /// 日出 / 日落时刻文案（`06:05`），由调用方从 `SunClock` 取
     let sunriseText: String
     let sunsetText: String
+    /// 此刻这片天**该怎么说**（左上角那个词），由调用方定型后传进来。
+    ///
+    /// 为什么收"词"而不是收 `SkyViewing.Verdict`（3.23.0 改）：
+    /// 判定知识只该活在 `SkyPhase.label(viewing:)` 那一处。让一个通用底盘组件
+    /// 持有 `viewing`，等于让它也知道"我该怎么判" —— 第二个调用方忘了传，
+    /// 就会静默退回"承诺颜色"的那句假话，而编译器和 lint 都不会出声。
+    /// 收词则相反：调用侧不写明就不成立，与 `SkyRoomDaylightCard.phaseLabel` 同一口径。
+    let phaseLabel: String
     /// 地面区的一行小字（简报卡用它放「宜 / 忌」）。
     ///
     /// 为什么单独一个参数而不是塞进 content：地平线是硬的，任何正文越过它都会被那条
@@ -38,6 +46,7 @@ struct SkyCard<Content: View>: View {
          now: Date,
          sunriseText: String,
          sunsetText: String,
+         phaseLabel: String,
          note: String? = nil,
          cornerRadius: CGFloat = Radius.card,
          minHeight: CGFloat = 196,
@@ -46,6 +55,7 @@ struct SkyCard<Content: View>: View {
         self.now = now
         self.sunriseText = sunriseText
         self.sunsetText = sunsetText
+        self.phaseLabel = phaseLabel
         self.note = note
         self.cornerRadius = cornerRadius
         self.minHeight = minHeight
@@ -120,7 +130,11 @@ struct SkyCard<Content: View>: View {
                 .frame(width: 7, height: 7)
                 .shadow(color: sky.edge.opacity(0.8), radius: 4)
 
-            Text(phase.label)
+            // 天色读 `phase`（已过天气门控）**配色**；**文案**读 `phaseLabel` ——
+            // 两者分开是有意的：阴天不降 `.blueDusk`（天色仍是蓝灰，色相对），
+            // 只把「蓝调剩余」换成「入夜剩余」。词在调用侧定型，
+            // 见 `SkyPhase.label(viewing:)` 里为什么换词就够。
+            Text(phaseLabel)
                 .font(Typography.caption)
                 .foregroundStyle(sky.ink)
 

@@ -185,7 +185,16 @@ struct SkyRoomView: View {
         return ZStack(alignment: .top) {
             // ① 天空场景（七层：天幕 → 星 → 云 → 太阳 → 山脊 → 地面 → 雾，
             //    太阳 / 云 / 山随滚动分层下沉——报告 §三 的视差）
-            scene(sky: sky, phase: phase, frame: frame, now: now, parallaxY: parallaxY, haze: haze)
+            //
+            // `blocked` 只用来撤掉星点：天被封死时看不见星，而 phase 本身没变
+            // （蓝调不降级），单按 phase 判就会在阴天的暮色里撒 18 颗星
+            scene(sky: sky,
+                  phase: phase,
+                  frame: frame,
+                  now: now,
+                  parallaxY: parallaxY,
+                  haze: haze,
+                  blocked: viewingVerdict == .blocked)
                 // 压暗：滚过半屏后天空退成"安静的背景板"，卡片可读性随之上升。
                 // 压暗不是动效（reduceMotion 用户也需要可读性），所以它不受铁律 4 管辖。
                 .overlay(
@@ -427,7 +436,10 @@ struct SkyRoomView: View {
                         Circle()
                             .fill(sky.edge)
                             .frame(width: 5, height: 5)
-                        Text(momentPhase.label)
+                        // 词与倒计时是两件事：`momentPhase` 决定配色的同时，
+                        // 「蓝调剩余」这种承诺颜色的词还要再换一次 —— 阴天不降 phase
+                        // （天色仍是蓝灰，色相对），只把词换成纯事件的说法
+                        Text(momentPhase.label(viewing: viewingVerdict))
                             .font(SkyRoomMetrics.TextStyle.phase(frame.fontScale))
                             .foregroundStyle(sky.ink)
                             .lineLimit(1)
@@ -521,6 +533,10 @@ struct SkyRoomView: View {
                                   // 念出来的时段必须与屏幕上写着的一致 ——
                                   // 否则会出现"顶栏说白天、喇叭里说现在是黄金时刻"
                                   phase: SunClock.phase(at: now).effective(viewing: viewingVerdict),
+                                  // 光有一致还不够：阴天顶栏换成「入夜剩余」了，
+                                  // 稿子里却还会念「现在是蓝调时刻」。判定原样传进去，
+                                  // 让 `phaseSentence` 用同一份结论换句
+                                  viewing: viewingVerdict,
                                   weather: weatherNow,
                                   sunTimes: speechTimes,
                                   nextRedstone: nil,
@@ -619,7 +635,9 @@ struct SkyRoomView: View {
                                     sunset: times.sunset,
                                     sky: sky,
                                     scale: frame.fontScale,
-                                    phase: phase)
+                                    // 与顶栏同一句话：词在这里就要定型，
+                                    // 卡片不持有天气、也不该再判一次
+                                    phaseLabel: phase.label(viewing: viewingVerdict))
             }
             SkyRoomTemperatureCard(weather: weatherNow,
                                    sky: sky,
@@ -682,12 +700,18 @@ struct SkyRoomView: View {
     ///
     /// - Parameter haze: 大气浑浊度 0…1（`SkyHaze.level(...)`）。0 时这一层的开销是 0：
     ///   雾面不构造、饱和度为 1、太阳辉光与山脊的混合全是原值。
+    /// - Parameter blocked: 天是否被封死（阴、雨、雪、雷、雾、厚云、低能见度）。
+    ///
+    ///   为什么不能只靠 `haze`：浑浊度只管"空气里的悬浮物"，管不了头顶那层云 ——
+    ///   阴天能见度可以很好（A 地阴、B 地晴，能见度 20km），`haze` 仍是 0，
+    ///   于是雾面不画、星星照撒。云量与降水在 `SkyViewing` 里判，这里只接结论。
     private func scene(sky: Theme.SkyColors,
                        phase: SkyPhase,
                        frame: SkyRoomMetrics.Frame,
                        now: Date,
                        parallaxY: CGFloat,
-                       haze: Double) -> some View {
+                       haze: Double,
+                       blocked: Bool) -> some View {
         // 雾色：天色往近白里提（夜里 horizon 是冷蓝，提出来是冷灰，见 `SkyHaze.tint`）
         let fog = SkyHaze.tint(sky: sky)
         // 夜里的雾**不能**用 `.plusLighter`：深色天上提亮等于盖一块发光的板。
@@ -700,7 +724,7 @@ struct SkyRoomView: View {
             // ① 天幕（网格 / 线性兜底 + 宽档暗角）—— 天幕不动（它是"无限远"）
             skyBase(sky: sky, phase: phase, frame: frame, now: now)
             // ② 星点 / 云 / 三层山脊（各带视差）
-            parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY, haze: haze)
+            parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY, haze: haze, blocked: blocked)
             // ③ 太阳：三层结构，画在山脊与地面之前，随滚动沉向地平线
             sun(sky: sky, phase: phase, frame: frame, now: now, haze: haze)
                 .offset(y: parallaxY * SkyRoomMetrics.Scroll.sunDepth)
@@ -796,9 +820,10 @@ struct SkyRoomView: View {
                           phase: SkyPhase,
                           frame: SkyRoomMetrics.Frame,
                           parallaxY: CGFloat,
-                          haze: Double) -> some View {
+                          haze: Double,
+                          blocked: Bool) -> some View {
         ZStack {
-            if isStarry(phase) {
+            if isStarry(phase, blocked: blocked) {
                 stars(sky: sky, frame: frame)
                     .offset(y: parallaxY * SkyRoomMetrics.Scroll.starDepth)
             }
@@ -1291,8 +1316,20 @@ struct SkyRoomView: View {
 
     // MARK: - 静态几何
 
-    /// 夜空三档才画星点
-    private func isStarry(_ phase: SkyPhase) -> Bool {
+    /// 夜空三档才画星点。
+    ///
+    /// 3.23.0 起多一条否决：**天被封死时不画星**。这是既有问题，与"蓝调该不该降级"
+    /// 无关，但同一条反馈暴露的两件事 —— 用户说"阴天还给我看蓝调"，其实同一片天上
+    /// 还撒着 18 颗 alpha 0.75 的星，比那个词更早出卖画面。
+    ///
+    /// 判据放在这里而不是 `phase` 上：`phase` 是"太阳在哪个角度"，阴天不改变它
+    /// （见 `SkyPhase.effective` 的注释），所以只能由天气侧的结论来否决。
+    ///
+    /// - Parameters:
+    ///   - phase: 已过天气门控的时段
+    ///   - blocked: 天是否被封死（阴、雨、雪、雷、雾、厚云、低能见度）
+    private func isStarry(_ phase: SkyPhase, blocked: Bool) -> Bool {
+        guard !blocked else { return false }
         switch phase {
         case .night, .blueDawn, .blueDusk:
             return true

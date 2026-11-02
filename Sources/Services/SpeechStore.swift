@@ -348,7 +348,13 @@ final class SpeechStore: ObservableObject {
     ///
     /// - Parameters:
     ///   - now: 播报的参照时刻（算"还有多少分钟日落"用）
-    ///   - phase: 此刻的天光阶段（`SunClock.phase(at:)`）
+    ///   - phase: 此刻的天光阶段。**必须已过天气门控**
+    ///     （`SunClock.phase(at:).effective(viewing:)`）—— 阴天念出「现在是蓝调时刻」
+    ///     和顶栏写「蓝调剩余」是同一种假话，本函数只负责按给定阶段说话，不做第二套判定
+    ///   - viewing: 那份天气判定本身（`nil` = 没有数据）。只服务一件事：**换词**。
+    ///     `phase` 过完门控只能解决"配色骗人"，解决不了"词骗人" —— 阴天蓝调不降级
+    ///     （天色仍是蓝灰），于是 `phase` 还是 `.blueDusk`，照原文念就是「现在是蓝调时刻」。
+    ///     所以判定要一起传进来，念稿才和顶栏的「入夜剩余」对上。
     ///   - weather: 天气实况（nil = 还没拿到；此时整句天气都不说）
     ///   - sunTimes: 今天的日出日落（nil = 算不出；天光那句就只说阶段名）
     ///   - nextRedstone: 下一场红石（label = 「今日」/「周六」/「11月6日」，time = `"10:08"`
@@ -359,6 +365,7 @@ final class SpeechStore: ObservableObject {
     /// - Returns: 一段可以直接交给 `speak(_:)` 的中文
     static func script(now: Date,
                        phase: SkyPhase,
+                       viewing: SkyViewing.Verdict? = nil,
                        weather: WeatherNow?,
                        sunTimes: (sunrise: Date?, sunset: Date?)?,
                        nextRedstone: (label: String, time: String, map: String)?,
@@ -367,7 +374,7 @@ final class SpeechStore: ObservableObject {
                        place: String? = nil) -> String {
 
         let sentences: [String] = [
-            phaseSentence(now: now, phase: phase, sunTimes: sunTimes),
+            phaseSentence(now: now, phase: phase, viewing: viewing, sunTimes: sunTimes),
             weatherSentence(weather, place: place),
             rangeSentence(weather),
             redstoneSentence(nextRedstone),
@@ -384,11 +391,24 @@ final class SpeechStore: ObservableObject {
     /// 只在天光阶段上说人话：阶段名本身已经是中文（`SkyPhase.label`），
     /// 但"距离日落"那几个字在各档的语义不一样（白天数是日落、夜里数是日出），
     /// 所以这里逐档写死，而不是拼一句通用模板 —— 模板会写出"距离日落还有 8 小时"以外的怪话。
+    ///
+    /// 蓝调两档多一道换词：阴天蓝调**不降级**
+    /// （见 `SkyPhase.effective` —— 天色仍是蓝灰，错只在那个词），所以 `phase`
+    /// 还是 `.blueDusk`，照原文念就会把「蓝调时刻」念出来。这里换成纯事件的说法：
+    /// 太阳几点落山、暮光几点结束，阴天照样成立，耳朵也能用日历验证。
+    ///
+    /// - Parameter viewing: 天气判定。判据复用 `SkyPhase.claimsColor(viewing:)` ——
+    ///   **白名单**（通透了才敢说颜色），`nil`（没有数据）归到"不说颜色"那一边。
+    ///   这里不再自己写一遍 `viewing == .blocked`：屏幕上的词与耳朵里的词必须是
+    ///   同一个判据算出来的，否则就成了"同一句话两套标准"。
     private static func phaseSentence(now: Date,
                                       phase: SkyPhase,
+                                      viewing: SkyViewing.Verdict?,
                                       sunTimes: (sunrise: Date?, sunset: Date?)?) -> String {
         let sunrise = sunTimes?.sunrise
         let sunset = sunTimes?.sunset
+        // 天是通的（通透 / 有多云轻霾）→ 敢说颜色；被封死或没数据 → 只说时间
+        let colorOK = phase.claimsColor(viewing: viewing)
 
         switch phase {
         case .night:
@@ -397,16 +417,29 @@ final class SpeechStore: ObservableObject {
             }
             return "现在是夜间。"
         case .blueDawn:
-            if let minutes = remainingMinutes(to: sunrise, from: now) {
-                return "现在是蓝调时刻，还有 \(spokenMinutes(minutes)) 日出。"
+            if colorOK {
+                if let minutes = remainingMinutes(to: sunrise, from: now) {
+                    return "天边正蓝，还有 \(spokenMinutes(minutes)) 日出。"
+                }
+                return "天边正蓝，天快亮了。"
             }
-            return "现在是蓝调时刻，天快亮了。"
+            // 换词不换时间：日出的时刻与阴晴无关
+            if let minutes = remainingMinutes(to: sunrise, from: now) {
+                return "天快亮了，还有 \(spokenMinutes(minutes)) 日出。"
+            }
+            return "天快亮了。"
         case .sunrise:
             if let minutes = remainingMinutes(to: sunset, from: now) {
                 return "太阳刚出来，距离日落还有 \(spokenMinutes(minutes))。"
             }
             return "太阳刚出来。"
         case .golden:
+            // 「黄金」是在承诺颜色。只有确认通透才敢念；其余（多云 / 阴 / 还没数据）
+            // 退到 `.day` 那一句 —— 与 `effective` 把 golden 降成 day 的结果**同一句话**，
+            // 于是屏幕上的词与嘴里的词不会各说一套
+            guard viewing == .clear else {
+                return phaseSentence(now: now, phase: .day, viewing: viewing, sunTimes: sunTimes)
+            }
             if let minutes = remainingMinutes(to: sunset, from: now) {
                 return "现在是黄金时刻，还有 \(spokenMinutes(minutes)) 日落。"
             }
@@ -422,7 +455,10 @@ final class SpeechStore: ObservableObject {
             }
             return "太阳快落了。"
         case .blueDusk:
-            return "太阳已经落山，现在是蓝调时刻。"
+            if colorOK {
+                return "太阳已经落山，天边还是蓝的。"
+            }
+            return "太阳已经落山，天正在黑下来。"
         }
     }
 

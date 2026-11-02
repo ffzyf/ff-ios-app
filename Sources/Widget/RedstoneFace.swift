@@ -1226,7 +1226,7 @@ struct RedstoneTrack: View {
 /// | 云野 | `day` | 0.28 | `edge` 左上柔光 | 两座浮岛 |
 /// | 雨林 | `blueDusk` | 0.22 | `limeDeep` 湿雾 | 两根高瘦树影 |
 /// | 霞谷 | `sunset` | 0.18 | `edge` 谷底暖光 | 两道错开的山脊 |
-/// | 暮土 | `blueDusk` | 0.24 | `top` 绯红残光 | 两根断石柱 |
+/// | 暮土 | `blueDusk` | 0.24 | `sunset.top` 绯红残光 | 两根断石柱 |
 /// | 禁阁 | `night` | 0.20 | `edge` 顶部冷光 | 一座细塔（塔身 + 塔尖） |
 /// | 伊甸 | `night` | 0.10 | `edge` 地平线冷光 | 两块尖石 |
 /// | 认不出 | 旧版静态夜（`trackTop/trackBottom`） | — | — | 无 |
@@ -1557,8 +1557,13 @@ extension RedstoneBackdrop {
                 // 两侧山脊之间那道落日，正好落在主值右下
                 return (sky.edge, 0.16, UnitPoint(x: 0.38, y: 0.30), 0.50)
             case .ruins:
-                // 荒土上的绯红残光（`blueDusk` 的 top 就是那层暗红），偏右一点避开地图名
-                return (sky.top, 0.16, UnitPoint(x: 0.42, y: 0.34), 0.50)
+                // 荒土本身在发热的那点绯红：七档天色里唯一还剩红的只有 `.sunset`，
+                // 借它的 top（`#DD5530`）—— 和雨林借 `limeDeep` 补绿同一个写法。
+                // 3.23.0 之前这里借的是 `blueDusk.top`，那时它是玫红 `#C9486F`；
+                // 蓝调改成真蓝之后那一档再没有红，红光便改由日落档供给。
+                // 记住这是**地貌色**而非**天光色**：阴天看不见晚霞时，废土还是红的。
+                // 位置偏右一点，避开地图名。
+                return (Theme.sky(.sunset).top, 0.16, UnitPoint(x: 0.42, y: 0.34), 0.50)
             case .tower:
                 // 冷紫天光从上方压下来，塔影因此是逆光的
                 return (sky.edge, 0.16, UnitPoint(x: 0.34, y: 0.24), 0.50)

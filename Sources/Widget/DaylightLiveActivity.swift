@@ -35,12 +35,20 @@ struct DaylightLiveActivity: Widget {
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: DaylightActivityAttributes.self) { context in
-            DaylightLockScreenView(state: context.state)
+            // 底色 / 前景色也要过天气门控（3.23.0 补漏）。
+            //
+            // 3.22.0 只给**卡面**接了门控，底色这一行还是裸 `SunClock.phase(at: Date())`：
+            // overcast + golden 的早晨，卡面文字已经按「白天」写了，锁屏底色仍然是金橙 ——
+            // 同一张卡上出现两个天色，比单点误差更显眼。判定与卡面共用
+            // `daylightSky(...)`（一条派生、两处消费），不各算一遍。
+            let sky = daylightSky(state: context.state, now: Date())
+            return DaylightLockScreenView(state: context.state)
                 // 锁屏卡的底色跟着天色走（与红石那套 TrackGradient 是两套配方，不复用）
-                .activityBackgroundTint(Theme.sky(SunClock.phase(at: Date())).top)
-                .activitySystemActionForegroundColor(Theme.sky(SunClock.phase(at: Date())).ink)
+                .activityBackgroundTint(sky.top)
+                .activitySystemActionForegroundColor(sky.ink)
         } dynamicIsland: { context in
-            DynamicIsland {
+            let sky = daylightSky(state: context.state, now: Date())
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     DaylightIslandLeading(state: context.state)
                 }
@@ -56,13 +64,13 @@ struct DaylightLiveActivity: Widget {
                 Image(systemName: "sun.horizon.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
                     // 固定亮色，不读随深浅变化的 textPrimary：灵动岛永远是黑底
-                    .foregroundStyle(Theme.sky(SunClock.phase(at: Date())).edge)
+                    .foregroundStyle(sky.edge)
             } compactTrailing: {
                 DaylightCompactCountdown(state: context.state)
             } minimal: {
                 Image(systemName: "sun.max.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
-                    .foregroundStyle(Theme.sky(SunClock.phase(at: Date())).edge)
+                    .foregroundStyle(sky.edge)
             }
         }
     }
@@ -106,6 +114,37 @@ private enum DaylightMetric {
 
 // MARK: - 共享的「这一刻的天光帧」
 
+/// 这一刻的天气判定（锁屏卡 / 灵动岛 / 底色**共用一份**）。
+///
+/// 3.22.0：时段过天气门控（与 App / 小组件同一个 `SkyViewing`）。
+///
+/// 这里只有天气**代码**（`ContentState` 没带云量），但 `WeatherKind` 本身已经
+/// 蕴含了量级：`overcast` 就是厚云、`partly` 就是半片天、`rain` 就是雨幕。
+/// 够判「这一刻天边有没有金色」了 —— 判不够精确的代价只是偶尔多说一句，
+/// 而不判的代价是锁屏卡片上写着"黄金时刻"、人站在阴天里。
+///
+/// 抽成函数是为了让"同一个观测只解释一次"：卡面（换词）与底色（配色）若各算一遍，
+/// 一处改了阈值，另一处就悄无声息地漂了 —— 那正是这次回归的成因。
+private func daylightVerdict(_ state: DaylightActivityAttributes.ContentState) -> SkyViewing.Verdict? {
+    return SkyViewing.verdict(kind: WeatherKind.from(code: state.weatherCode),
+                              cloud: nil,
+                              visibilityMeters: nil)
+}
+
+/// 这一刻的天色档位（**已过天气门控**）。底色 / 图标用它，卡面造 entry 也用它。
+private func daylightPhase(_ state: DaylightActivityAttributes.ContentState,
+                           now: Date) -> SkyPhase {
+    return SunClock.phase(at: now).effective(viewing: daylightVerdict(state))
+}
+
+/// 这一刻的六 token 天色。给"只想要一档天色"的地方（底色 / 图标）用 ——
+/// `Theme.sky(_:)` 的入参必须是过完 `SkyViewing.effective` 的 phase，
+/// 裸 `SunClock.phase(at:)` 会在阴天的黄金时刻画出金橙底色。
+private func daylightSky(_ state: DaylightActivityAttributes.ContentState,
+                         now: Date) -> Theme.SkyColors {
+    return Theme.sky(daylightPhase(state, now: now))
+}
+
 /// 由 `ContentState` 造一帧 `SkyLightEntry`（锁屏卡与灵动岛展开区共用的天空数据源）。
 ///
 /// 天空背景层 `SkyLightSky` 吃的是 `SkyLightEntry`，而实时活动没有 Timeline、
@@ -117,20 +156,14 @@ private enum DaylightMetric {
 /// （缺数据不猜，这里干脆不需要 —— 天气在旧版里就只是个挤在角落的小字）。
 private func daylightSkyEntry(state: DaylightActivityAttributes.ContentState,
                               now: Date) -> SkyLightEntry {
-    // 3.22.0：时段过天气门控（与 App / 小组件同一个 `SkyViewing`）。
-    //
-    // 这里只有天气**代码**（`ContentState` 没带云量），但 `WeatherKind` 本身已经
-    // 蕴含了量级：`overcast` 就是厚云、`partly` 就是半片天、`rain` 就是雨幕。
-    // 够判「这一刻天边有没有金色」了 —— 判不够精确的代价只是偶尔多说一句，
-    // 而不判的代价是锁屏卡片上写着"黄金时刻"、人站在阴天里。
-    let phase = SunClock.phase(at: now).effective(
-        viewing: SkyViewing.verdict(kind: WeatherKind.from(code: state.weatherCode),
-                                    cloud: nil,
-                                    visibilityMeters: nil)
-    )
+    // 判定存进 entry（而不是只用来降级）：渲染层要说的话是
+    // `entry.phase.label(viewing: entry.viewing)`，两个真值来源合一。
+    let viewing = daylightVerdict(state)
+    let phase = SunClock.phase(at: now).effective(viewing: viewing)
     return SkyLightEntry(
         date: now,
         phase: phase,
+        viewing: viewing,
         deadline: SkyLightEntry.deadline(for: now, phase: phase),
         // 日出日落用 state 里 App 写进来的值（`SunClock.times(on:)` 现算的同一套算法、
         // 同一个 ±3 分钟），但 state 里的值在 `ProgressView(timerInterval:)` 时代就是
@@ -223,7 +256,11 @@ struct DaylightLockScreenView: View {
                 .frame(width: DaylightMetric.lockDotDiameter,
                        height: DaylightMetric.lockDotDiameter)
 
-            Text(entry.phase.label)
+            // 词与配色是两件事：`entry.phase` 决定配色，「蓝调剩余」这种承诺颜色的词
+            // 还要再过一次门控 —— 阴天不降 phase（天色仍是蓝灰，色相对），只换词。
+            // 传的是 entry 里存的**观测**（`entry.viewing`），不是预先算好的词：
+            // 词永远由 `phase × viewing` 现场算出来，少一个真值来源就少一处漂移。
+            Text(entry.phase.label(viewing: entry.viewing))
                 .font(.system(size: DaylightMetric.lockHeaderSize, weight: .semibold))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
@@ -267,7 +304,7 @@ struct DaylightLockScreenView: View {
 
 /// 展开区左侧：阶段色圆点 + 当前时段名。
 ///
-/// 时段名用现成的 `SkyPhase.label` 七档文案，不自造 —— 那七个词已经和 App 内天光卡、
+/// 时段名用现成的 `SkyPhase.label(viewing:)` 七档文案，不自造 —— 那七个词已经和 App 内天光卡、
 /// 桌面「天光」组件、锁屏卡对齐过，"同一个时段两个名字"是最难查的一类文案 bug。
 private struct DaylightIslandLeading: View {
 
@@ -283,7 +320,9 @@ private struct DaylightIslandLeading: View {
                 .frame(width: DaylightMetric.islandDotDiameter,
                        height: DaylightMetric.islandDotDiameter)
 
-            Text(entry.phase.label)
+            // 与锁屏卡同一句话、同一份判定（`entry.viewing`）—— 两处说法不一致
+            // 是"同一时段两个名字"，最难查的那类文案 bug
+            Text(entry.phase.label(viewing: entry.viewing))
                 .font(.system(size: DaylightMetric.islandHeaderSize, weight: .semibold))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
@@ -358,7 +397,9 @@ private struct DaylightCompactCountdown: View {
 
     var body: some View {
         let now = Date()
-        let sky = Theme.sky(SunClock.phase(at: now))
+        // 紧凑态只取 `ink`（字色），但它同样是"天色"，一样要过门控 ——
+        // 与卡面、底色读同一个 `daylightSky`，不各算一遍。
+        let sky = daylightSky(state: state, now: now)
         if state.sunset > now {
             Text(timerInterval: now...state.sunset, countsDown: true)
                 .font(.system(size: DaylightMetric.countdownSize, weight: .semibold, design: .monospaced))

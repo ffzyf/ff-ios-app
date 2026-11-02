@@ -141,7 +141,9 @@ struct SkyLightFace: View {
                 .widgetAccentable()
         } else {
             VStack(alignment: .leading, spacing: WidgetTheme.Accessory.lineSpacing) {
-                Text(entry.phase.label)
+                // 锁屏档同样要换词：阴天写「蓝调剩余」与 App 内写「入夜剩余」
+                // 是同一句话的两种说法，而锁屏档比 App 更常被看到
+                Text(entry.phase.label(viewing: entry.viewing))
                     .font(WidgetTheme.Accessory.linePrimary)
                     .widgetAccentable()
                 Text(accessoryCountdownText)
@@ -161,8 +163,11 @@ struct SkyLightFace: View {
     }
 
     private var inlineText: String {
+        // 阶段名只算一次、两处拼（这个词是 `phase × viewing` 的纯函数结果，
+        // 重复写两次 `label(viewing:)` 只是样板，不会有两个真值）
+        let label = entry.phase.label(viewing: entry.viewing)
         let countdown = accessoryCountdownText
-        return countdown.isEmpty ? entry.phase.label : entry.phase.label + " " + countdown
+        return countdown.isEmpty ? label : label + " " + countdown
     }
 
     private var isAccessory: Bool {
@@ -247,7 +252,9 @@ struct SkyLightFace: View {
                 // 与压成 primary 的其余内容拉开层次（iOS 16+ API，直接用）
                 .widgetAccentable()
 
-            Text(entry.phase.label)
+            // 桌面档是这张卡最常被看到的位置：词必须与 App 内、锁屏档一致 ——
+            // 阴天不能写「蓝调剩余」（天上没有蓝调，哪来"蓝调剩余"）
+            Text(entry.phase.label(viewing: entry.viewing))
                 .font(WidgetTheme.SkyLight.phaseLabelScaled(family, scale: s))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
