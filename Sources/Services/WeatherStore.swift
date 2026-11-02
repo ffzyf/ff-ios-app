@@ -18,9 +18,15 @@ import Foundation
 /// · **失败保留旧值**：天气是卡片上的装饰性背景。拉失败就让卡片退化成"无天气"，
 ///   等于用一次网络抖动换掉用户眼前一片好好的天空 —— 明显是更差的结果。
 ///   旧值最多旧 10 分钟，比"什么都没有"诚实得多。
-/// · **不落盘**：天气是分钟级数据。存到磁盘只会在第二天早上打开 App 时，
-///   给用户一个昨天的"晴"——那是最糟的一类错误：看起来正常、且没人会怀疑。
-///   同样因此**不复用 `CachedLoader`**（那套的三步降级以落盘为前提）。
+/// · **落盘（3.21.0 起）**：上一份天气写进 `UserDefaults`，冷启动时先上屏再回源。
+///
+///   > 之前这里是「不落盘」的，理由是「第二天早上打开会看到一个昨天的晴」。
+///   > 那个理由本身没错，但它用一个**更频繁**的坏体验换来了一次**很罕见**的坏体验：
+///   > 每次冷启动（一天几十次）都要盯着「天气还没到」等网络回来，
+///   > 而跨天看到旧天气（一天最多一次）其实很好识别 —— 卡片底部就写着
+///   > 「昨天 21:05 更新」。现在两件事都成立：先给旧的、马上换新的。
+///
+///   旧数据仍然会**过期作废**：超过 12 小时、或坐标对不上，读盘时直接丢弃。
 ///
 /// 与 Widget 的关系：两个小组件**不引用本类**（Widget target 不编译 `Sources/Services`），
 /// 它们各自按 Timeline 直接请求，本类只服务主 App。
@@ -37,21 +43,35 @@ final class WeatherStore: ObservableObject {
 
     static let shared = WeatherStore()
 
-    /// 内存缓存窗口（秒）。与后端 KV 的 TTL 对齐，见类型注释。
+    /// 内存缓存窗口（秒）：**600 = 10 分钟**（3.21.0 由 30 分钟收紧）。
     ///
-    /// 3.18.0：600 → **1800**（30 分钟）。用户要求「这个天气能不能 30 分钟刷新一次」，
-    /// 同时后端 `weather.js` 的 KV TTL 也改成了 1800 —— 两边必须同一个数：
+    /// 用户的原话是「每 10 分钟刷新一次就行，不打开就不刷新」。
+    /// 后端 `weather.js` 的 KV TTL 也是 600 —— **两边必须同一个数**：
     /// App 比后端短，只是把同一份缓存多读几次；App 比后端长，用户就会看到
-    /// 「后端已经换了天，卡片还是旧的」。高德实况本身就是小时级更新，
-    /// 30 分钟既够新、也够省额度（个人开发者配额按次计）。
-    private static let freshWindow: TimeInterval = 1800
-
-    /// 回到前台时允许强制刷新的最小间隔（秒）。
+    /// 「后端已经换了天，卡片还是旧的」。
     ///
-    /// 用户要的是「每次打开 App 都拉一次当地的天气」，但"打开"在系统里
-    /// 包含切出去回条消息再回来 —— 60 秒内来回切三次不该打三次接口
-    /// （高德配额按次算）。60 秒之后才认为这是一次真正的"重新打开"。
-    private static let foregroundDebounce: TimeInterval = 60
+    /// 为什么不更短：和风按次计费，10 分钟已经能把单设备一天的调用压在 144 次以内；
+    /// 压到 1 分钟只是把额度烧在同一份观测上。
+    private static let freshWindow: TimeInterval = 600
+
+    /// 落盘快照的键
+    private static let diskKey = "weather.current.v2"
+
+    /// 落盘快照的最长寿命（秒）：12 小时。
+    ///
+    /// 超过就丢弃 —— 半天前的天气即使「看起来正常」，也已经没有任何参考价值，
+    /// 而上屏一份下午的 28℃ 来告诉用户清晨该穿什么，是会让人穿错衣服的错误。
+    private static let diskMaxAge: TimeInterval = 12 * 3600
+
+    /// 回到前台时允许强制刷新的最小间隔（秒）：**600 = 10 分钟**（3.21.0 由 60 秒放宽）。
+    ///
+    /// 用户的原话：「不打开就不刷新，打开后再刷新，做个 10 分钟或者 20 分钟的
+    /// 健全（节流）再刷新，不能经常刷新」。
+    ///
+    /// 所以「打开」的判定放宽到 10 分钟：切出去回条消息再回来、10 分钟内反复进出，
+    /// 都不再打接口 —— 那份数据本来就是 10 分钟内的，重拉只会得到同一份观测。
+    /// 真正需要立刻新的场景（下拉刷新、改定位）走 `load(force: true)`，不受这道闸门限制。
+    private static let foregroundDebounce: TimeInterval = 600
 
     /// 坐标变化的作废阈值（0.05° ≈ 5.5km）。
     ///
@@ -90,6 +110,7 @@ final class WeatherStore: ObservableObject {
 
     init(client: APIClient = .shared) {
         self.client = client
+        restoreFromDisk()
     }
 
     /// 有没有可显示的天气（决定卡片画天空还是走"天气未知"的降级外观）
@@ -147,6 +168,9 @@ final class WeatherStore: ObservableObject {
             // 天气本身也要清：只清时间戳的话，下一次请求失败（断网 / 后端 500）
             // 会把出发地的天空原样留在屏幕上，而且看起来完全正常 —— 没人会怀疑。
             current = nil
+            // 盘上那份也是出发地的天气，一并清掉：否则这一轮请求失败时，
+            // 下次冷启动会把出发地的天空当成"家里的缓存"重新摆上桌
+            clearDisk()
             lastQueryCoordinate = coordinate
         }
 
@@ -185,6 +209,9 @@ final class WeatherStore: ObservableObject {
                 if response.ok {
                     current = response
                     lastSuccessAt = Date()
+                    // 写盘放在 success 分支里，失败不写 —— 否则一次 500 会把
+                    // 上一份好数据覆盖成空壳，下次冷启动读到的是「有天气但没字段」
+                    saveToDisk(response, coordinate: coordinate)
                 }
             } catch {
                 // 传输 / 解码失败一律静默（`APIError.cancelled` 也走这里：页面切走时取消是正常行为）
@@ -240,6 +267,83 @@ final class WeatherStore: ObservableObject {
         if let device = LocationStore.shared.coordinate { return device }
         guard let home = HomeCoordinate.cached() else { return nil }
         return CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon)
+    }
+
+    // MARK: - 落盘
+
+    /// 盘上那份快照的形状。
+    ///
+    /// 为什么带坐标：只有天气本身的话，用户从上海飞到北京、冷启动时会把上海的天气
+    /// 摆上桌 —— 而且看起来完全正常，没人会怀疑。坐标让「这份天气属于哪里」可验证。
+    ///
+    /// 为什么带 `savedAt` 而不是复用 `weather.updatedAt`：后者是**上游观测时间**，
+    /// 可能因为上游故障停在很久以前。判断「这份缓存还值不值得显示」要看我们**何时拿到它**，
+    /// 就像判断牛奶能不能喝要看放进冰箱的时间，而不是奶牛挤奶的时间。
+    private struct DiskSnapshot: Codable {
+        let lat: Double?
+        let lon: Double?
+        let savedAt: Date
+        let weather: WeatherNow
+    }
+
+    /// 冷启动时把上一份天气摆上屏。
+    ///
+    /// 三道闸门，任何一道不过就丢弃整份快照：
+    /// 1. **超过 12 小时** —— 半天前的温度已经不是参考，是误导；
+    /// 2. **坐标对不上** —— `HomeCoordinate.cached()`（上次上报的城市）与快照差得远，
+    ///    说明用户换了地方，这份是出发地的天气；
+    /// 3. **解码失败** —— 换版本后字段改了，旧格式读不进来，当作没有。
+    ///
+    /// 恢复 `lastSuccessAt` 是关键的一步：闸门按「上次成功」计时，
+    /// 不恢复的话冷启动一律视为「从没成功过」，于是每次打开都强制拉一次 ——
+    /// 用户明确说了不想刷新那么勤。恢复之后，10 分钟内再次打开就是纯读缓存。
+    private func restoreFromDisk() {
+        guard let data = UserDefaults.standard.data(forKey: Self.diskKey),
+              let snap = try? JSONDecoder().decode(DiskSnapshot.self, from: data) else { return }
+
+        // ① 太旧
+        let age = Date().timeIntervalSince(snap.savedAt)
+        guard age >= 0, age < Self.diskMaxAge else {
+            clearDisk()
+            return
+        }
+
+        // ② 不是这个地方的天气
+        if let lat = snap.lat, let lon = snap.lon, let here = Self.resolvedCoordinate() {
+            let moved = abs(here.latitude - lat) > Self.coordinateTolerance
+                || abs(here.longitude - lon) > Self.coordinateTolerance
+            if moved { clearDisk(); return }
+        }
+
+        // ③ 通过了
+        current = snap.weather
+        lastSuccessAt = snap.savedAt
+        if let lat = snap.lat, let lon = snap.lon {
+            lastQueryCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+        // 能见度跟着天气一起恢复：盘上这份是同一时刻的观测，两者必须同源，
+        // 否则会出现「天空按 8 点的雾浓度起雾、文字写 10 点的晴」
+        if let meters = snap.weather.visibilityMeters {
+            visibilityMeters = meters
+            lastVisibilityAt = snap.savedAt
+        }
+    }
+
+    /// 成功后写盘。失败静默 —— 落盘是体验优化，不是依赖。
+    private func saveToDisk(_ weather: WeatherNow, coordinate: CLLocationCoordinate2D?) {
+        let snap = DiskSnapshot(
+            lat: coordinate?.latitude,
+            lon: coordinate?.longitude,
+            savedAt: Date(),
+            weather: weather
+        )
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        UserDefaults.standard.set(data, forKey: Self.diskKey)
+    }
+
+    /// 清掉盘上那份（换地方、或数据过期时）
+    private func clearDisk() {
+        UserDefaults.standard.removeObject(forKey: Self.diskKey)
     }
 
     // MARK: - 坐标变了没有

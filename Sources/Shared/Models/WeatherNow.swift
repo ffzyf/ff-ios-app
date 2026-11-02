@@ -201,3 +201,45 @@ struct WeatherNow: Decodable, Equatable, Sendable {
         provider = try? container.decode(String.self, forKey: .provider)
     }
 }
+
+// MARK: - 落盘（3.21.0）
+
+/// 为什么要 `Encodable`：`WeatherStore` 要把上一份天气写进 `UserDefaults`，
+/// 让冷启动时**先有画面再回源**。
+///
+/// 这不是「缓存优化」，是修复一个明确的体验缺陷：以前冷启动时 `current` 是 nil，
+/// 页面显示「天气还没到」，一直等到第一个请求回来（最长 15 秒超时）才换成真实天气。
+/// 而那份天气其实上一分钟还在屏幕上 —— 用户看到的是「关掉再打开，天气反而没了」。
+///
+/// 编解码用**同一套默认策略**（`JSONEncoder`/`JSONDecoder` 的默认日期策略），
+/// 与 `APIJSON.decoder` 的 ISO8601 策略无关 —— 落盘是我们自己的格式，不跨进程协商。
+extension WeatherNow: Encodable {
+
+    /// 与 `init(from:)` 逐字段对称。`encodeIfPresent` 保证「空值不占位」的语义在
+    /// 磁盘上也是同一套：缺省字段不会写成 `null`，读回来还是缺省。
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(ok, forKey: .ok)
+        try c.encodeIfPresent(code, forKey: .code)
+        try c.encodeIfPresent(text, forKey: .text)
+        try c.encodeIfPresent(temp, forKey: .temp)
+        try c.encodeIfPresent(tMax, forKey: .tMax)
+        try c.encodeIfPresent(tMin, forKey: .tMin)
+        try c.encodeIfPresent(cloud, forKey: .cloud)
+        try c.encodeIfPresent(isDay, forKey: .isDay)
+        try c.encodeIfPresent(wind, forKey: .wind)
+        try c.encodeIfPresent(windDirText, forKey: .windDirText)
+        try c.encodeIfPresent(sunrise, forKey: .sunrise)
+        try c.encodeIfPresent(sunset, forKey: .sunset)
+        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try c.encodeIfPresent(feelsLike, forKey: .feelsLike)
+        try c.encodeIfPresent(humidity, forKey: .humidity)
+        try c.encodeIfPresent(pressure, forKey: .pressure)
+        try c.encodeIfPresent(visibilityMeters, forKey: .visibilityMeters)
+        try c.encodeIfPresent(precip, forKey: .precip)
+        try c.encodeIfPresent(uvIndex, forKey: .uvIndex)
+        try c.encodeIfPresent(air, forKey: .air)
+        try c.encodeIfPresent(indices, forKey: .indices)
+        try c.encodeIfPresent(provider, forKey: .provider)
+    }
+}

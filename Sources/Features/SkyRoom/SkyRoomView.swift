@@ -1247,6 +1247,17 @@ struct SkyRoomView: View {
             return
         }
         #endif
+        // **先把已有的那份放上屏，再回源**（3.21.0）。
+        //
+        // `WeatherStore` 启动时会从磁盘恢复上一份天气，所以这里的 `current` 在冷启动时
+        // 通常已经有值。先取一次，用户推开门看到的就是"上次的天气"而不是「天气还没到」；
+        // 下面 `await load()` 回来之后再覆盖成新的。
+        //
+        // 以前这两行在 `await` **之后**，等于把「先给旧值」这条路彻底堵死了 ——
+        // 网络慢的时候（最长 15 秒超时）页面一直是空的。
+        weatherNow = WeatherStore.shared.current
+        visibilityMeters = WeatherStore.shared.visibilityMeters
+
         await WeatherStore.shared.load()
         weatherNow = WeatherStore.shared.current
         visibilityMeters = WeatherStore.shared.visibilityMeters

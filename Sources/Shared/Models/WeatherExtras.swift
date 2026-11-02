@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 为什么挂在天气响应里而不是单独开接口：AQI 的官方更新频率是小时级，
 /// 与天气的 30 分钟缓存同寿，单独开一个端点只会多一个 RTT、多一份缓存要维护。
-struct AirQuality: Decodable, Equatable, Sendable {
+struct AirQuality: Codable, Equatable, Sendable {
 
     /// 空气质量指数（0…500+）
     let aqi: Int
@@ -39,7 +39,7 @@ struct AirQuality: Decodable, Equatable, Sendable {
 }
 
 /// 生活指数（和风 `/v7/indices/1d`，如"穿衣指数：较冷，建议着厚外套"）。
-struct WeatherIndex: Decodable, Equatable, Sendable, Identifiable {
+struct WeatherIndex: Codable, Equatable, Sendable, Identifiable {
 
     let name: String
     let category: String?
@@ -172,6 +172,13 @@ struct MinutelyRain: Decodable, Equatable, Sendable {
     /// 峰值降水强度（mm / 5min）
     let peak: Double?
 
+    /// 服务端算好的「到底下不下」。
+    ///
+    /// 为什么不让 App 自己按 `points` 判：服务端已经用同一套阈值校验过 `summary`
+    /// 的自洽性（见后端 `mapMinutely`），这里再判一次就是两份阈值、两种结论。
+    /// 缺省时（老版本后端）才回落到本地判据。
+    let wet: Bool?
+
     /// 最后一个有降水的时刻（ISO8601）。用来回答"还要下多久"。
     let lastWetAt: String?
 
@@ -184,13 +191,16 @@ struct MinutelyRain: Decodable, Equatable, Sendable {
         let type: String?
     }
 
-    /// 有没有在下（或即将下）：任一点大于 0.01mm 即算。
+    /// 有没有在下（或即将下）。
     ///
-    /// 阈值取 0.01 而不是 0：雷达反推的微量降水常给 0.001 这类数，
-    /// 对用户是"没下"，画在柱状图上却是一片柱子。
+    /// 优先用服务端的 `wet`（它和 `summary` 是同一个判据算出来的，两者不会互相矛盾）。
+    /// 没有时按柱子自己判 —— **阈值必须和后端一致（0.05mm/5min）**：
+    /// 后端用 0.05 判定「不下雨」并改写 summary 为「未来两小时无降水」，
+    /// 而这里若用 0.01，就会出现「文字说无降水、柱状图却一片柱子」的自相矛盾。
     var isWet: Bool {
+        if let wet { return wet }
         guard let points else { return false }
-        return points.contains { $0.p > 0.01 }
+        return points.contains { $0.p >= 0.05 }
     }
 
     /// 柱状图归一化用的最大值（至少 0.5，避免全是毛毛雨时柱子被拉到满格）。
