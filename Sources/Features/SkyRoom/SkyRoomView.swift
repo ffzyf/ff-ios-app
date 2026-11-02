@@ -83,6 +83,22 @@ struct SkyRoomView: View {
     /// 观察它的意义只有一个：按钮要在「喇叭 ↔ 停止」之间跟着状态切图标。
     @ObservedObject private var speech = SpeechStore.shared
 
+    /// 今日简报快照（**只服务播报稿的宜忌**）。
+    ///
+    /// 为什么用**传值**而不是 `@EnvironmentObject`：这一页是 `fullScreenCover` 独立呈现的，
+    /// 刻意只依赖单例（见上面 `location` / `speech` 的注释）而不依赖环境对象注入 ——
+    /// 环境对象缺失是运行期 `fatalError`，播报只是锦上添花的功能，不值得为它给整页加一个崩溃面。
+    /// 播报是即时动作，打开页面那一刻的快照就够，不需要跟着 `briefState` 重画。
+    private let brief: BriefSnapshot?
+
+    /// 显式 init：加了 `brief` 之后不能再靠编译器合成的 memberwise init ——
+    /// 本视图有大量 `private` 存储属性，合成的 init 会跟着降级成 private，
+    /// 跨文件的 `SkyRoomView(brief:)` 直接编译不过（`RootView.init` 记过同一个坑）。
+    /// 其余属性全都有默认值，这里不用逐个赋值。
+    init(brief: BriefSnapshot? = nil) {
+        self.brief = brief
+    }
+
     var body: some View {
         GeometryReader { proxy in
             // 安全区**手动**折进全屏坐标：这一页的天空必须铺到状态栏与 Home Indicator 之外，
@@ -469,8 +485,20 @@ struct SkyRoomView: View {
                                   weather: weatherNow,
                                   sunTimes: speechTimes,
                                   nextRedstone: nil,
-                                  yi: [],
-                                  ji: [])
+                                  yi: brief?.yi ?? [],
+                                  ji: brief?.ji ?? [],
+                                  place: speechPlace)
+    }
+
+    /// 播报里念的城市名。
+    ///
+    /// 只取第一段（"上海市 · 浦东新区" → "上海市"）：念全称像在报收货地址。
+    /// 定位关着 / 还没反查出地名时给 nil —— `SpeechStore.weatherSentence` 会整句省掉城市，
+    /// 而不是把"定位中…"或"上次位置"念出来（那是给眼睛看的，不是说给人听的）。
+    private var speechPlace: String? {
+        guard location.isEnabled, let name = location.placeName else { return nil }
+        let city = name.components(separatedBy: " · ").first ?? name
+        return city.isEmpty ? nil : city
     }
 
     /// 顶栏那行位置文案。
@@ -1139,6 +1167,11 @@ struct SkyRoomView: View {
         breathe = false
         drifting = false
         hintBob = false
+        // 关页面就闭嘴：`SpeechStore` 是单例，不主动停的话返回桌面还在念 ——
+        // 用户点的是"关掉这一页"，不是"最小化"，声音跟着跑到别的页面是没道理的。
+        if speech.isBusy {
+            speech.stop()
+        }
     }
 
     /// bob 的瞬时位移（0 或 4pt，方向由动画插值）。

@@ -110,7 +110,8 @@ struct OverviewView: View {
         }
         // 天光页（3.11.0）：全屏呈现，环境值（layoutMetrics / reduceMotion）由模态继承
         .fullScreenCover(isPresented: $showsSkyRoom) {
-            SkyRoomView()
+            // 同上：把简报快照带进去，朗读才有"宜/忌"可念
+            SkyRoomView(brief: model.todayBrief)
         }
     }
 

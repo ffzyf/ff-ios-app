@@ -93,7 +93,9 @@ struct RootView: View {
         // 环境值（`layoutMetrics` / `themeMetrics` / `reduceMotion`）由模态自动继承，
         // 所以这里不重复注入 —— 只有它真的读 `AppModel` 时才需要 `.environmentObject`。
         .fullScreenCover(isPresented: $showsSkyRoom) {
-            SkyRoomView()
+            // 传今日简报快照：天光页的朗读要念"宜/忌"。传值而不是环境对象 —— 理由见
+            // `SkyRoomView.brief` 的注释（这一页刻意不依赖 environmentObject 注入）。
+            SkyRoomView(brief: model.todayBrief)
         }
         .task {
             await model.loadOverview()

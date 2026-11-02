@@ -64,7 +64,7 @@ enum Endpoint {
     /// App 侧直接交给 `AVPlayer`，不落盘（见 `Services/SpeechStore.swift`）。
     /// 归简报站而不另开域名：它读的是同一份服务端密钥，拆到别的站根等于多一套部署。
     static let ttsPath = "/api/app/tts"
-    /// 主 App 与桌面小组件共享的「家」坐标（3.17.0；3.17.0 改为**单条记录**）。
+    /// 主 App 与桌面小组件共享的「家」坐标（3.17.0 起为**单条记录**）。
     ///
     /// `POST {lat, lon, name}` 由 App 上报，`GET`（**无 query**）由 Widget 读取 ——
     /// 服务端只存一条「当前位置」，两端读同一条，所以**不需要任何设备标识**

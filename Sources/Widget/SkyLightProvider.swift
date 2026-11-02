@@ -282,7 +282,7 @@ struct SkyLightProvider: TimelineProvider {
         Task {
             let now = Date()
 
-            // 「家」坐标：App 上报、服务端中转、6 小时本地缓存（见 `HomeCoordinate`）。
+            // 「家」坐标：App 上报、服务端中转、45 分钟本地缓存（见 `HomeCoordinate`）。
             //
             // 为什么放在两个 `async let` **之前**：天气与能见度都要用它，而它本身有本地缓存，
             // 绝大多数刷新是同步返回。塞进并发里也并发不了 —— 那两发的 URL 都依赖这个值。
