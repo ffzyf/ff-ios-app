@@ -58,6 +58,11 @@ enum Endpoint {
     /// 为什么归简报站而不是红石站：简报里的 `weather` / `windText` / `rain` 三处就是从它派生的，
     /// 两者共用一次上游请求。分到别的站根下，迟早会出现"卡片说小雨、简报说晴"的分叉。
     static let weatherPath = "/api/app/weather"
+    /// 天气预警（3.19.0）。**独立于 weatherPath**：预警的时效是分钟级，
+    /// 塞进 30 分钟的整包缓存等于把「暴雨红色预警」延迟半小时。
+    static let alertsPath = "/api/app/alerts"
+    /// 分钟级降水（3.19.0）。同样独立：5 分钟一格的预报不能压 30 分钟。
+    static let minutelyPath = "/api/app/minutely"
     /// 语音合成（**属于简报站**，与 weather / brief 同一台机器，密钥在服务端）。
     ///
     /// `POST {text, voice}` → `{ok, url, chars}`，`url` 是 24 小时有效的预签名直链，

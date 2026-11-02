@@ -249,6 +249,38 @@ enum Theme {
         }
     }
 
+    // MARK: - 天气语义色（3.19.0）
+
+    /// 预警色：服务端给的是 `#RRGGBB` 字符串（由和风 `severityColor` 映射而来）。
+    ///
+    /// 为什么不在模型里直接 `Color(hex:)`：主题闸门第 1 条就是「View 层与模型层不得出现
+    /// 硬编码颜色」，所有色值必须从 Theme 这一个出口出去。服务端来的色值虽然是运行时数据，
+    /// 但它同样属于"颜色"，走同一个出口才能保证深色模式下不会有一块刺眼的纯色。
+    ///
+    /// 解析失败回落 `badgeRed`（最坏的假设：当成红色预警提醒用户），
+    /// **不回落灰色** —— 灰色会让「暴雨红色预警」看起来像一条无足轻重的通知。
+    static func alertColor(_ hex: String?) -> Color {
+        guard let hex, hex.hasPrefix("#"), hex.count == 7 || hex.count == 9 else {
+            return badgeRed
+        }
+        return Color(hex: hex)
+    }
+
+    /// 空气质量分档色。分档来自 `AirQuality.Level`，色值在这里定。
+    ///
+    /// 用 AQI 的国际通用色阶（绿→黄→橙→红→紫→褐）：用户对这个色阶有肌肉记忆，
+    /// 换个"更好看"的配色反而要多读一遍数字才知道好坏。
+    static func aqiColor(_ level: AirQuality.Level) -> Color {
+        switch level {
+        case .good: return Color(hex: "#4CAF50")
+        case .moderate: return Color(hex: "#EAB308")
+        case .unhealthySensitive: return Color(hex: "#F97316")
+        case .unhealthy: return Color(hex: "#EF4444")
+        case .veryUnhealthy: return Color(hex: "#A855F7")
+        case .hazardous: return Color(hex: "#7F1D1D")
+        }
+    }
+
     // MARK: - 唯一构造入口（透明度只允许出现在这两个函数里，PRD §3.4 第 1 条）
 
     /// 不透明动态色。

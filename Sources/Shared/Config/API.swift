@@ -90,8 +90,49 @@ enum API {
         )
     }
 
-    /// 语音合成：`POST /api/app/tts`。
+    /// 天气预警：`GET /api/app/alerts`（3.19.0）。
     ///
+    /// 与 `weather()` 同一台机器、同一套坐标参数，但**缓存互不相干**：
+    /// 它自己只压 5 分钟（见后端 `alerts.js`），因为预警的价值全在时效。
+    ///
+    /// 响应里 `ok == false` 表示「拿不到预警」（没配 key / 上游挂了），
+    /// 调用方**不能**据此清空已有横幅 —— 一次网络抖动不该让红色预警从屏幕上消失。
+    static func alerts(lat: Double? = nil, lon: Double? = nil) -> URL? {
+        return coordinateURL(path: Endpoint.alertsPath, lat: lat, lon: lon)
+    }
+
+    /// 分钟级降水：`GET /api/app/minutely`（3.19.0）。同样独立端点、5 分钟缓存。
+    static func minutely(lat: Double? = nil, lon: Double? = nil) -> URL? {
+        return coordinateURL(path: Endpoint.minutelyPath, lat: lat, lon: lon)
+    }
+
+    /// 带坐标的 GET 地址（`weather` / `alerts` / `minutely` 共用一套拼法）。
+    ///
+    /// 抽出来的理由：三个端点的坐标规则必须**逐字相同** —— 只要有一个保留三位小数，
+    /// 同一片 1 公里的网格就会被拆成两个缓存键，三个接口于是各说各的天气。
+    ///
+    /// - Parameters:
+    ///   - path: 端点路径
+    ///   - lat: 纬度；与 `lon` 成对出现，任一不合法就当作"没有坐标"
+    ///   - lon: 经度
+    private static func coordinateURL(path: String, lat: Double?, lon: Double?) -> URL? {
+        guard let lat = lat, let lon = lon,
+              lat.isFinite, lon.isFinite,
+              (-90.0...90.0).contains(lat),
+              (-180.0...180.0).contains(lon) else {
+            return Endpoint.url(base: briefHost, path: path)
+        }
+        return Endpoint.url(
+            base: briefHost,
+            path: path,
+            query: [
+                URLQueryItem(name: "lat", value: String(format: "%.2f", lat)),
+                URLQueryItem(name: "lon", value: String(format: "%.2f", lon))
+            ]
+        )
+    }
+
+    /// 语音合成：`POST /api/app/tts`。    ///
     /// base 用 `briefHost`（与 `weather()` 同一台机器）：密钥在服务端，App 只发文本。
     /// 请求方法 / body / 超时 / 解码都由 `SpeechStore` 负责 —— 本层只拼地址，
     /// 与 `weather()` / `brief()` 同一个分工。

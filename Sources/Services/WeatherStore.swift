@@ -161,11 +161,12 @@ final class WeatherStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        // 先起能见度那一发（`async let` 立即可跑），天气那条在下面 await
-        async let visibility: Double? = Self.probeVisibility(latitude: coordinate?.latitude,
-                                                            longitude: coordinate?.longitude,
-                                                            cached: visibilityFresh)
-
+        // 3.19.0：能见度不再和天气**并发**打了。
+        //
+        // 原因：和风实况本身就带 `visibility`（服务端已换算成米），天气响应里就有这个数。
+        // 既然如此，再并发打一次 Open-Meteo 就是纯浪费 —— 一次请求换一个精度更低的重复值。
+        // 所以改成「先看天气带没带，没带才补一发」，见下面的 `visibilityFallback`。
+        // 代价是极少数情况下多一个串行 RTT；换来的是常态下一次请求就够了。
         if !weatherFresh,
            // 地址拼错是代码问题，不该表现为"天气未知"之外的任何东西：静默即可
            let url = API.weather(lat: coordinate?.latitude, lon: coordinate?.longitude) {
@@ -190,8 +191,18 @@ final class WeatherStore: ObservableObject {
             }
         }
 
-        // 能见度独立落账：天气失败、跳过都能走到这里（它只服务画面，不代表天气）
-        if let meters = await visibility {
+        // 能见度落账（3.19.0 改成两级）：
+        //   ① 天气响应里带了 `visibilityMeters`（和风）→ 直接用它，不再打第三方；
+        //   ② 没带（和风挂了 / 降级到 Open-Meteo）→ 补一发 `VisibilityProbe` 兜底。
+        //
+        // 这样「画面起不起雾」在任何降级路径下都还有得画，而不是和风一挂整个天空就永远清透。
+        if let fromWeather = current?.visibilityMeters {
+            visibilityMeters = fromWeather
+            if let successAt = lastSuccessAt { lastVisibilityAt = successAt }
+        } else if !visibilityFresh,
+                  let meters = await Self.probeVisibility(latitude: coordinate?.latitude,
+                                                          longitude: coordinate?.longitude,
+                                                          cached: false) {
             visibilityMeters = meters
             lastVisibilityAt = Date()
         }
@@ -221,7 +232,11 @@ final class WeatherStore: ObservableObject {
     ///   服务端回落默认坐标，与 3.7.0 之前完全一样。
     ///
     /// `LocationStore` 与 `WeatherStore` 都是 `@MainActor`，这里可以直接读，不需要显式跳 actor。
-    private static func resolvedCoordinate() -> CLLocationCoordinate2D? {
+    ///
+    /// 3.19.0 起由 `private` 改为 internal：`AlertStore` / `MinutelyStore` 必须用**完全相同的**
+    /// 坐标去请求各自端点。各写一份的话，只要有一处忘了回落 `HomeCoordinate`，
+    /// 预警就会盯着默认城市（郑州）报，而天气卡显示的是当地 —— 那种不一致最难被发现。
+    static func resolvedCoordinate() -> CLLocationCoordinate2D? {
         if let device = LocationStore.shared.coordinate { return device }
         guard let home = HomeCoordinate.cached() else { return nil }
         return CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon)

@@ -106,6 +106,26 @@ struct FFWangApp: App {
                 guard scenePhase == .active else { return }
                 await WeatherStore.shared.refreshOnForeground()
             }
+            // 天气预警 + 分钟降水（3.19.0）：与天气同一个 scenePhase 信号，但各自 10 分钟闸门。
+            //
+            // 为什么不合并进上一个 task：天气要「每次打开都新」（60 秒防抖），
+            // 预警要「10 分钟内别重复问」（额度与通知去重都依赖这个窗口）。
+            // 两个闸门塞进一个 task 只会互相迁就，最后两个都不对。
+            //
+            // 退到非 active 时必须显式 `stopPolling()`：`.task(id:)` 取消的是**这个闭包**，
+            // 闭包里 `startPolling()` 起的那个 `Task` 是独立生命周期的，不显式停就会一直空转
+            // （iOS 会挂起进程，但真机上切出去接个电话再回来，那几分钟是白耗电）。
+            .task(id: scenePhase) {
+                guard scenePhase == .active else {
+                    AlertStore.shared.stopPolling()
+                    MinutelyStore.shared.stopPolling()
+                    return
+                }
+                await AlertStore.shared.refresh(force: false)
+                await MinutelyStore.shared.refresh(force: false)
+                AlertStore.shared.startPolling()
+                MinutelyStore.shared.startPolling()
+            }
             // 远程配置（3.9.0）：挂在云控更新**之前**的第四个同 id task ——
             // 配置（minBuild / installGuideURL）是更新判定的输入，先到先备好。
             // 1 小时闸门在 `refreshIfNeeded()` 内部；失败静默、不清空旧值。

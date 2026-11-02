@@ -67,6 +67,43 @@ struct WeatherNow: Decodable, Equatable, Sendable {
     /// 卡片要显示"几分钟前"应当用它，而不是 `Date()`。
     let updatedAt: Date?
 
+    // MARK: - 3.19.0 新增（和风为主源后带回来的字段）
+
+    /// 体感温度（摄氏度）。和风给的，与气温的区别是算进了湿度与风。
+    /// 缺省 = 不知道，不要拿 `temp` 顶替 —— 「28 度但体感 34」正是用户最需要看到的那句话。
+    let feelsLike: Double?
+
+    /// 相对湿度（0…100，整数百分比）
+    let humidity: Double?
+
+    /// 海平面气压（hPa）
+    let pressure: Double?
+
+    /// 能见度（**米**）。
+    ///
+    /// 服务端做了一次单位换算：和风 v7 给的是公里，这里统一成米，
+    /// 与 `SkyHaze.level(visibilityMeters:)` 的口径一致。
+    ///
+    /// 它的存在让 `VisibilityProbe`（直连 Open-Meteo 的那一发）变成了兜底 ——
+    /// 天气接口自己带了，就不用再多打一次第三方。
+    let visibilityMeters: Double?
+
+    /// 过去一小时降水量（毫米）
+    let precip: Double?
+
+    /// 紫外线指数（0…15）
+    let uvIndex: Int?
+
+    /// 空气质量（和风 `/v7/air/now`）
+    let air: AirQuality?
+
+    /// 生活指数（穿衣 / 洗车 / 运动…，最多 8 条）
+    let indices: [WeatherIndex]?
+
+    /// 最终是哪些源拼出来的（`qweather` / `qweather+open-meteo`…）。
+    /// 只用于排查"这条数据到底谁说的"，不参与任何展示。
+    let provider: String?
+
     /// WMO 代码 → 8 组视觉类型。代码缺失或未知一律 nil（理由见 `WeatherKind.from(code:)`）
     var kind: WeatherKind? {
         return WeatherKind.from(code: code)
@@ -120,6 +157,15 @@ struct WeatherNow: Decodable, Equatable, Sendable {
         case sunrise
         case sunset
         case updatedAt
+        case feelsLike
+        case humidity
+        case pressure
+        case visibilityMeters
+        case precip
+        case uvIndex
+        case air
+        case indices
+        case provider
     }
 
     /// 逐个 `try?`：任何一个字段解不开都只是"这个字段没有"，不影响整份响应。
@@ -140,5 +186,14 @@ struct WeatherNow: Decodable, Equatable, Sendable {
         sunrise = try? container.decode(String.self, forKey: .sunrise)
         sunset = try? container.decode(String.self, forKey: .sunset)
         updatedAt = try? container.decode(Date.self, forKey: .updatedAt)
+        feelsLike = try? container.decode(Double.self, forKey: .feelsLike)
+        humidity = try? container.decode(Double.self, forKey: .humidity)
+        pressure = try? container.decode(Double.self, forKey: .pressure)
+        visibilityMeters = try? container.decode(Double.self, forKey: .visibilityMeters)
+        precip = try? container.decode(Double.self, forKey: .precip)
+        uvIndex = try? container.decode(Int.self, forKey: .uvIndex)
+        air = try? container.decode(AirQuality.self, forKey: .air)
+        indices = try? container.decode([WeatherIndex].self, forKey: .indices)
+        provider = try? container.decode(String.self, forKey: .provider)
     }
 }

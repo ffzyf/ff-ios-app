@@ -83,6 +83,15 @@ struct SkyRoomView: View {
     /// 观察它的意义只有一个：按钮要在「喇叭 ↔ 停止」之间跟着状态切图标。
     @ObservedObject private var speech = SpeechStore.shared
 
+    /// 天气预警（3.19.0）。与上面两个同一个写法：单例 + `ObservedObject`。
+    ///
+    /// 它和 `weatherNow` 是两条独立的数据流（5 分钟 vs 30 分钟），所以不能靠
+    /// `WeatherStore` 带着刷新 —— 页面必须自己观察它，才能在轮询结果回来时重画横幅。
+    @ObservedObject private var alerts = AlertStore.shared
+
+    /// 分钟级降水（3.19.0）。同样是独立的 10 分钟轮询。
+    @ObservedObject private var minutely = MinutelyStore.shared
+
     /// 今日简报快照（**只服务播报稿的宜忌**）。
     ///
     /// 为什么用**传值**而不是 `@EnvironmentObject`：这一页是 `fullScreenCover` 独立呈现的，
@@ -127,6 +136,13 @@ struct SkyRoomView: View {
         .preferredColorScheme(.dark)
         .task {
             await loadWeather()
+            // 预警与分钟降水各有自己的节奏（5 分钟 / 10 分钟），跟着天气那一条走会永远慢半拍。
+            //
+            // 串行 await 而不是 `async let`：两者的闸门都在主 actor 上判定，
+            // 并发起跑并不会真的并行，反而会多出一层 actor 跳转的复杂度。
+            // 两次请求都走 CDN + KV 缓存，实际耗时在百毫秒量级。
+            await alerts.refresh(force: false)
+            await minutely.refresh(force: false)
         }
         .onAppear {
             startAmbient()
@@ -567,6 +583,11 @@ struct SkyRoomView: View {
     private func cards(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
         let reveal = cardReveal(height: frame.height)
         return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
+            // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
+            // 排在气温之前不是排版偏好，是优先级。
+            if let alert = alerts.primary {
+                SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+            }
             if let times = sunTimes(now: now) {
                 SkyRoomDaylightCard(now: now,
                                     sunrise: times.sunrise,
@@ -577,6 +598,10 @@ struct SkyRoomView: View {
             SkyRoomTemperatureCard(weather: weatherNow,
                                    sky: sky,
                                    scale: frame.fontScale)
+            if let rain = minutely.rain, minutely.hasData {
+                SkyRoomMinutelyCard(rain: rain, scale: frame.fontScale)
+            }
+            SkyRoomComfortCard(weather: weatherNow, scale: frame.fontScale)
             HStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
                 SkyRoomWindCard(weather: weatherNow, scale: frame.fontScale)
                 SkyRoomCloudCard(weather: weatherNow, scale: frame.fontScale)
