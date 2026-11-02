@@ -105,6 +105,26 @@ struct SkyRoomView: View {
     /// 分钟级降水（3.19.0）。同样是独立的 10 分钟轮询。
     @ObservedObject private var minutely = MinutelyStore.shared
 
+    /// 这一页是否已经「问过一次预警」（3.24.0）。
+    ///
+    /// 为什么需要：`AlertStore.isAvailable` 的初值是 `false`（语义 = "还没拿到过有效结果"），
+    /// 冷启动那一瞬它与「接口挂了」长得一模一样。加一个 settled 才能把
+    /// 「还没问」和「问了没拿到」分开，否则首帧会斩钉截铁地说「取不到」。
+    ///
+    /// 初值直接取单例的 `isAvailable`：`AlertStore` 是**跨页面存活**的长生命周期对象，
+    /// 用户上次打开过 App 时它已经拿到过结果 —— 这时再从 `false` 起步，等于让界面在首帧
+    /// 说一句「取不到」，而数据其实就在内存里。这一页尤其吃这个亏：两个入口都是
+    /// `fullScreenCover`，每次进场视图身份新建、`@State` 全部归零，于是"首帧谎报"不是
+    /// 偶发的一次，而是每进一次都重演一遍；而且预警状态行紧贴在 hero（62% 视口高）下面，
+    /// iPhone 15 上落在 y≈534 —— 它在**首屏之内**，用户第一眼就看得到。
+    ///
+    /// 真正的冷启动（一次结果都没有过）时它仍是 `false`，那一帧的「取不到」配着
+    /// 「稍后自动重试」是诚实的。
+    ///
+    /// 取舍：**未 settled 时不隐藏预警区，仍然渲染 `.unknown`**。
+    /// 隐藏等于回到改造前的「这块区域不存在」，用户就又分不清"没有预警"和"没接功能"了。
+    @State private var alertSettled = AlertStore.shared.isAvailable
+
     /// 今日简报快照（**只服务播报稿的宜忌**）。
     ///
     /// 为什么用**传值**而不是 `@EnvironmentObject`：这一页是 `fullScreenCover` 独立呈现的，
@@ -148,13 +168,23 @@ struct SkyRoomView: View {
         // 强制深色后：玻璃 = 白 6% + 厚材质、文字 = 近白，与天空同一套明暗逻辑。
         .preferredColorScheme(.dark)
         .task {
-            await loadWeather()
-            // 预警与分钟降水各有自己的节奏（5 分钟 / 10 分钟），跟着天气那一条走会永远慢半拍。
+            // 预警排第一：命中 `AlertStore` 的 10 分钟本地窗口时它是零成本返回，
+            // 而 `loadWeather()` 走天气整包、最长 15 秒超时。排在后面的代价不是"晚一点到"，
+            // 而是首屏一直挂着「预警数据暂时取不到」—— 那一行就在 hero 下面，第一屏看得见，
+            // 而 `AlertStore` 里可能早躺着一条暴雨预警。
             //
             // 串行 await 而不是 `async let`：两者的闸门都在主 actor 上判定，
-            // 并发起跑并不会真的并行，反而会多出一层 actor 跳转的复杂度。
-            // 两次请求都走 CDN + KV 缓存，实际耗时在百毫秒量级。
+            // 并发起跑并不会真的并行，反而会多出一层 actor 跳转的复杂度。两次请求都走
+            // CDN + KV 缓存，实际耗时在百毫秒量级。
+            //
+            // `loadWeather()` 只走 `WeatherStore`，不会连带拉预警 —— 这里不存在重复触发。
             await alerts.refresh(force: false)
+            // 请求回来（或命中 10 分钟窗口直接返回）之后才算"问过了"。
+            // 放在 await 之后而不是之前：之前置位就等于宣告"查过了"，那是自欺。
+            alertSettled = true
+            await loadWeather()
+            // 分钟降水同样轻量，但它不参与首屏的任何判断（没数据就整块不渲染），
+            // 所以留在天气之后：首屏该最先拿到的是温度那两行大字。
             await minutely.refresh(force: false)
         }
         .onAppear {
@@ -626,8 +656,38 @@ struct SkyRoomView: View {
         return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
             // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
             // 排在气温之前不是排版偏好，是优先级。
-            if let alert = alerts.primary {
-                SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+            //
+            // 3.24.0 起这是**三态全覆盖**：有 / 无 / 拿不到。三者视觉重量递减
+            // （预警横幅 → 「当前无预警」状态行 → 「取不到」状态行），但都必须存在 ——
+            // 「没有预警」本身是一条信息，不能靠留白表达。用户原话："没有预警的话
+            // 就显示没有什么什么" —— 空白让他无法区分"今天太平"和"这功能没接"。
+            if alerts.hasAlerts {
+                // 最多列 3 条：极端天气下和风可能返回十几条，全铺开会把整页顶下去，
+                // 反而把温度这些天天要看的东西挤到两屏之外。
+                //
+                // 顺序直接用 `alerts.alerts` 的原序，不在视图里重排 ——
+                // `AlertStore` 已按服务端 severity 排好（extreme→severe→moderate→minor→unknown），
+                // 这里再排一次就是第二个"什么更要紧"的真相，两处早晚会打架。
+                ForEach(alerts.alerts.prefix(3)) { alert in
+                    SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+                }
+                if alerts.alerts.count > 3 {
+                    Text("另有 \(alerts.alerts.count - 3) 条预警")
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(frame.fontScale))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else if alertSettled && alerts.isAvailable {
+                // 问过了、拿到了、列表是空的 —— 这才是"确实没有预警"
+                SkyRoomAlertStatusRow(state: .none,
+                                      updatedAt: alerts.updatedAt,
+                                      scale: frame.fontScale)
+            } else {
+                // 还没问 / 问了没拿到。`isAvailable == false` 时 `alerts` 会保留上一次的值
+                // （见 `AlertStore`），所以走到这里意味着真的连旧数据都没有 —— 说"不知道"
+                SkyRoomAlertStatusRow(state: .unknown,
+                                      updatedAt: nil,
+                                      scale: frame.fontScale)
             }
             if let times = sunTimes(now: now) {
                 SkyRoomDaylightCard(now: now,
