@@ -69,9 +69,6 @@ enum SkyRoomMetrics {
         /// 背景压暗的上限（叠一层 `sky.ground` 的黑色地面色）
         static let dimAlpha: Double = 0.45
 
-        /// 顶栏切毛玻璃的滚动阈值（报告 §三：`scrollTop > 30`）
-        static let topbarThreshold: CGFloat = 30
-
         /// hero 淡出的行程（报告 §三：`fade = y / 160`，160pt 走完）
         static let heroFadeTravel: CGFloat = 160
 

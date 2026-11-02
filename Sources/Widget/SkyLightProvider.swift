@@ -41,6 +41,17 @@ struct SkyLightEntry: TimelineEntry {
     /// （见 `WeatherKind.from(code:)` 的注释）。
     let weather: WeatherNow?
 
+    /// 这一帧的能见度（米）。nil = 没数据（不是"很好"，见 `SkyHaze` 的兜底纪律）。
+    ///
+    /// 为什么可空、且 nil 是正常状态：`VisibilityProbe.fetch` 打的是另一台上游
+    /// （Open-Meteo），失败只返回 nil —— 它绝不兜底成 24km，因为"把雾天画成通透天"
+    /// 正是这个功能要解决的问题本身。nil 时 `SkyHaze.level` 只用天气类型给一个保守底值
+    /// （雾 0.85、雨 0.30…），画面照样按"能见度差"变灰。
+    ///
+    /// 为什么和 weather 一样**整轮共用一份**：理由与上面 `weather` 完全一致（一轮 103 帧，
+    /// 每帧拉一次会打穿刷新预算），而且能见度是分钟级的量，一小时内的变化肉眼无差。
+    let visibilityMeters: Double?
+
     /// 天气类型（8 组视觉类型）。nil = 不知道什么天 → 叠加层整层不画
     var weatherKind: WeatherKind? {
         return weather?.kind
@@ -76,9 +87,13 @@ struct SkyLightEntry: TimelineEntry {
     ///     所以它们在组件库里露出的就是"纯天光"那一版（也正是无数据时的退化形态）。
     ///   - sunTimes: 当天**实际**日出日落（3.10.0，来自天气接口，见 `SunTimesOverride`）。
     ///     nil = 回退 `SunClock` 计算值（±3 分钟）—— 兜底语义写在 `SunTimesOverride.resolve`。
+    ///   - visibilityMeters: 这一轮的能见度（米，3.16.0，来自 `VisibilityProbe`）。
+    ///     默认 nil：`placeholder` / `getSnapshot` 不发请求，也就没有能见度 ——
+    ///     那时 `SkyHaze.level` 只用天气类型给保守底值，画面照样按"能见度差"变灰。
     static func make(date: Date,
                      weather: WeatherNow? = nil,
-                     sunTimes: SunTimesOverride? = nil) -> SkyLightEntry {
+                     sunTimes: SunTimesOverride? = nil,
+                     visibilityMeters: Double? = nil) -> SkyLightEntry {
         let phase = SunClock.phase(at: date)
         // 显式写类型名：参数 sunTimes 与同名静态方法重名，局部名会遮蔽方法名。
         var times = SkyLightEntry.sunTimes(for: date, phase: phase)
@@ -94,7 +109,8 @@ struct SkyLightEntry: TimelineEntry {
             deadline: deadline(for: date, phase: phase),
             sunrise: times?.sunrise,
             sunset: times?.sunset,
-            weather: weather
+            weather: weather,
+            visibilityMeters: visibilityMeters
         )
     }
 
@@ -270,8 +286,13 @@ struct SkyLightProvider: TimelineProvider {
             // 所以下面算时间戳（纯 CPU）与等天气（最多 8 秒网络）是重叠的，
             // 而不是"先等 8 秒网络，再算帧" —— 天光卡的刷新不能被天气拖长。
             async let pendingWeather = SkyLightWeatherFeed.fetch()
+            // 能见度：独立上游（Open-Meteo），与天气并发。
+            // 坐标传 nil 走 Zhengzhou 默认 —— 小组件进程没有 App Group，读不到 App 的定位缓存，
+            // 而它本来就用默认坐标的天气；能见度和这份天气用同一个坐标，才不会"天气郑州、能见度上海"。
+            async let pendingVisibility = VisibilityProbe.fetch(latitude: nil, longitude: nil)
             let stamps = SkyLightProvider.stamps(now: now)
             let weather = await pendingWeather
+            let visibilityMeters = await pendingVisibility
 
             // 实际日出日落（3.10.0）：与天气同一次响应，**零额外请求**；
             // 失败时内部走缓存、再失败走 SunClock —— 见 `SunTimesOverride.resolve`。
@@ -279,7 +300,13 @@ struct SkyLightProvider: TimelineProvider {
 
             // 每一帧带**同一个**天气（理由见 `SkyLightEntry.weather` 的注释）。
             // 天气为 nil 时这里什么都不特殊处理：entry 带着 nil 下去，渲染层不画叠加层。
-            let entries = stamps.map { SkyLightEntry.make(date: $0, weather: weather, sunTimes: sunTimes) }
+            // 能见度同理：整轮共用一份，nil 时 `SkyHaze.level` 退回天气类型的保守底值。
+            let entries = stamps.map {
+                SkyLightEntry.make(date: $0,
+                                   weather: weather,
+                                   sunTimes: sunTimes,
+                                   visibilityMeters: visibilityMeters)
+            }
 
             // 下一个边界 + 1 秒再回来重排：+1 秒是为了让 `SunClock.phase(at:)` 真的跨过阈值，
             // 否则在边界那一瞬重算，新阶段的第一帧会因为"还差 0.4 秒"被判回上一档。

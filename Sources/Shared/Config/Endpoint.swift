@@ -4,17 +4,18 @@ import Foundation
 /// 除本文件外，`Sources/` 下不允许出现任何协议前缀字面量，也不允许出现裸域名。
 /// QA 用 `grep -rn "https://" Sources | grep -v Endpoint.swift` 卡这一条。
 ///
-/// 四个站点各自的身份（PRD §1.1）：
+/// 站点各自的身份（PRD §1.1）：
 ///   · 红石（待发收益工作台 + 日程 + 攻略）→ `rockBase`
 ///   · 问卷工作台（列表 / 填答 / 结果）    → `surveyBase`
 ///   · 光遇简报 + 推送监控                 → `briefBase`
 ///   · 博客文章                            → `blogBase`
+///   · 能见度探针（天气的上游）             → `openMeteoBase`（唯一一个**不是自己家**的站点）
 ///
 /// 为什么把域名和路径拆成两层：域名是"部署事实"（随时可能换域名），路径是"接口契约"（改一次要动后端）。
 /// 拆开之后换域名只改 4 行，而 `API` / 各 Store 里全是路径常量的引用。
 enum Endpoint {
 
-    // MARK: - 站点根（唯四）
+    // MARK: - 站点根（五个）
 
     /// 红石站：日程日历 / 规律 / 攻略
     static let rockBase = "https://creator-earnings-tracker.pages.dev"
@@ -24,6 +25,13 @@ enum Endpoint {
     static let briefBase = "https://app.skyzyf335.top"
     /// 博客站：文章列表 / 详情
     static let blogBase = "https://skyzyf335.top"
+
+    /// Open-Meteo：**第三方**上游（免费、无密钥），只给 `VisibilityProbe` 读当前能见度用。
+    ///
+    /// 为什么不经 `/api/app/weather` 透传：那个后端已经上线、源码不在本仓库，
+    /// 加字段等于赌它下次部署不会覆盖掉；而能见度只服务画面（雾浓度），
+    /// 缺了也只是"画面不动"，不会让天气卡说错话。见 `Shared/Domain/VisibilityProbe.swift`。
+    static let openMeteoBase = "https://api.open-meteo.com"
 
     // MARK: - 路径（本批先定稿命名，批次 2/3/4 直接引用，避免各写一遍拼错）
 
@@ -50,6 +58,12 @@ enum Endpoint {
     /// 为什么归简报站而不是红石站：简报里的 `weather` / `windText` / `rain` 三处就是从它派生的，
     /// 两者共用一次上游请求。分到别的站根下，迟早会出现"卡片说小雨、简报说晴"的分叉。
     static let weatherPath = "/api/app/weather"
+    /// 语音合成（**属于简报站**，与 weather / brief 同一台机器，密钥在服务端）。
+    ///
+    /// `POST {text, voice}` → `{ok, url, chars}`，`url` 是 24 小时有效的预签名直链，
+    /// App 侧直接交给 `AVPlayer`，不落盘（见 `Services/SpeechStore.swift`）。
+    /// 归简报站而不另开域名：它读的是同一份服务端密钥，拆到别的站根等于多一套部署。
+    static let ttsPath = "/api/app/tts"
     /// 收益总览（**需要 `ce_auth` 会话**，是 `/api/app/*` 里唯一不给匿名豁免的接口）
     static let earningsPath = "/api/app/earnings"
     /// 追加一笔收益条目（`POST`，同样**需要 `ce_auth`**）。

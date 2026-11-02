@@ -88,6 +88,18 @@ enum API {
         )
     }
 
+    /// 语音合成：`POST /api/app/tts`。
+    ///
+    /// base 用 `briefHost`（与 `weather()` 同一台机器）：密钥在服务端，App 只发文本。
+    /// 请求方法 / body / 超时 / 解码都由 `SpeechStore` 负责 —— 本层只拼地址，
+    /// 与 `weather()` / `brief()` 同一个分工。
+    ///
+    /// 成功时返回的是**预签名直链**（24 小时有效），不是音频字节：
+    /// 所以这里只给 URL，播放交给 `AVPlayer` 流式取，App 不需要缓存音频。
+    static func tts() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.ttsPath)
+    }
+
     // MARK: - 红石站（批次 2）
 
     /// 红石日程。

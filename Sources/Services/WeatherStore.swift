@@ -8,6 +8,9 @@ import Foundation
 /// 2. 内存里扛 10 分钟，期间重复调用直接返回；
 /// 3. 失败**保留上一次的 `current`**、**不报错**。
 ///
+/// 3.16.0 起多带一个数：`visibilityMeters`（能见度，米）。它与天气**并发**请求、
+/// 独立落账 —— 见 `load(force:)` 与 `visibilityMeters` 的注释。
+///
 /// 三条策略各自的理由：
 /// · **10 分钟内存缓存**：与后端 KV 的 TTL 对齐（上游 Open-Meteo 也是 5~10 分钟粒度）。
 ///   比 TTL 更短只是白打接口，更长就会拿着过期天气画天空 —— 两者都没有意义，
@@ -49,6 +52,17 @@ final class WeatherStore: ObservableObject {
     /// 否则一次失败会把缓存窗重新计满 10 分钟，用户接下来点刷新也只能干等
     private var lastSuccessAt: Date?
 
+    /// 当前能见度（米）—— 只服务画面（`SkyHaze` 的雾浓度），不参与任何天气文案。
+    ///
+    /// 为什么和 `current` 分开两个 `@Published`：两者的失败互不牵连。
+    /// 天气接口 500 时能见度照样可以更新（它打的是另一台上游），
+    /// 而能见度拿不到时画面只是"不起雾"，天气卡一个字都不用变。
+    @Published private(set) var visibilityMeters: Double?
+
+    /// 上一次**成功**拿到能见度的时间。与 `lastSuccessAt` 同一个 10 分钟窗口，
+    /// 但各自计时：天气失败不该让能见度也跟着 10 分钟内不再重试。
+    private var lastVisibilityAt: Date?
+
     /// 上一次请求用的坐标（`nil` = 用的服务端默认坐标）。
     ///
     /// 只做一件事：判断"地点换了没有"。有坐标和没坐标**不是同一份数据**
@@ -67,12 +81,20 @@ final class WeatherStore: ObservableObject {
         return current != nil
     }
 
-    /// 拉一次天气。
+    /// 拉一次天气（顺带一次能见度）。
     ///
     /// - Parameter force: `true` 时忽略内存缓存（下拉刷新 / 从后台回到前台）。
     ///
     /// 全程**静默失败**：天气只是装饰性信息，不该弹 Toast 打断用户正在做的事，
     /// 也不该占用 `ToastStore`（那是"记账成功""登录过期"这类需要用户反应的提示的通道）。
+    ///
+    /// ## 两个请求是并发的，不是串行的
+    ///
+    /// 能见度打的是另一台上游（Open-Meteo），与天气没有先后依赖 ——
+    /// 串行等两发就是让用户多等一个 RTT。所以用 `async let` 同时发出，
+    /// 天气那条走完再 `await` 能见度那条（此时它多半已经到了）。
+    ///
+    /// 两个缓存窗各自独立：天气在窗口内而能见度过期了，就只补能见度那一发。
     func load(force: Bool = false) async {
         // 上一发还在飞：直接返回，别叠加请求
         guard !isLoading else { return }
@@ -83,42 +105,75 @@ final class WeatherStore: ObservableObject {
 
         // 地点变了 → 内存里那份天气不是"这里"的天气，必须作废。
         // 不做这一步的话，用户飞到另一个城市后卡片会继续显示出发地的天空 —— 而且看起来完全正常。
+        // 能见度同理（它是"这里的空气有多浑浊"），而且要连缓存时间一起清。
         if Self.hasMoved(from: lastQueryCoordinate, to: coordinate) {
             lastSuccessAt = nil
+            lastVisibilityAt = nil
+            visibilityMeters = nil
+            // 天气本身也要清：只清时间戳的话，下一次请求失败（断网 / 后端 500）
+            // 会把出发地的天空原样留在屏幕上，而且看起来完全正常 —— 没人会怀疑。
+            current = nil
             lastQueryCoordinate = coordinate
         }
 
-        // 缓存命中：什么都不做。`current` 已经是它了，重发只会多一次网络往返
-        if !force, let lastSuccessAt = lastSuccessAt,
-           Date().timeIntervalSince(lastSuccessAt) < Self.freshWindow {
-            return
-        }
+        let now = Date()
+        let weatherFresh = !force && (lastSuccessAt.map { now.timeIntervalSince($0) < Self.freshWindow } ?? false)
+        let visibilityFresh = !force && (lastVisibilityAt.map { now.timeIntervalSince($0) < Self.freshWindow } ?? false)
 
-        // 地址拼错是代码问题，不该表现为"天气未知"之外的任何东西：静默即可
-        guard let url = API.weather(lat: coordinate?.latitude, lon: coordinate?.longitude) else { return }
+        // 两份缓存都还新：什么都不做。`current` / `visibilityMeters` 已经是它们了，
+        // 重发只会多打两次网络
+        if weatherFresh && visibilityFresh { return }
 
         isLoading = true
         defer { isLoading = false }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // 天气要"现在"：让 URLSession 的协议缓存别拿 304 糊弄我们
-        // （`APIClient` 默认 `useProtocolCachePolicy`，对这类分钟级数据不合适）
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 15
+        // 先起能见度那一发（`async let` 立即可跑），天气那条在下面 await
+        async let visibility: Double? = Self.probeVisibility(latitude: coordinate?.latitude,
+                                                            longitude: coordinate?.longitude,
+                                                            cached: visibilityFresh)
 
-        do {
-            let response = try await client.send(request, as: WeatherNow.self)
-            // 业务失败（HTTP 200 + `ok == false`）：保留旧值，不更新成功时间，
-            // 这样下一次调用会立刻重试，而不是被缓存窗挡住 10 分钟
-            guard response.ok else { return }
-            current = response
-            lastSuccessAt = Date()
-        } catch {
-            // 传输 / 解码失败一律静默（`APIError.cancelled` 也走这里：页面切走时取消是正常行为）
-            return
+        if !weatherFresh,
+           // 地址拼错是代码问题，不该表现为"天气未知"之外的任何东西：静默即可
+           let url = API.weather(lat: coordinate?.latitude, lon: coordinate?.longitude) {
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            // 天气要"现在"：让 URLSession 的协议缓存别拿 304 糊弄我们
+            // （`APIClient` 默认 `useProtocolCachePolicy`，对这类分钟级数据不合适）
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 15
+
+            do {
+                let response = try await client.send(request, as: WeatherNow.self)
+                // 业务失败（HTTP 200 + `ok == false`）：保留旧值，不更新成功时间，
+                // 这样下一次调用会立刻重试，而不是被缓存窗挡住 10 分钟
+                if response.ok {
+                    current = response
+                    lastSuccessAt = Date()
+                }
+            } catch {
+                // 传输 / 解码失败一律静默（`APIError.cancelled` 也走这里：页面切走时取消是正常行为）
+            }
         }
+
+        // 能见度独立落账：天气失败、跳过都能走到这里（它只服务画面，不代表天气）
+        if let meters = await visibility {
+            visibilityMeters = meters
+            lastVisibilityAt = Date()
+        }
+    }
+
+    /// 能见度那一发。`cached == true`（10 分钟窗口内）时直接给 nil，连请求都不发。
+    ///
+    /// 单独一个 `static` 方法，是为了让 `async let` 那行读起来还是一件事：
+    /// 「取能见度」—— 取不取、跳不跳由参数决定，而不是在 `load` 里铺一段 if。
+    ///
+    /// `nonisolated`：它不碰任何状态，没理由占用主 actor。
+    private nonisolated static func probeVisibility(latitude: Double?,
+                                                    longitude: Double?,
+                                                    cached: Bool) async -> Double? {
+        guard !cached else { return nil }
+        return await VisibilityProbe.fetch(latitude: latitude, longitude: longitude)
     }
 
     // MARK: - 坐标变了没有

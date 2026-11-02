@@ -22,6 +22,17 @@ import SwiftUI
 /// 2. **进度轨**回答"今天第几场"这个原来没说的话 —— 只有数字没有刻度，读者记不住自己在哪；
 /// 3. 大数字走 `Typography.metricL`（原 inline 36pt 已删除），与收益页总额同一个 token。
 ///
+/// **两种大字（3.16.0，用户："我不知道它在几点几月几号"）**：
+/// ```
+/// 今天还有场次（进行中 / 今天晚些）   今天已经没有了
+/// 红石 · 今日                       红石 · 下一次
+/// 23:08                            5 天后
+/// ↘ 还有 39:27                      ↘ 周六 10:08
+/// ↗ 下一场 23:08 · 霞谷 · 圆梦村      ↗ 禁阁 · 星漠水母湾
+/// ```
+/// 判据是 `RockPhase.hasRemainingSessionToday(now:)`（`Sources/Shared/Domain`，与小组件共用）——
+/// **`.upcoming` 属于"今天还有"**，只有 `.endedToday`（下一场在明天或更远）才切成「N 天后」。
+///
 /// **三态**（判定在 `Shared/Domain/RedstoneWindow.swift`，与桌面小组件共用同一份）：
 /// ```
 /// 排期还没拉到              → 「排期还没生成」（原有逻辑，一个字都不改）
@@ -101,7 +112,7 @@ struct RedstoneCountdownCard: View {
             .filter { $0.isOn(dayKey: RedstoneClock.dayKey(now)) }
 
         return VStack(alignment: .leading, spacing: 0) {
-            eyebrowRow(phase: phase)
+            eyebrowRow(phase: phase, now: now)
 
             // Spacer 的 minLength 是"内容自然高度"的组成部分：底部高度由 TrackCard 的
             // `minHeight`（hero 240）兜住，这里只负责让几块内容撑到接近那个高度，
@@ -190,9 +201,9 @@ struct RedstoneCountdownCard: View {
     }
 
     /// 眉题行：左边"这是什么栏目"，右边倍率 / 待核对（都是服务端给的，取不到就不画）
-    private func eyebrowRow(phase: RockPhase) -> some View {
+    private func eyebrowRow(phase: RockPhase, now: Date) -> some View {
         HStack(spacing: 6) {
-            Eyebrow(text: "红石 · 今日", color: Theme.trackTextDim)
+            Eyebrow(text: eyebrowTitle(phase: phase, now: now), color: Theme.trackTextDim)
             Spacer(minLength: 6)
             if let rate = phase.occurrence?.rate {
                 RateBadge(rate: rate)
@@ -203,7 +214,24 @@ struct RedstoneCountdownCard: View {
         }
     }
 
-    /// 大字：焦点场次的时刻（`23:08`）。未生成时不给任何数字。
+    /// 眉题文案：今天还有场次时这一屏讲的是「今日」；今天已经没有了，讲的就是**下一场**。
+    ///
+    /// 为什么必须分开写：大字这时写的是「5 天后」，如果眉题还写「红石 · 今日」，
+    /// 读者会把「5 天后」读成"今天的某个时刻"。一句话的区别，语义天差地别。
+    private func eyebrowTitle(phase: RockPhase, now: Date) -> String {
+        switch phase {
+        case .notGenerated, .ongoing, .upcoming:
+            return "红石 · 今日"
+        case .endedToday:
+            return "红石 · 下一次"
+        }
+    }
+
+    /// 大字：今天还有场次 → 焦点场次的时刻（`23:08`）；今天已经没有了 → 「5 天后」/「明天」。
+    ///
+    /// 两支护字**共用同一个字号**：字变少了不放大。否则同一张卡在不同时刻会跳字号
+    /// （23:10 看是 40pt 的 `23:08`，23:11 看是 56pt 的「5 天后」），版式会抖。
+    /// 未生成时不给任何数字。
     @ViewBuilder
     private func bigValue(phase: RockPhase, now: Date) -> some View {
         switch phase {
@@ -213,7 +241,7 @@ struct RedstoneCountdownCard: View {
                 .foregroundStyle(Theme.textPrimary)
         default:
             if let occurrence = phase.occurrence {
-                Text(occurrence.time)
+                Text(headlineText(phase: phase, occurrence: occurrence, now: now))
                     // 宽档 56pt（`metricXL`）：卡片宽度 ×2、高度 ×1.43，40pt 在 712 宽的卡里
                     // 只占 16.5%，锚点不跟着变大就是"放大的空卡"（设计文档 §5.2）。
                     // 窄档仍是 40pt —— 这一行是 iPhone 上唯一会变的字号判据，判据就是卡高用的那个。
@@ -227,7 +255,28 @@ struct RedstoneCountdownCard: View {
         }
     }
 
+    /// 大字那一行的文字。
+    ///
+    /// - 今天还有场次（进行中 / 今天晚些）→ 时刻，`23:08`。**今天晚些的 `.upcoming` 走这一支**，
+    ///   绝不能被当成"今日已结束"（判据见 `RockPhase.hasRemainingSessionToday(now:)`）；
+    /// - 今天已经没有剩余场次（`.endedToday`，下一场在明天或更远）→ `5 天后` / `明天`；
+    /// - 天差算不出来（日期键是脏数据）→ 退回时刻，宁可少说一句也不写「Nil 天后」。
+    private func headlineText(phase: RockPhase, occurrence: Occurrence, now: Date) -> String {
+        if phase.hasRemainingSessionToday(now: now) {
+            return occurrence.time
+        }
+        return RockPhase.daysAheadLabel(occurrence, now: now) ?? occurrence.time
+    }
+
     /// 大字下面两行：横向是"还有多久"，斜向是"下一场在哪"
+    ///
+    /// 「今天已无场次」时的版式换了一套（3.16.0 用户反馈："我不知道它在几点几月几号"）：
+    /// ```
+    /// 5 天后             ← 大字
+    /// ↘ 周六 10:08       ← 哪一天的几点（原本这里是"还有 4 天 22 小时"）
+    /// ↗ 禁阁 · 星漠水母湾 ← 在哪（原本这里重复一遍时刻）
+    /// ```
+    /// 长倒计时（「还有 4 天 22 小时」）在这一支里**不再出现**：它和大字说的是同一件事。
     private func detailLines(phase: RockPhase, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             switch phase {
@@ -237,11 +286,22 @@ struct RedstoneCountdownCard: View {
                     .font(Typography.captionXS)
                     .foregroundStyle(Theme.trackTextDim)
             default:
-                if let detail = countdownLine(phase: phase, now: now) {
-                    arrowLine(icon: "arrow.down.right", text: detail, emphasized: true)
-                }
                 if let occurrence = phase.occurrence {
-                    arrowLine(icon: "arrow.up.right", text: placeText(phase: phase, occurrence: occurrence), emphasized: false)
+                    if phase.hasRemainingSessionToday(now: now) {
+                        if let detail = countdownLine(phase: phase) {
+                            arrowLine(icon: "arrow.down.right", text: detail, emphasized: true)
+                        }
+                        arrowLine(icon: "arrow.up.right",
+                                  text: placeText(phase: phase, occurrence: occurrence),
+                                  emphasized: false)
+                    } else {
+                        // 日期用 `RockPhaseText.dayLabel`：今日 / 明日 / 周五 / 11月6日，
+                        // 与顶部「下一场」条同一套口径（同一个"下一场"只该有一种叫法）。
+                        arrowLine(icon: "arrow.down.right",
+                                  text: RockPhaseText.dayLabel(occurrence, now: now) + " " + occurrence.time,
+                                  emphasized: true)
+                        arrowLine(icon: "arrow.up.right", text: occurrence.map, emphasized: false)
+                    }
                 }
             }
         }
@@ -255,19 +315,18 @@ struct RedstoneCountdownCard: View {
         return "下一场 " + occurrence.time + " · " + occurrence.map
     }
 
-    /// ↘ 行：进行中给剩余分钟，否则给"还有 mm:ss"（超过一天用"还有 N 天"）
-    private func countdownLine(phase: RockPhase, now: Date) -> String? {
+    /// ↘ 行：进行中给剩余分钟，否则给"还有 mm:ss"。
+    ///
+    /// `.endedToday` / `.notGenerated` 不在这里：前者的大字已经是「5 天后」，下行换成
+    /// 「周六 10:08」（见 `detailLines`），再挂一句「还有 4 天 22 小时」就是同一件事说两遍；
+    /// 后者大字已经说了"排期还没生成"。
+    private func countdownLine(phase: RockPhase) -> String? {
         switch phase {
         case .ongoing(_, let minutesLeft):
             return "进行中 · 剩 " + String(minutesLeft) + " 分"
         case .upcoming(_, let seconds):
             return "还有 " + Formatters.countdown(seconds: seconds)
-        case .endedToday(_, let seconds):
-            if seconds < 86_400 {
-                return "明日场次 · 还有 " + Formatters.countdown(seconds: seconds)
-            }
-            return "下一次 · " + RockPhaseText.dayLabel(phase.occurrence, now: now)
-        case .notGenerated:
+        case .endedToday, .notGenerated:
             return nil
         }
     }

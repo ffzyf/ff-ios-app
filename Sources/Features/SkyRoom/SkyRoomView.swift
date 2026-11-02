@@ -7,7 +7,7 @@ import SwiftUI
 /// | 报告 v3 规格 | 本版落地 |
 /// |---|---|
 /// | 大温度 104pt / UltraLight | `TextStyle.heroTemperature` 104pt `.ultraLight` rounded |
-/// | 顶栏初始透明，滚动 >30pt 切毛玻璃 | `fixedTopBar` 固定层 + `TopBarGlass`（滚动态 `.card` 玻璃） |
+/// | 顶栏初始透明，滚动 >30pt 切毛玻璃 | **3.16.0 起顶栏没有任何底板**（用户："上滑之后这个就不要是玻璃效果了"），改由文字自带的柔和暗影保可读性 |
 /// | 视差：太阳 0.15 / 山 0.15·0.25·0.40 | `scene(parallaxY:)` 分层下沉，钳制 320pt 不露底 |
 /// | hero 减速上滑 + 缩小淡出 | 净速度 0.55x、scale 1→0.70、160pt 内淡尽 |
 /// | 太阳大核心 + 大半径辉光 | 核心 16pt、内晕 96、外晕 340（pt 折算，保各档天色层次） |
@@ -21,10 +21,10 @@ import SwiftUI
 ///
 /// ```
 /// ZStack(alignment: .top) {
-///   ① 天空场景（天幕 / 星 / 云 / 太阳 / 山脊 / 地面，滚动时分层下沉）
+///   ① 天空场景（天幕 / 星 / 云 / 太阳 / 山脊 / 地面 / 雾层，滚动时分层下沉）
 ///        └ 滚动反馈：压暗 ≤0.45（只动 opacity，合成层变换）
 ///   ② ScrollView { hero（高 62%，减速淡出）→ 卡片流 }
-///   ③ 固定顶栏（滚过 30pt 切毛玻璃）
+///   ③ 固定顶栏（无底板：文字自带暗影，卡片从字下穿过）
 /// }
 /// ```
 ///
@@ -67,6 +67,21 @@ struct SkyRoomView: View {
     /// CI 可能在任意时间跑，不钉住时刻的话半夜截图会得到一片夜空，
     /// 无法和用户反馈的黄昏场景对照。
     @State private var previewMoment: Date?
+    /// 当前能见度（米）—— 只服务画面（`SkyHaze` 决定雾浓度）。
+    /// nil = 还没拿到 / 截图模式（截图模式下刻意不起雾：CI 天气固定，雾会干扰对照）。
+    @State private var visibilityMeters: Double?
+
+    /// 设备定位。顶栏第二行要显示"这里是哪"（用户："我现在不在郑州了，不知道它这个定位在哪儿"）。
+    ///
+    /// 用 `@ObservedObject` 观察单例：`placeName` 是**异步**反查出来的，
+    /// 页面得跟着它重画一次；`coordinate` / `status` 的变化也走同一条通道。
+    /// （与 `WeatherLocationSection` 同一个写法：单例 + `ObservedObject` 不依赖环境对象继承。）
+    @ObservedObject private var location = LocationStore.shared
+
+    /// 天气朗读（3.16.0）。与 `location` 同一个写法：单例 + `@ObservedObject` ——
+    /// 这一页是 `fullScreenCover` 里独立呈现的，不该依赖环境对象注入。
+    /// 观察它的意义只有一个：按钮要在「喇叭 ↔ 停止」之间跟着状态切图标。
+    @ObservedObject private var speech = SpeechStore.shared
 
     var body: some View {
         GeometryReader { proxy in
@@ -115,11 +130,13 @@ struct SkyRoomView: View {
         let phase = SunClock.phase(at: now)
         let sky = Theme.sky(phase)
         let progress = scrollProgress(height: frame.height)
+        // 大气浑浊度（0 = 通透，1 = 浓雾）：能见度 + 天气类型两路取 max，见 `SkyHaze`
+        let haze = SkyHaze.level(visibilityMeters: visibilityMeters, kind: weatherNow?.kind)
 
         return ZStack(alignment: .top) {
-            // ① 天空场景（六层：天幕 → 星 → 云 → 太阳 → 山脊 → 地面，
+            // ① 天空场景（七层：天幕 → 星 → 云 → 太阳 → 山脊 → 地面 → 雾，
             //    太阳 / 云 / 山随滚动分层下沉——报告 §三 的视差）
-            scene(sky: sky, phase: phase, frame: frame, now: now, parallaxY: parallaxY)
+            scene(sky: sky, phase: phase, frame: frame, now: now, parallaxY: parallaxY, haze: haze)
                 // 压暗：滚过半屏后天空退成"安静的背景板"，卡片可读性随之上升。
                 // 压暗不是动效（reduceMotion 用户也需要可读性），所以它不受铁律 4 管辖。
                 .overlay(
@@ -130,7 +147,7 @@ struct SkyRoomView: View {
                 )
             // ② 滚动内容（hero + 卡片流）
             scrollContent(sky: sky, frame: frame, insets: insets, now: now)
-            // ③ 固定顶栏：初始透明，滚过 30pt 切毛玻璃（报告 §三）
+            // ③ 固定顶栏：没有任何底板，卡片从文字下面穿过（靠文字暗影保可读性）
             fixedTopBar(sky: sky, frame: frame, insets: insets, now: now)
         }
         .frame(width: size.width, height: size.height)
@@ -293,68 +310,188 @@ struct SkyRoomView: View {
         .accessibilityHidden(true)
     }
 
-    /// 顶栏固定层的滚动反馈：滚过 `topbarThreshold` 切毛玻璃（报告 §三：复刻
-    /// UIVisualEffectView 的"滚起来才知道自己在哪"）。动画只包这 0.25s 的材质切换。
+    /// 顶栏固定层。**没有任何底板**（3.16.0，用户明确要求）：
+    /// 滚动时卡片会从文字下面穿过去，所以可读性全靠文字自带的柔和暗影
+    /// （`topBar(...)` 末尾那一层，与 hero 温度大字同一套做法）。
+    ///
+    /// 3.15.x 这里曾有一层"滚过 30pt 切毛玻璃"的 `TopBarGlass`。用户的反馈是
+    /// 「图一上滑之后，这个就不要是玻璃效果了，让它在黄金时刻有个字就行了」——
+    /// 天光页的全部价值是那片天，一块玻璃会把天切掉一条。所以整块底板连同
+    /// 它的滚动阈值一起删掉了。
     private func fixedTopBar(sky: Theme.SkyColors,
                              frame: SkyRoomMetrics.Frame,
                              insets: EdgeInsets,
                              now: Date) -> some View {
-        let isScrolled = scrollOffset > SkyRoomMetrics.Scroll.topbarThreshold
         return topBar(sky: sky, frame: frame, now: now)
             .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : SkyRoomMetrics.Page.compactInset)
             .padding(.vertical, 6)
-            .modifier(TopBarGlass(active: isScrolled))
             .padding(.top, insets.top + 4)
-            .animation(.easeOut(duration: 0.25), value: isScrolled)
             .frame(maxWidth: .infinity)
     }
 
-    /// 顶部一行（关闭按钮 + 阶段名 + 倒计时）—— 3.12.0 原样保留。
+    /// 顶部两行：① 关闭按钮 + 阶段名 + 倒计时；② 定位箭头 + 这里是哪。
+    ///
     /// 关闭按钮常驻：手势永远只是快捷方式，必须留可见的替代路径。
+    ///
+    /// ## 3.16.0 的三处改动
+    ///
+    /// 1. **关闭按钮去掉玻璃**：`Image` + 44×44 的点击热区（HIG 的最小热区），
+    ///    不再套 `.glassSurface(.floating, in: Circle())` —— 理由同 `fixedTopBar`；
+    /// 2. **多一行"这里是哪"**：用户换城市之后看不出这个 App 的定位落在哪儿
+    ///    （"我现在不在郑州了，不知道它这个定位在哪儿"）。定位关着时如实写
+    ///    "默认位置 · 郑州"，不能让用户以为它定位到了自己所在的城市。
+    /// 3. **关闭按钮左边多一个喇叭**：天气朗读（见 `speechButton`）。
+    ///    它与关闭按钮是**同一个按钮形态**，只是图标与动作不同 —— 顶栏只该有一种"按钮长什么样"。
     private func topBar(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                Haptics.light()
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(sky.ink)
-                    .frame(width: 32, height: 32)
-                    .glassSurface(.floating, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭天光页")
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                // 朗读 / 停止：**左边是"说出来"，右边是"关掉"** —— 关闭永远是最后一张牌
+                speechButton(sky: sky, now: now)
 
-            // 阶段名 + 倒计时：秒在走，交给 TimelineView 自己刷（本文件没有 Timer）
-            //
-            // 3.15.0 布局修正：原来是「● 阶段名 ——— Spacer ——— 2分钟59秒」，
-            // 真机上两头被撑到屏幕两侧，中间一条空，读起来像两件不相干的事。
-            // 现在两者紧挨着排，整行靠左，右侧留白 —— 一个"当前状态"才是一个句子。
-            TimelineView(.periodic(from: Date(), by: 1)) { context in
-                // 截图模式下时刻是钉住的（`previewMoment`），倒计时不跟着真实秒数跑
-                let moment = previewMoment ?? context.date
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(sky.edge)
-                        .frame(width: 5, height: 5)
-                    Text(SunClock.phase(at: moment).label)
-                        .font(SkyRoomMetrics.TextStyle.phase(frame.fontScale))
+                Button {
+                    Haptics.light()
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(sky.ink)
-                        .lineLimit(1)
-                    if let deadline = SunClock.phase(at: moment).deadline(at: moment) {
-                        Text(shortCountdown(to: deadline, now: moment))
-                            .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
-                            .foregroundStyle(sky.inkDim)
-                            .monospacedDigit()
+                        .frame(width: 44, height: 44)   // 44pt 是 HIG 的最小点击热区
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭天光页")
+
+                // 阶段名 + 倒计时：秒在走，交给 TimelineView 自己刷（本文件没有 Timer）
+                //
+                // 3.15.0 布局修正：原来是「● 阶段名 ——— Spacer ——— 2分钟59秒」，
+                // 真机上两头被撑到屏幕两侧，中间一条空，读起来像两件不相干的事。
+                // 现在两者紧挨着排，整行靠左，右侧留白 —— 一个"当前状态"才是一个句子。
+                TimelineView(.periodic(from: Date(), by: 1)) { context in
+                    // 截图模式下时刻是钉住的（`previewMoment`），倒计时不跟着真实秒数跑
+                    let moment = previewMoment ?? context.date
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(sky.edge)
+                            .frame(width: 5, height: 5)
+                        Text(SunClock.phase(at: moment).label)
+                            .font(SkyRoomMetrics.TextStyle.phase(frame.fontScale))
+                            .foregroundStyle(sky.ink)
                             .lineLimit(1)
+                        if let deadline = SunClock.phase(at: moment).deadline(at: moment) {
+                            Text(shortCountdown(to: deadline, now: moment))
+                                .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
+                                .foregroundStyle(sky.inkDim)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
                 }
             }
+
+            // 第二行：定位箭头 + 地名。`inkDim` 比阶段名淡一档 —— 它是背景信息
+            HStack(spacing: 4) {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(placeLabel)
+                    .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 8)
+                // 朗读失败必须说出来：否则按钮弹回喇叭、页面上一个字没有，
+                // 用户的感受是"点了没反应"（`SpeechStore` 只负责状态，出口在这里）。
+                if let failure = speech.failureText {
+                    Text(failure)
+                        .font(SkyRoomMetrics.TextStyle.countdown(frame.fontScale))
+                        .foregroundStyle(Theme.statusError)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .transition(.opacity)
+                }
+            }
+            .foregroundStyle(sky.inkDim)
+            .padding(.leading, 10)
         }
+        // 没有底板之后的唯一可读性保障：与 hero 温度大字同一套柔和暗影
+        // （`sky.ink` 是固定白，而七档天色里有四档上半部是亮的）
+        .shadow(color: .black.opacity(0.30), radius: 12, y: 1)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 朗读按钮（3.16.0）：把页面已有的数据拼成一段播报稿，交给 `SpeechStore` 合成播放。
+    ///
+    /// 样式与关闭按钮**完全一致**（纯图标 / 44×44 热区 / 无玻璃）：顶栏没有任何底板，
+    /// 可读性由 `topBar` 末尾那一层 `.shadow` 统一保障 —— 单独给它套一块玻璃，
+    /// 就等于把这个按钮从天上"抠"出来，那正是 3.16.0 删掉底板的原因。
+    ///
+    /// 图标随状态切：没在播 = 喇叭（点一下开始），在播 = 停止（点一下收掉）。
+    /// 「在播」包含"已请求、还在等服务端合成"那一段（`SpeechStore.isBusy`），
+    /// 否则点完喇叭之后的两三秒里按钮毫无反馈，用户会以为没点上。
+    private func speechButton(sky: Theme.SkyColors, now: Date) -> some View {
+        Button {
+            Haptics.light()
+            if speech.isBusy {
+                speech.stop()
+            } else {
+                // 拼稿是纯函数（不读网络、不读 `Date()`），在这里同步算完再交给 Store；
+                // `speak` 只 `await` 到"开始播放"那一刻，所以这个 Task 不会挂住按钮。
+                let script = speechScript(now: now)
+                Task { await speech.speak(script) }
+            }
+        } label: {
+            Image(systemName: speech.isBusy ? "stop.fill" : "speaker.wave.2")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(sky.ink)
+                .frame(width: 44, height: 44)   // 与关闭按钮同一个 HIG 最小热区
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(speech.isBusy ? "停止朗读" : "朗读天气")
+    }
+
+    /// 播报稿：数据全部来自本页已有状态，缺什么 `SpeechStore.script` 就不说那句。
+    ///
+    /// - `phase` / `sunTimes` 由 `now` 现算 —— 顶栏的 `now` 就是这一帧的时刻，与本页其它显示同源；
+    /// - 红石下一场 / 今日宜忌在这一页**拿不到**：`RockStore` / `AppModel` 都没有注入
+    ///   `SkyRoomView`（它是 `fullScreenCover` 里独立呈现的），而朗读不该为了两句话去拉接口；
+    ///   所以这两项按"没有数据"传（nil / 空数组），`script` 会自动跳过它们那两句。
+    private func speechScript(now: Date) -> String {
+        // 页面的 `sunTimes(now:)` 给的是"今天那一对"（必然成对）；`script` 要的是"可空的一对"
+        // （它只用这两个字段算"还有多久日落/日出"），所以逐字段提升成可选。
+        let times = sunTimes(now: now)
+        let speechTimes: (sunrise: Date?, sunset: Date?)? = times.map {
+            (sunrise: Optional($0.sunrise), sunset: Optional($0.sunset))
+        }
+
+        return SpeechStore.script(now: now,
+                                  phase: SunClock.phase(at: now),
+                                  weather: weatherNow,
+                                  sunTimes: speechTimes,
+                                  nextRedstone: nil,
+                                  yi: [],
+                                  ji: [])
+    }
+
+    /// 顶栏那行位置文案。
+    ///
+    /// - 定位开着且有地名 → "上海市 · 浦东新区"
+    /// - 定位开着但还没反查出来 → "定位中…"（不显示经纬度，那对用户没有意义）
+    /// - 定位关着 → "默认位置 · 郑州"（如实说用的是哪里，不要让用户以为定位在他所在城市）
+    private var placeLabel: String {
+        guard location.isEnabled else { return "默认位置 · 郑州" }
+        if location.coordinate != nil, let name = location.placeName {
+            return name
+        }
+        // 权限被拒 / 定位失败要说清楚，否则会永久停在"定位中…"——
+        // 那比"没定位"更糟：用户会以为它一直在努力，实际永远不会成功。
+        switch location.status {
+        case .denied:
+            return "定位未开启 · 默认位置 · 郑州"
+        case .failed:
+            return "定位失败 · 默认位置 · 郑州"
+        case .off, .asking, .ready:
+            return "定位中…"
+        }
     }
 
     /// 顶部倒计时的紧凑格式：`2:59` / `1 时 05 分`。
@@ -409,36 +546,72 @@ struct SkyRoomView: View {
         return SunClock.times(on: now)
     }
 
-    // MARK: - 场景装配（背景，3.12.0 的六层结构原样保留）
+    // MARK: - 场景装配（背景，3.12.0 的六层结构 + 3.16.0 的雾层）
 
-    /// 六层的顺序**就是物理距离的顺序**（远 → 近）：
+    /// 七层的顺序**就是物理距离的顺序**（远 → 近）：
     ///
-    /// 天幕 → 星点 → 云 → **太阳** → 山脊 → 地面。
+    /// 天幕 → 星点 → 云 → **太阳** → 山脊 → 地面 → **雾**。
     ///
     /// 太阳排在**山脊之前**：日落时太阳会被山挡住一半，那是日落该有的读法。
     /// 它同时仍在地面之前 —— 落到地平线以下的部分被地面盖住，不需要任何 mask。
+    ///
+    /// 雾排在**最后**：雾是"空气里的东西"，它挡在所有人前面（包括近处的山和自己脚下的地）。
+    /// 这也是用户那条反馈的物理正解 —— 黄金时刻 / 日落看不到晚霞，不是晚霞不在，
+    /// 是被低能见度的气溶胶盖住了。
     ///
     /// 3.14.0 起接入**滚动视差**（报告 §三）：滚动时太阳 / 云 / 星 / 山按各自深度
     /// 向下沉——越近的层沉得越快，天"退到后面去"，纵深就是这样来的。
     /// 全部走 `offset`（合成层变换），天幕本体零重建；`parallaxY` 已钳制，
     /// 山沉进地面、太阳沉进地平线，都不露底。
+    ///
+    /// - Parameter haze: 大气浑浊度 0…1（`SkyHaze.level(...)`）。0 时这一层的开销是 0：
+    ///   雾面不构造、饱和度为 1、太阳辉光与山脊的混合全是原值。
     private func scene(sky: Theme.SkyColors,
                        phase: SkyPhase,
                        frame: SkyRoomMetrics.Frame,
                        now: Date,
-                       parallaxY: CGFloat) -> some View {
-        ZStack {
+                       parallaxY: CGFloat,
+                       haze: Double) -> some View {
+        // 雾色：天色往近白里提（夜里 horizon 是冷蓝，提出来是冷灰，见 `SkyHaze.tint`）
+        let fog = SkyHaze.tint(sky: sky)
+        // 夜里的雾**不能**用 `.plusLighter`：深色天上提亮等于盖一块发光的板。
+        // 换成普通混合 + alpha 打七折，观感才是"能见度差 + 一片暗灰"。
+        let isNight = phase == .night
+        let fogAlphaScale: Double = isNight ? 0.7 : 1
+        let fogBlend: BlendMode = isNight ? .normal : .plusLighter
+
+        return ZStack {
             // ① 天幕（网格 / 线性兜底 + 宽档暗角）—— 天幕不动（它是"无限远"）
             skyBase(sky: sky, phase: phase, frame: frame, now: now)
             // ② 星点 / 云 / 三层山脊（各带视差）
-            parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY)
+            parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY, haze: haze)
             // ③ 太阳：三层结构，画在山脊与地面之前，随滚动沉向地平线
-            sun(sky: sky, phase: phase, frame: frame, now: now)
+            sun(sky: sky, phase: phase, frame: frame, now: now, haze: haze)
                 .offset(y: parallaxY * SkyRoomMetrics.Scroll.sunDepth)
             // ④ 地面 + 地平线光带 + 暖色辉光 + 竖纹理（地面不沉：它是"脚下"）
             ground(sky: sky, phase: phase, frame: frame)
+            // ⑤ 雾层：能见度低时把整片天"压白压灰"。
+            //    用 LinearGradient 而不是纯色 —— 贴地平线那一侧雾最重（那是实景里的样子）。
+            //    **铁律 1 的延伸**：只有固定的 gradient + opacity，绝不逐帧重建网格，也不加 blur
+            //    （雾面用渐变模拟就够，加 blur 等于每帧一次全屏离屏渲染）。
+            if haze > 0.01 {
+                LinearGradient(
+                    stops: [
+                        .init(color: fog.opacity(haze * 0.30 * fogAlphaScale), location: 0),
+                        .init(color: fog.opacity(haze * 0.55 * fogAlphaScale), location: 0.55),
+                        .init(color: fog.opacity(haze * 0.78 * fogAlphaScale), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                // 雾是"提亮 + 掉对比"，不是盖一层灰板（夜里那支见上面的 `fogBlend`）
+                .blendMode(fogBlend)
+                .allowsHitTesting(false)
+            }
         }
         .frame(width: frame.width, height: frame.height)
+        // 雾天掉饱和是核心观感：霞光的橙、蓝调的蓝都被气溶胶冲淡
+        .saturation(1 - haze * 0.55)
         .contentShape(Rectangle())
     }
 
@@ -506,7 +679,8 @@ struct SkyRoomView: View {
     private func parallax(sky: Theme.SkyColors,
                           phase: SkyPhase,
                           frame: SkyRoomMetrics.Frame,
-                          parallaxY: CGFloat) -> some View {
+                          parallaxY: CGFloat,
+                          haze: Double) -> some View {
         ZStack {
             if isStarry(phase) {
                 stars(sky: sky, frame: frame)
@@ -514,16 +688,19 @@ struct SkyRoomView: View {
             }
             clouds(sky: sky, phase: phase, frame: frame)
                 .offset(y: parallaxY * SkyRoomMetrics.Scroll.cloudDepth)
-            mountains(sky: sky, frame: frame, parallaxY: parallaxY)
+            mountains(sky: sky, frame: frame, parallaxY: parallaxY, haze: haze)
         }
     }
 
     /// 三层山脊。锚在固定地平线上，层与层之间错开 8pt，
     /// 颜色随距离混入天空色（`haze`）—— 越远越淡越蓝，这就是大气透视。
     /// 滚动时各层按 `parallaxDepth` 下沉（远 0.15 / 中 0.25 / 近 0.40）。
+    ///
+    /// - Parameter haze: 大气浑浊度。能见度低时远山要"化掉"，由 `ridge(...)` 并入 `spec.haze`。
     private func mountains(sky: Theme.SkyColors,
                            frame: SkyRoomMetrics.Frame,
-                           parallaxY: CGFloat) -> some View {
+                           parallaxY: CGFloat,
+                           haze: Double) -> some View {
         let baseY = frame.horizon * frame.height
 
         return ZStack {
@@ -533,7 +710,8 @@ struct SkyRoomView: View {
                       sky: sky,
                       frame: frame,
                       baseY: baseY,
-                      parallaxY: parallaxY)
+                      parallaxY: parallaxY,
+                      haze: haze)
             }
         }
     }
@@ -548,18 +726,22 @@ struct SkyRoomView: View {
     ///
     /// 填充走 `Color.blend` 实色：远山 58% 混入天空色（化在天里），近山 14%（一块实剪影）。
     /// 3.14.0 用 `opacity` 的结果是一整块"土黄半透明板"——形状轮廓被冲没，只剩脏。
+    ///
+    /// 3.16.0：`spec.haze` 再加一档 `haze * 0.45`（上限 1）。能见度低的时候，
+    /// 连**近**山都该往天色里化 —— 这就是"远山看不见"的画面表达。
     private func ridge(spec: SkyRoomMetrics.RidgeSpec,
                        sky: Theme.SkyColors,
                        frame: SkyRoomMetrics.Frame,
                        baseY: CGFloat,
-                       parallaxY: CGFloat) -> some View {
+                       parallaxY: CGFloat,
+                       haze: Double) -> some View {
         let width = frame.stageWidth * spec.widthRatio
         let height = frame.height * spec.peakHeight
         // 山脚：固定埋进地面，与层序无关（层与层的错落由峰高本身拉开）
         let footY = baseY + frame.height * SkyRoomMetrics.Ridges.buryDepth
 
         // 山体本色：远山更"化"在天里（混入更多 horizon），近山接近大地本色
-        let ridgeTop = Color.blend(sky.ground, sky.horizon, spec.haze)
+        let ridgeTop = Color.blend(sky.ground, sky.horizon, min(1, spec.haze + haze * 0.45))
         let ridgeDeep = Color.blend(sky.ground, .black, 0.20)
 
         return SkyRoomRidge(crests: spec.crests,
@@ -697,11 +879,21 @@ struct SkyRoomView: View {
     /// | 核心 | 直径 12 | 1.00 | `sky.edge`（每档最亮的那支） |
     ///
     /// 三层**共用同一个位置**。呼吸只有外晕的 `opacity` 在动（1.0 ↔ 0.92）。
+    ///
+    /// ## 3.16.0：能见度决定看不见太阳
+    ///
+    /// 浑浊度把 `strength`（= `mark.intensity`）整体乘 `(1 - haze * 0.85)`：
+    /// 雾天里内晕 / 核心会一起变淡（阳光被气溶胶吃掉）。
+    /// 外晕在 `haze > 0.5` 时**整层不画** —— 浓雾里根本没有"一圈光晕"，
+    /// 那是干空气才有的现象；留着它只会让雾天看起来像"加了滤镜的晴天"。
+    ///
+    /// - Parameter haze: 大气浑浊度 0…1（见 `SkyHaze`）
     @ViewBuilder
     private func sun(sky: Theme.SkyColors,
                      phase: SkyPhase,
                      frame: SkyRoomMetrics.Frame,
-                     now: Date) -> some View {
+                     now: Date,
+                     haze: Double) -> some View {
         if let mark = SunClock.sunMark(at: now,
                                        on: now,
                                        crestY: SkyRoomMetrics.Page.horizon),
@@ -709,27 +901,30 @@ struct SkyRoomView: View {
             let core = SkyRoomMetrics.Sun.coreDiameter
             let inner = SkyRoomMetrics.Sun.innerGlowDiameter
             let outer = SkyRoomMetrics.Sun.outerGlowDiameter
-            let strength = Double(mark.intensity)
+            let strength = Double(mark.intensity) * (1 - haze * 0.85)
 
             ZStack {
-                // 外晕：整片天被照亮的那一层（只有它在呼吸）
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            gradient: Gradient(stops: [
-                                .init(color: sunOuterTint(sky: sky, phase: phase)
-                                    .opacity(SkyRoomMetrics.Sun.outerGlowAlpha * strength), location: 0),
-                                .init(color: sunOuterTint(sky: sky, phase: phase)
-                                    .opacity(SkyRoomMetrics.Sun.outerGlowAlpha * 0.30 * strength), location: 0.45),
-                                .init(color: sunOuterTint(sky: sky, phase: phase).opacity(0), location: 1)
-                            ]),
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: outer / 2
+                // 外晕：整片天被照亮的那一层（只有它在呼吸）。
+                // 雾里没有光晕 —— 见上面的类型注释
+                if haze <= 0.5 {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                gradient: Gradient(stops: [
+                                    .init(color: sunOuterTint(sky: sky, phase: phase)
+                                        .opacity(SkyRoomMetrics.Sun.outerGlowAlpha * strength), location: 0),
+                                    .init(color: sunOuterTint(sky: sky, phase: phase)
+                                        .opacity(SkyRoomMetrics.Sun.outerGlowAlpha * 0.30 * strength), location: 0.45),
+                                    .init(color: sunOuterTint(sky: sky, phase: phase).opacity(0), location: 1)
+                                ]),
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: outer / 2
+                            )
                         )
-                    )
-                    .frame(width: outer, height: outer)
-                    .opacity(glowBreathAlpha)
+                        .frame(width: outer, height: outer)
+                        .opacity(glowBreathAlpha)
+                }
 
                 // 内晕：贴着核心的那圈亮边（把核心从背景里"托"出来）
                 Circle()
@@ -943,10 +1138,14 @@ struct SkyRoomView: View {
 
     /// 读一次天气。`WeatherStore` 自带 10 分钟缓存与"失败保留旧值"，
     /// 所以这一页既不需要新 Store，也不会因为断网把页面变成错误态。
+    ///
+    /// 同一发请求里还顺带拿到了**能见度**（`WeatherStore.visibilityMeters`）：
+    /// 它只服务画面（雾浓度），不进任何文案。
     @MainActor
     private func loadWeather() async {
         #if DEBUG
-        // 截图模式：bundle 里有标记文件就用它，不请求网络（CI 模拟器可能没网）
+        // 截图模式：bundle 里有标记文件就用它，不请求网络（CI 模拟器可能没网）。
+        // 能见度刻意留 nil —— 截图要能和用户反馈的画面直接对照，多一层雾反而看不清差异
         if let scene = SkyRoomPreviewScene.load() {
             weatherNow = scene.weather
             previewMoment = scene.moment
@@ -955,6 +1154,7 @@ struct SkyRoomView: View {
         #endif
         await WeatherStore.shared.load()
         weatherNow = WeatherStore.shared.current
+        visibilityMeters = WeatherStore.shared.visibilityMeters
     }
 
     // MARK: - 静态几何
@@ -988,23 +1188,6 @@ struct SkyRoomView: View {
         value = value &* 2_654_435_761
         value = value ^ (value >> 16)
         return CGFloat(value % 10_000) / 10_000
-    }
-}
-
-// MARK: - 顶栏滚动态玻璃
-
-/// 报告 §三 的「topbar.scrolled」：激活时套 `.card` 级玻璃（全工程唯一玻璃入口，
-/// iOS 26 走系统 `glassEffect`、18–25 走手工配方），未激活时完全透明。
-private struct TopBarGlass: ViewModifier {
-    let active: Bool
-
-    func body(content: Content) -> some View {
-        if active {
-            content.glassSurface(.card,
-                                 in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        } else {
-            content
-        }
     }
 }
 

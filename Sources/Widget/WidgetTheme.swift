@@ -305,18 +305,26 @@ extension WidgetTheme {
 // 三个尺寸是三种版式，字号必须一档一档给，**不许用一套字号硬缩放**（DESIGN-RULES §3）。
 //
 // 数字怎么来的：
-//   · medium 338×158：左栏要放 30pt 的时刻（"23:08" 在 30pt 下约 78pt 宽，左栏留 140），
-//     右栏三行 12pt；30pt 是"比小号的 34 略小、但仍是全卡最大字"的折中；
+//   · medium 338×158：左栏要放主时刻（"23:08" 在 23pt 下约 60pt 宽，左栏留 140），
+//     右栏三行 12pt；
 //   · large 338×354：卡片高度是小号的 2.24 倍，hero 时刻放到 52pt ——
 //     它与下方 4 行排期（每行 16pt）加起来仍留出约 40pt 余量。
+//
+// 3.16.0：用户反馈"APP 里面的小组件有点太大了，跟下面的差不多大小就行" ——
+// **只动中号那一套**（30 → 23pt，间距同步收紧），大号 hero 52pt 一个字都没改
+// （它本来就在 354pt 的大画布上，缩了反而空）。
 extension WidgetTheme {
 
     enum Redstone {
 
         // MARK: 字号
 
-        /// 中号左栏主时刻（30pt rounded bold，与全工程"数字用 rounded"一致）
-        static let mediumTime = Font.system(size: 30, weight: .bold, design: .rounded)
+        /// 中号左栏主时刻（23pt rounded bold，与全工程"数字用 rounded"一致）。
+        ///
+        /// 3.16.0：用户反馈中号号码过大（30 → 23pt，×0.77），与天光组件同量级 ——
+        /// 上半张卡只有它一个是 30pt 的大字，右栏三行 11/12pt 被压成了注脚，
+        /// 视觉重心全跑到左边那个时刻上，而这一档真正要读的是"几点 + 还有多久"两行。
+        static let mediumTime = Font.system(size: 23, weight: .bold, design: .rounded)
         /// 大号 hero 主时刻
         static let largeTime = Font.system(size: 52, weight: .bold, design: .rounded)
         /// 地图名（中/大号共用 13pt semibold）
@@ -327,7 +335,7 @@ extension WidgetTheme {
         static let value = Font.system(size: 12, weight: .semibold, design: .monospaced)
         /// 中/大号的倒计时（13pt 等宽）。
         ///
-        /// 为什么不用小号那支 11pt：中号主时刻 30pt、大号 52pt，下面紧跟一行 11pt 会被读成
+        /// 为什么不用小号那支 11pt：中号主时刻 23pt、大号 52pt，下面紧跟一行 11pt 会被读成
         /// "注脚"而不是"第二个读数"；13pt 是这套版式里"比标签大一档、又不抢主时刻"的位置。
         static let countdown = Font.system(size: 13, weight: .semibold, design: .monospaced)
         /// 排期的日期列（12pt，等宽是为了"今天/明天/周三"三个字宽不一也不抖）
@@ -343,6 +351,15 @@ extension WidgetTheme {
         static let mediumPadding: CGFloat = 14
         /// 中号两栏之间的间距（栏间还有一条 1pt 竖线）
         static let mediumColumnGap: CGFloat = 12
+        /// 中号顶行（地图 + 倍率）→ 正文的间距。
+        ///
+        /// 3.16.0：10 → 8。主时刻从 30pt 收到 23pt 后，原来那 10pt 的顶行留白
+        /// 在视觉上会把"地图名"和"时刻"读成两块不相干的内容。
+        static let mediumHeadGap: CGFloat = 8
+        /// 中号左栏内部行距（主时刻 → 倒计时 → 第三行）。
+        ///
+        /// 3.16.0：6 → 4。时刻小了 7pt，行距若不动，三行之间会显得松散、整块不再像一个读数组。
+        static let mediumMainSpacing: CGFloat = 4
         /// 大号内边距
         static let largePadding: CGFloat = 16
         /// 大号「本周排期」最多几行（第 5 行会顶到卡片底边）

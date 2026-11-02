@@ -24,12 +24,32 @@ enum WeatherLocationSetting {
     /// 天气按公里级网格、小时级粒度算，位置不需要"实时"。6 小时的意义是：
     /// 早上出门打开 App 定一次，中午、下午再打开直接用缓存，一天最多定位一两次。
     static let cacheLifetime: TimeInterval = 6 * 60 * 60
+
+    // MARK: - 地名（"这里是哪"，3.16.0）
+
+    /// 反查出来的两级地名（"上海市 · 浦东新区"）
+    static let placeNameKey = "weather.placeName"
+    /// 这个地名对应的纬度 / 经度。
+    ///
+    /// 单独存一份（不复用 `latKey` / `lonKey`）的理由：地名是**异步**反查来的，
+    /// 可能比坐标晚几秒落盘，也可能失败（此时旧地名要留着）。冷启动还原时只有
+    /// "地名 + 它自己的那对坐标"能证明"这条地名说的就是这条坐标"——
+    /// 拿主坐标去比，会出现"坐标刚刷新、地名还是上一座城市的"。
+    static let placeLatKey = "weather.placeLat"
+    static let placeLonKey = "weather.placeLon"
+
+    /// 判定"还是同一个地方"的经纬度容差（度）。
+    ///
+    /// 0.02° ≈ 2.2km：天气网格是公里级的，这个范围内同一个地名（同一个区）不会变，
+    /// 不值得再打一次反查接口（那是有配额的商业接口，且每次都是一次网络往返）。
+    static let placeTolerance: Double = 0.02
 }
 
 /// 设备定位的唯一状态源 —— 只服务一件事：让天气接口带上用户当前所在坐标。
 ///
-/// 对外只有三样东西：`status`（开关 + 权限的综合状态）、`coordinate`（可用的坐标，可能为 nil）、
-/// `isEnabled`（用户偏好）。谁需要坐标谁自己读，本类不发请求、不认识天气。
+/// 对外只有四样东西：`status`（开关 + 权限的综合状态）、`coordinate`（可用的坐标，可能为 nil）、
+/// `isEnabled`（用户偏好）、`placeName`（"这里是哪"的两级地名，可能为 nil）。
+/// 谁需要坐标谁自己读，本类不发请求、不认识天气。
 ///
 /// ## ① 为什么默认关闭
 /// 定位是最敏感的一类权限。一装就弹框，等于在用户还不知道有天气卡片时就先要位置 ——
@@ -92,9 +112,32 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
     /// 与 `coordinate` 配对的状态，见 `Status` 的逐项说明
     @Published private(set) var status: Status
 
+    /// "这里是哪"的两级地名（"上海市 · 浦东新区"）。
+    ///
+    /// 为什么由本类持有而不是让 UI 自己反查：反查要跟着坐标走、要防重复请求、
+    /// 要落盘缓存、要在用户关掉开关时一起清掉 —— 四件事都是本类的职责范围。
+    /// 天光页只读它，不做任何判断。
+    ///
+    /// nil 有两种含义，UI 要分开表达：**还没反查出来**（开关开着→"定位中…"）、
+    /// **开关关着**（→"默认位置 · 郑州"）。
+    @Published private(set) var placeName: String?
+
     // MARK: - 内部状态
 
     private let defaults: UserDefaults
+
+    /// 地名反查。CoreLocation 自带、无需密钥；同一个实例可以排队复用。
+    ///
+    /// `CLGeocoder` 不是 `Sendable`，但本类是 `@MainActor`，实例只在这里被创建与使用，
+    /// `await` 之后回到主 actor 再赋值 —— 不跨线程共享。
+    private let geocoder = CLGeocoder()
+
+    /// 上一次**成功**反查的坐标（用来跳过 2km 内的重复请求）
+    private var geocodedCoordinate: CLLocationCoordinate2D?
+
+    /// 反查在飞。`requestLocation()` 偶尔会连着给两三个点，
+    /// 没有这个闸门就会连发三次反查（商业接口有配额）。
+    private var isResolvingPlace = false
 
     /// 懒创建真正的 `CLLocationManager`。
     ///
@@ -117,7 +160,7 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
 
     /// 为什么是 `nonisolated`：与 `SurveyStore` / `ScrollLightStore` 同一条纪律 ——
     /// View 的属性初始化器在 Swift 5 的 minimal 并发检查下不保证是隔离上下文。
-    /// 本 init 只做两件事：读缓存、初始化两个 `@Published` 的底层存储，都不需要主 actor。
+    /// 本 init 只做两件事：读缓存、初始化三个 `@Published` 的底层存储，都不需要主 actor。
     ///
     /// 为什么还要 `override`（3.7.0 首次编译报错的一处）：本类是 `NSObject` 子类，
     /// `NSObject` 自带 `init()`，所以这里的 `init()` 不是"新声明"而是**覆盖**父类的那个。
@@ -142,9 +185,25 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
             }
         }
 
+        // 地名还原：只有「开关开着 + 地名存在 + 它与缓存坐标对得上」才用。
+        // 对不上就留空 —— 让用户看到"定位中…"，而不是昨天那座城市的名字。
+        var restoredPlace: String?
+        if let place = defaults.string(forKey: WeatherLocationSetting.placeNameKey),
+           let placeLat = defaults.object(forKey: WeatherLocationSetting.placeLatKey) as? Double,
+           let placeLon = defaults.object(forKey: WeatherLocationSetting.placeLonKey) as? Double,
+           let coordinate = restored,
+           abs(coordinate.latitude - placeLat) <= WeatherLocationSetting.placeTolerance,
+           abs(coordinate.longitude - placeLon) <= WeatherLocationSetting.placeTolerance {
+            let trimmed = place.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                restoredPlace = trimmed
+            }
+        }
+
         self.defaults = defaults
         _coordinate = Published(initialValue: restored)
         _status = Published(initialValue: restored == nil ? .off : .ready)
+        _placeName = Published(initialValue: restoredPlace)
         super.init()
     }
 
@@ -181,8 +240,11 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
             reset()
             return
         }
-        if coordinate != nil, hasFreshCache {
+        if let coordinate = coordinate, hasFreshCache {
             status = .ready
+            // 坐标是冷启动还原的，地名可能还没反查过（首装升级 / 上次反查失败）：
+            // 这里补一次，否则顶栏会一直停在"定位中…"，直到 6 小时后重新定位。
+            resolvePlaceNameIfNeeded(coordinate)
             return
         }
         requestPermissionOrLocation()
@@ -234,6 +296,8 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         coordinate = next
         persist(next, at: Date())
         status = .ready
+        // 地名反查要打网络，别卡住 delegate 回调：丢进任务里，2km 内的重复坐标直接跳过
+        resolvePlaceNameIfNeeded(next)
     }
 
     /// 定位失败：**已有坐标时什么都不做**，保留上一次的位置。
@@ -276,17 +340,103 @@ final class LocationStore: NSObject, ObservableObject, @preconcurrency CLLocatio
         status = .off
     }
 
-    /// 只清坐标（内存 + 落盘），不动 `status`
+    /// 只清坐标与地名（内存 + 落盘），不动 `status`
+    ///
+    /// 地名必须跟坐标一起清：留着"上海市 · 浦东新区"而坐标已经没了，
+    /// 界面就会用一个真实但不属于任何数据的城市名骗人。
     private func dropCoordinate() {
         coordinate = nil
+        placeName = nil
+        geocodedCoordinate = nil
         defaults.removeObject(forKey: WeatherLocationSetting.latKey)
         defaults.removeObject(forKey: WeatherLocationSetting.lonKey)
         defaults.removeObject(forKey: WeatherLocationSetting.fixedAtKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.placeNameKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.placeLatKey)
+        defaults.removeObject(forKey: WeatherLocationSetting.placeLonKey)
     }
 
     private func persist(_ coordinate: CLLocationCoordinate2D, at date: Date) {
         defaults.set(coordinate.latitude, forKey: WeatherLocationSetting.latKey)
         defaults.set(coordinate.longitude, forKey: WeatherLocationSetting.lonKey)
         defaults.set(date, forKey: WeatherLocationSetting.fixedAtKey)
+    }
+
+    // MARK: - 地名反查
+
+    /// 需不需要为这个坐标反查一次地名（2km 内不重复打接口）
+    private func needsResolve(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        guard let last = geocodedCoordinate else { return true }
+        return abs(last.latitude - coordinate.latitude) > WeatherLocationSetting.placeTolerance
+            || abs(last.longitude - coordinate.longitude) > WeatherLocationSetting.placeTolerance
+    }
+
+    /// 条件满足才发起一次反查（不阻塞调用方）
+    private func resolvePlaceNameIfNeeded(_ coordinate: CLLocationCoordinate2D) {
+        // 关掉开关之后不该再有任何定位相关的网络请求在路上
+        guard isEnabled else { return }
+        guard !isResolvingPlace else { return }
+        guard needsResolve(coordinate) else { return }
+        isResolvingPlace = true
+        // `Task` 继承本方法的 `@MainActor` 隔离，所以 `resolvePlaceName` 里的赋值
+        // 仍然发生在主 actor 上（`CLGeocoder` 不是 `Sendable`，这一步不能省）
+        Task {
+            await resolvePlaceName(coordinate)
+        }
+    }
+
+    /// 反查"这里是哪"：成功写入 `placeName` 并落盘；失败**保留旧值**（宁可旧，不要空）。
+    private func resolvePlaceName(_ coordinate: CLLocationCoordinate2D) async {
+        defer { isResolvingPlace = false }
+
+        // 反查用的是**坐标**，与天气请求的公里级精度不同：这里要的是行政区划
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        do {
+            // 用 async 版本（iOS 15+ 的并发覆盖），不要 completion 版本 ——
+            // 后者要自己管回调线程与「同一个 geocoder 不能并发」的规矩
+            let marks = try await geocoder.reverseGeocodeLocation(location)
+            guard let mark = marks.first, let label = Self.placeLabel(from: mark) else { return }
+            placeName = label
+            geocodedCoordinate = coordinate
+            defaults.set(label, forKey: WeatherLocationSetting.placeNameKey)
+            defaults.set(coordinate.latitude, forKey: WeatherLocationSetting.placeLatKey)
+            defaults.set(coordinate.longitude, forKey: WeatherLocationSetting.placeLonKey)
+        } catch {
+            // 网络失败 / 配额 / 该坐标没有行政区划：什么都不做。
+            // 清空 `placeName` 会让顶栏从"上海市"跳回"定位中…"，那是退步
+            return
+        }
+    }
+
+    /// 从 `CLPlacemark` 拼两级地名："上海市 · 浦东新区"。
+    ///
+    /// 规则：
+    /// 1. 「市」优先 `locality`，缺了退 `administrativeArea`（有些地区只给省/州）；
+    /// 2. `subLocality` 有就再拼一级（"浦东新区" / "海淀区"）—— 用户问"我到底在哪儿"，
+    ///    市级太粗，区级才答得上来；
+    /// 3. 两级都没有 → nil（交给 UI 说"定位中…"，不编一个名字）；
+    /// 4. 两级正好同名（"上海市 · 上海市"）只留一级。
+    private static func placeLabel(from mark: CLPlacemark) -> String? {
+        let city = cleaned(mark.locality) ?? cleaned(mark.administrativeArea)
+        let district = cleaned(mark.subLocality)
+
+        switch (city, district) {
+        case let (city?, district?):
+            return city == district ? city : city + " · " + district
+        case let (city?, nil):
+            return city
+        case let (nil, district?):
+            // 只拿到区（少数地区的 placemark 不给 locality）：给这一级也比空着强
+            return district
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    /// 去掉空白与空串（服务端 / 系统偶尔给一个 `" "`）
+    private static func cleaned(_ value: String?) -> String? {
+        guard let value = value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

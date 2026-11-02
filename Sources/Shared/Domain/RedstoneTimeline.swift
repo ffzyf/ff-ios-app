@@ -35,6 +35,81 @@ enum RockPhase: Equatable {
     }
 }
 
+// MARK: - 「还有几天」（App 与 Widget 共用）
+
+/// 红石「下一场还有几天」的唯一实现。
+///
+/// 为什么放在这里而不是 `RockPhaseText`（`Features/Rock/NextEventBar.swift`）：
+/// `RockPhaseText` 属于 App target 的 `Features`，Widget target 只编译 `Sources/Widget` +
+/// `Sources/Shared`，引用不到它。而「几天后」这件事必须由**两个进程给出同一个答案** ——
+/// 各写一份，迟早会出现「手机说 5 天后、桌面说 10:08」这种最伤口碑的分歧。
+extension RockPhase {
+
+    /// 「下一场还有几天」——从今天算起的**日历天差**（今天有场 = 0，明天 = 1，周六 = 5）。
+    ///
+    /// 为什么按日历天而不是 24 小时：用户问的是"几天后"，跨一个 0 点就该 +1。
+    /// 用 86400 秒去除会出现"明天下午的场次显示 1 天后、明天早上的显示 0 天后"这种自相矛盾
+    /// （明天 07:08 距此刻也许只有 5 小时，明天 23:08 有 17 小时，但不该一个叫「今天」一个叫「明天」）。
+    ///
+    /// 日历一律取 `RedstoneClock.calendar`（时区已钉死为 UTC+8）：**不要**用 `Calendar.current`，
+    /// 那会让海外用户的桌面与手机差一天。
+    ///
+    /// - Parameters:
+    ///   - occurrence: 目标场次；`nil` 直接返回 `nil`（`notGenerated` 时没有目标，不猜）
+    ///   - now: 当前时刻（由调用方传入，Widget 里是 entry.date，保证预渲染与真显示一致）
+    /// - Returns: 天数；`occurrence.date` 这个日期键解析不出来时也返回 `nil` —— 不猜。
+    static func daysAhead(_ occurrence: Occurrence?, now: Date) -> Int? {
+        guard let occurrence = occurrence,
+              let from = RedstoneClock.startOfDay(dayKey: RedstoneClock.dayKey(now)),
+              let to = RedstoneClock.startOfDay(dayKey: occurrence.date) else {
+            return nil
+        }
+        return RedstoneClock.calendar.dateComponents([.day], from: from, to: to).day
+    }
+
+    /// 天差的人类可读短标签：`今天` / `明天` / `5 天后`。
+    ///
+    /// 10 天以上照样写数字（`12 天后`），**不写「下周」**：红石排期最多看到下月初，
+    /// 一句"下周"反而让人算不出是哪一天。
+    /// 负数按「今天」处理：只有设备时钟被拨到过去才会出现，显示「-1 天后」比不显示更糟。
+    ///
+    /// - Returns: 文案；天差拿不到时返回 `nil`（调用方退回时刻或整段不渲染）
+    static func daysAheadLabel(_ occurrence: Occurrence?, now: Date) -> String? {
+        guard let days = daysAhead(occurrence, now: now) else { return nil }
+        switch days {
+        case ..<1:
+            return "今天"
+        case 1:
+            return "明天"
+        default:
+            return String(days) + " 天后"
+        }
+    }
+
+    /// 今天**还有**没有可等的场次（进行中 / 今天晚些的 `.upcoming`）。
+    ///
+    /// 这是「大字该写时刻，还是该写『5 天后』」「眉题该写『今日』还是『下一次』」的唯一判据，
+    /// App 概览卡与小组件三档都吃这一份，避免各自解读 `phase`：
+    ///   · `.ongoing` → 有。正在落地，用户此刻要读的就是时刻（跨零点的场次也算）；
+    ///   · `.upcoming` → 有。`phase(in:now:)` **只在** `next.date == 今天` 时才产出 `.upcoming`，
+    ///     这里再比一次日期，是为了让"今天晚些"和"明天/周六"在代码上也彻底隔开 ——
+    ///     否则将来有人改动 `phase` 的判定顺序，这里会静默把 `.upcoming` 误判成"今日已结束"；
+    ///   · `.endedToday` → **没有**。这个 case 的语义就是「今天的都过完了，next 在明天或更远」；
+    ///   · `.notGenerated` → 没有（既没有场次，也说不出几天后）。
+    ///
+    /// - Parameter now: 当前时刻（北京日的判定基准）
+    func hasRemainingSessionToday(now: Date) -> Bool {
+        switch self {
+        case .ongoing:
+            return true
+        case .upcoming(let occurrence, _):
+            return occurrence.date == RedstoneClock.dayKey(now)
+        case .endedToday, .notGenerated:
+            return false
+        }
+    }
+}
+
 /// **红石时间判定的唯一实现**：纯函数、无状态、无网络、无 UI。
 ///
 /// 为什么必须是纯函数：这套判定要同时被 5 个地方用（月历顶部条、概览倒计时卡、当天浮层、

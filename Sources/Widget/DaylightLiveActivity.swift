@@ -127,7 +127,9 @@ private func daylightSkyEntry(state: DaylightActivityAttributes.ContentState,
         // 稳定锚点 —— 沿用它，卡上数字与历史行为完全一致
         sunrise: state.sunrise,
         sunset: state.sunset,
-        weather: nil
+        weather: nil,
+        // 锁屏实时活动不拉能见度：它由 Focus/通知触发，不该再多一次网络请求
+        visibilityMeters: nil
     )
 }
 

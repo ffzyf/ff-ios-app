@@ -110,6 +110,13 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
     /// 当前版本号。从未成功检查过时服务端可能给 null
     let version: String?
     let previousVersion: String?
+    /// 上一版自己的发布日期（date-only `"2026-10-21"`，可能为 null）。
+    ///
+    /// 服务端 v2.3.0 起由 `app_monitor_versions` 版本流水补上（旧 KV 里还没有历史时给 null，
+    /// 此时「上一版本」也一定是 null —— 两者同源）。同样**不转 Date**：时区会把 21 号漂成 20 号。
+    /// 可空 + `try?` 解码：老快照（`CachedLoader` 磁盘里 3.15.x 写下的 JSON）没有这个键，
+    /// 缺键必须只是"这个字段没有值"，不能让整页解码失败。
+    let previousReleaseDate: String?
     /// date-only 字符串（`"2026-10-21"`）。**不转 Date**：时区会把 21 号漂成 20 号
     let releaseDate: String?
     /// 是否有新版本（服务端判定，客户端不做版本号比较）
@@ -148,6 +155,7 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
         case country
         case version
         case previousVersion
+        case previousReleaseDate
         case releaseDate
         case hasNew
         case checkedAt
@@ -161,6 +169,8 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
         country = (try? container.decode(String.self, forKey: .country)) ?? ""
         version = try? container.decode(String.self, forKey: .version)
         previousVersion = try? container.decode(String.self, forKey: .previousVersion)
+        // 缺键 / 值非法一律 nil（`try?`）；老快照没有这个键也照常解码
+        previousReleaseDate = try? container.decode(String.self, forKey: .previousReleaseDate)
         releaseDate = try? container.decode(String.self, forKey: .releaseDate)
         hasNew = (try? container.decode(Bool.self, forKey: .hasNew)) ?? false
         // `checkedAt` 在 JSON 里是 ISO 字符串；用 String 接住，两条解码路径结果一致
@@ -177,6 +187,7 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
         try container.encode(country, forKey: .country)
         try container.encodeIfPresent(version, forKey: .version)
         try container.encodeIfPresent(previousVersion, forKey: .previousVersion)
+        try container.encodeIfPresent(previousReleaseDate, forKey: .previousReleaseDate)
         try container.encodeIfPresent(releaseDate, forKey: .releaseDate)
         try container.encode(hasNew, forKey: .hasNew)
         try container.encodeIfPresent(checkedAtRaw, forKey: .checkedAt)
@@ -184,12 +195,16 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
     }
 
     /// 供预览 / 测试直接构造（自定义 `init(from:)` 会吃掉自动生成的 memberwise init）
+    ///
+    /// `previousReleaseDate` 带默认值 `nil`：这个文件之外的构造点（预览 / 调试数据）
+    /// 不必为了一个新字段全部改一遍。
     init(
         appId: String,
         name: String,
         country: String,
         version: String?,
         previousVersion: String?,
+        previousReleaseDate: String? = nil,
         releaseDate: String?,
         hasNew: Bool,
         checkedAtRaw: String?,
@@ -200,6 +215,7 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
         self.country = country
         self.version = version
         self.previousVersion = previousVersion
+        self.previousReleaseDate = previousReleaseDate
         self.releaseDate = releaseDate
         self.hasNew = hasNew
         self.checkedAtRaw = checkedAtRaw

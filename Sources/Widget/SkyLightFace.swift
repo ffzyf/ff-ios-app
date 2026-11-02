@@ -28,7 +28,8 @@ import WidgetKit
 /// 用户原话："在它原有之上，再添加一种天气效果"。所以这一版最要紧的事是**别弄坏原来那套**：
 /// 天空渐变、地平线、太阳随时刻走，一个像素都不动；天气只是一层贴在中间的半透明图形。
 /// 逐层的先后顺序写死在 `SkyLightSky.body` 里（顺序错了会立刻变丑，注释里写明了为什么）：
-/// 天空 → 光晕 → **云** → 地面 → 地平线亮边 → **降水/雾/闪电** → 太阳本体 → 文字。
+/// 天空 → 光晕 → **云** → 地面 → 地平线亮边 → **降水/雾/闪电** → 太阳本体 → **大气雾层** → 文字。
+/// 最后一层雾（3.16.0）盖在太阳之上：浓雾里根本看不见太阳的轮廓 —— 见 `SkyLightSky.body` 的 ⑧。
 struct SkyLightFace: View {
 
     @Environment(\.widgetFamily) private var family
@@ -403,6 +404,9 @@ struct SkyLightSky: View {
     var body: some View {
         let sky = Theme.sky(entry.phase)
         let mark = sunMark
+        // 大气浑浊度：能见度低 → 起雾、掉饱和、削辉光（口径与 App 内天光页完全一致）
+        let haze = SkyHaze.level(visibilityMeters: entry.visibilityMeters, kind: weatherKind)
+        let fog = SkyHaze.tint(sky: sky)
 
         GeometryReader { proxy in
             let size = proxy.size
@@ -416,8 +420,10 @@ struct SkyLightSky: View {
                 // ② 光晕：一层 RadialGradient，不用 blur。
                 //    日落后半小时内还有余温（intensity 衰减到 0），之后什么都不留。
                 //    它本来就是半透明渐变，着色模式下直接交给系统染，不另压档。
-                if let mark, !isNight, mark.intensity > 0.01 {
-                    glowLayer(sky: sky, mark: mark, size: size)
+                //    3.16.0：`haze > 0.5`（浓雾 / 重度霾）时**整层不画** ——「一圈光晕」是干空气
+                //    才有的现象（口径同 `SkyRoomView.sun(...)`），留着它会让雾天像加了滤镜的晴天。
+                if let mark, !isNight, mark.intensity > 0.01, haze <= 0.5 {
+                    glowLayer(sky: sky, mark: mark, size: size, haze: haze)
                 }
 
                 // ③ 云（新增）：**在光晕之上、地面之下**。
@@ -467,9 +473,29 @@ struct SkyLightSky: View {
                 // ⑦ 太阳本体：只有"露出地平线且不是夜里"才画。
                 //    保持最上：它是整张卡最亮的那个点，压在任何东西下面都会被人读成"脏"。
                 if let mark, !isNight, mark.isUp {
-                    sunBody(sky: sky, mark: mark, size: size)
+                    sunBody(sky: sky, mark: mark, size: size, haze: haze)
+                }
+
+                // ⑧ 大气雾层（3.16.0）：能见度低时把整片天"压白压灰"。
+                //    为什么放在最上层：雾在太阳前面 —— 浓雾里根本看不见太阳的轮廓。
+                //    为什么贴地平线最重：实景里雾是贴地的，天顶反而先透。
+                if haze > 0.01 {
+                    let fogScale = entry.phase == .night ? 0.7 : 1.0   // 夜雾靠"压暗"，不靠"提亮"
+                    LinearGradient(
+                        stops: [
+                            .init(color: fog.opacity(haze * 0.28 * fogScale), location: 0),
+                            .init(color: fog.opacity(haze * 0.52 * fogScale), location: 0.58),
+                            .init(color: fog.opacity(haze * 0.74 * fogScale), location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .blendMode(entry.phase == .night ? .normal : .plusLighter)
                 }
             }
+            // 雾天掉饱和是核心观感：霞光的橙、蓝调的蓝都被气溶胶冲淡
+            // （与 App 内天光页同一口径：`1 - haze * 0.55`）
+            .saturation(1 - haze * 0.55)
             .frame(width: size.width, height: size.height)
         }
     }
@@ -481,11 +507,17 @@ struct SkyLightSky: View {
     /// `.plusLighter` 是加成混合：底下的天色被往上提亮而不是被盖住 —— 参考图里
     /// "光散在空气里"的质感来自这一点。中心 0.45 的不透明度到 35% 半径已掉到 0.19，
     /// 边缘 0，所以不会把整片天空洗白。
+    ///
+    /// 3.16.0：`strength`（= `mark.intensity`）整体再乘 `(1 - haze * 0.85)` ——
+    /// 雾天里阳光被气溶胶吃掉，光晕不是"变灰"，而是"变淡"（口径同 `SkyRoomView.sun(...)`）。
+    ///
+    /// - Parameter haze: 大气浑浊度 0…1（见 `SkyHaze`）
     private func glowLayer(sky: Theme.SkyColors,
                            mark: SunClock.SunMark,
-                           size: CGSize) -> some View {
+                           size: CGSize,
+                           haze: Double) -> some View {
         let color = WidgetTheme.sunGlow(sky, phase: entry.phase)
-        let strength = Double(mark.intensity)
+        let strength = Double(mark.intensity) * (1 - haze * 0.85)
         let radius = size.width * (mark.isUp
                                    ? WidgetTheme.sunGlowFactor
                                    : WidgetTheme.sunEmberFactor)
@@ -585,16 +617,24 @@ struct SkyLightSky: View {
     ///
     /// 圆心落在 `SunClock.sunMark` 给出的归一化位置上：日出贴左、正午到拱顶（y ≈ 0.10）、
     /// 日落贴右，两端正好压在弧顶高度上 —— 于是看起来"太阳压在那条亮边上"。
+    ///
+    /// 3.16.0：核心与外环的不透明度统一乘 `(1 - haze * 0.85)` —— 浓雾里太阳只剩一个
+    /// 淡下去的圆盘，轮廓都快看不见（这正是用户抱怨"看不到晚霞"的物理来源）。
+    ///
+    /// - Parameter haze: 大气浑浊度 0…1（见 `SkyHaze`）
     private func sunBody(sky: Theme.SkyColors,
                          mark: SunClock.SunMark,
-                         size: CGSize) -> some View {
+                         size: CGSize,
+                         haze: Double) -> some View {
         let core = WidgetTheme.sunCoreDiameter
         let ring = core + WidgetTheme.sunRingGap
+        // 浑浊度系数：与 App 内天光页的 `strength` 同一个式子
+        let strength = 1 - haze * 0.85
         // 实心核在着色模式下会被整块染白（一块死白），压到半透明才有"辉光点"的层次；
         // 外环是描边（半透明），原样交给系统
         let coreColor = tinted
-            ? WidgetTheme.sunCore(sky).opacity(WidgetTheme.SkyLight.tintedSunAlpha)
-            : WidgetTheme.sunCore(sky)
+            ? WidgetTheme.sunCore(sky).opacity(WidgetTheme.SkyLight.tintedSunAlpha * strength)
+            : WidgetTheme.sunCore(sky).opacity(strength)
 
         return ZStack {
             Circle()
@@ -602,7 +642,8 @@ struct SkyLightSky: View {
                 .frame(width: core, height: core)
 
             Circle()
-                .strokeBorder(WidgetTheme.sunRing(sky), lineWidth: WidgetTheme.sunRingWidth)
+                .strokeBorder(WidgetTheme.sunRing(sky).opacity(strength),
+                              lineWidth: WidgetTheme.sunRingWidth)
                 .frame(width: ring, height: ring)
         }
         .frame(width: ring + WidgetTheme.sunRingWidth, height: ring + WidgetTheme.sunRingWidth)

@@ -156,6 +156,12 @@ enum RedstoneMetric {
 /// 三档共用同一条数据（`RedstoneEntry`），**没有一个视图自己算时间**：
 /// `phase` / `todayOccurrences` / `weekRows` 全部由 Provider 在造 entry 时算好。
 ///
+/// **3.16.0 的两种主数字**（用户："我不知道它在几点几月几号" + "中号号码太大了"）：
+/// 今天还有剩余场次 → 主数字是这一场的时刻；今天已经没有（`.endedToday`，下一场在明天或更远）
+/// → 中号 / 大号的主数字改成「5 天后」/「明天」，下一行的日期补成「周六 10:08」。
+/// 小号的主数字仍是时刻（158pt 见方塞不下两个大字，见 `timeBlock` 注释）。
+/// 判据 `RockPhase.hasRemainingSessionToday(now:)` 在 Shared，与 App 概览卡同一份。
+///
 /// 四条不能破的规矩：
 /// 1. **颜色只有一个来源**：`Theme.sky(band)` 的六个 token + `Theme.trackArc`。
 ///    文字一律取 `band.sky.ink` / `band.sky.inkDim` —— 这两个是**固定**的
@@ -291,7 +297,8 @@ struct RedstoneFace: View {
             // 顶行右上角**不写倍率**：中号的右栏已经有「收益」那一行，
             // 同一个数在一张卡上出现两次，读起来像两件事（这也是"少而准"的一部分）。
             headRow(titleFont: WidgetTheme.Redstone.title, rateFont: nil)
-                .padding(.bottom, 10)
+                // 3.16.0：10 → 8（主时刻 30 → 23pt 后同步收紧，见 `WidgetTheme.Redstone.mediumHeadGap`）
+                .padding(.bottom, WidgetTheme.Redstone.mediumHeadGap)
 
             HStack(alignment: .top, spacing: WidgetTheme.Redstone.mediumColumnGap) {
                 mediumMainColumn
@@ -306,10 +313,18 @@ struct RedstoneFace: View {
         }
     }
 
-    /// 左栏：主时刻 + 倒计时（唯一还带大数字的一栏）
+    /// 左栏：主数字 + 倒计时 + 一行补充（唯一还带大数字的一栏）。
+    ///
+    /// 3.16.0 起主数字有两种内容（判据与 App 概览卡共用 `RockPhase.hasRemainingSessionToday`）：
+    /// ```
+    /// 今天还有场次            今天已经没有剩余场次
+    /// 23:08                  5 天后
+    /// ↘ 还有 39:27            ↘ 周六 10:08
+    /// 次日 / 周五（若有）      禁阁 · 星漠水母湾
+    /// ```
     private var mediumMainColumn: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(entry.focus?.time ?? "")
+        VStack(alignment: .leading, spacing: WidgetTheme.Redstone.mediumMainSpacing) {
+            Text(heroHeadline)
                 .font(WidgetTheme.Redstone.mediumTime)
                 .foregroundStyle(band.sky.ink)
                 .monospacedDigit()
@@ -323,11 +338,12 @@ struct RedstoneFace: View {
                     .foregroundStyle(Theme.trackArc)
                 countdownText
             }
-            if let prefix = dayPrefix {
-                Text(prefix)
+            if let sub = mediumSubLine {
+                Text(sub)
                     .font(WidgetTheme.Redstone.label)
                     .foregroundStyle(band.sky.inkDim)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             Spacer(minLength: 0)
         }
@@ -395,7 +411,9 @@ struct RedstoneFace: View {
             headRow(titleFont: WidgetTheme.Redstone.title, rateFont: WidgetTheme.Redstone.value)
                 .padding(.bottom, 12)
 
-            Text(entry.focus?.time ?? "")
+            // 3.16.0：内容可能是「5 天后」（今天已无剩余场次），**字号一个字都没改** ——
+            // 大号是 354pt 的大画布，52pt 在这里刚好；只有中号那支被缩小了。
+            Text(heroHeadline)
                 .font(WidgetTheme.Redstone.largeTime)
                 .foregroundStyle(band.sky.ink)
                 .monospacedDigit()
@@ -629,6 +647,11 @@ struct RedstoneFace: View {
 
     /// 大数字永远是**这一场的时刻**（进行中也照写，右侧多一个「进行中」小标）。
     /// 时刻是这张卡的第一信息，任何状态下都不许被替换成一句话。
+    ///
+    /// 3.16.0：只有**小号**维持这条规则。用户要的「N 天后」大字只给了中号 / 大号 ——
+    /// 158pt 见方里要塞「5 天后」+ `10:08` + 倒计时三行，34pt 会先把倒计时那行挤出去；
+    /// 小号的取舍是：主数字仍是时刻，**日期交给下面倒计时那一行**（`周六 10:08`），
+    /// 也就是"时刻 + 哪一天"照样能读出来，只是不再有一个 34pt 的「5 天后」。
     private var timeBlock: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(entry.focus?.time ?? "")
@@ -664,6 +687,9 @@ struct RedstoneFace: View {
     /// 只写 `07:08` 会被读成"今天还有一场 07:08"，那是误导。
     private var dayPrefix: String? {
         guard let focus = entry.focus else { return nil }
+        // 3.16.0：今天已经没有剩余场次时，日期由下面那行「周六 10:08」交代，
+        // 这里再挂一个「周五」小标就是同一件事说两遍（小号 158pt 尤其挤）。
+        guard hasRemainingToday else { return nil }
         let today = RedstoneClock.dayKey(entry.date)
         guard focus.date != today else { return nil }
         if focus.date == RedstoneClock.nextDayKey(today) {
@@ -671,6 +697,60 @@ struct RedstoneFace: View {
         }
         let weekday = Formatters.weekdayLabel(dayKey: focus.date)
         return weekday.isEmpty ? nil : weekday
+    }
+
+    // MARK: - 「N 天后」（3.16.0：今天没有剩余场次时，大字改成还剩几天）
+
+    /// 今天**还有**可等的场次吗（进行中 / 今天晚些）。
+    ///
+    /// 判据本身在 Shared：`RockPhase.hasRemainingSessionToday(now:)` ——
+    /// App 概览卡、中号、大号、小号全吃这一份，不会出现「手机说 5 天后、桌面说 23:08」。
+    /// **`.upcoming` 属于"今天还有"**，只有 `.endedToday`（下一场在明天或更远）才算没有了。
+    private var hasRemainingToday: Bool {
+        return entry.phase.hasRemainingSessionToday(now: entry.date)
+    }
+
+    /// 主数字文案：今天还有场 → 这一场的时刻（`23:08`）；今天已经没有了 → `5 天后` / `明天`。
+    ///
+    /// 天差算不出来（日期键是脏数据）时退回时刻：宁可少说一句，也不写「Nil 天后」。
+    /// 中号 / 大号共用这一支；**小号不读它**（小号主数字固定是时刻，见 `timeBlock` 的注释）。
+    private var heroHeadline: String {
+        guard let focus = entry.focus else { return "" }
+        if hasRemainingToday { return focus.time }
+        return RockPhase.daysAheadLabel(focus, now: entry.date) ?? focus.time
+    }
+
+    /// 下一场是「哪一天的几点」：`周六 10:08` / `明天 07:08` / `11月6日 22:08`。
+    ///
+    /// 日期口径与 App 顶部「下一场」条一致（`明日` / `周五` 用星期，超过一周写月日），
+    /// 但 Widget 引用不到 `RockPhaseText`（它在 `Features`，Widget target 不编译），
+    /// 所以这里用 Shared 里的 `Formatters.weekdayLabel` / `Formatters.dayTitle` 拼 —— 同一套数据源。
+    private var nextWhenText: String? {
+        guard let focus = entry.focus else { return nil }
+        let today = RedstoneClock.dayKey(entry.date)
+        if focus.date == today { return focus.time }
+        if focus.date == RedstoneClock.nextDayKey(today) { return "明天 " + focus.time }
+        let weekday = Formatters.weekdayLabel(dayKey: focus.date)
+        let days = RockPhase.daysAhead(focus, now: entry.date) ?? 0
+        if !weekday.isEmpty && days < 7 {
+            return weekday + " " + focus.time
+        }
+        return Formatters.dayTitle(focus.date) + " " + focus.time
+    }
+
+    /// `周六 10:08 · 禁阁·星漠水母湾` —— 大号那一行横着放得下（306pt 内容宽）。
+    private var nextDetailText: String? {
+        guard let when = nextWhenText else { return nil }
+        let map = entry.focus?.map ?? ""
+        return map.isEmpty ? when : when + " · " + map
+    }
+
+    /// 中号左栏第三行：今天还有场 → 「次日 / 周五」小标（原有逻辑，一个字没改）；
+    /// 今天已无场 → 下一场的地图名（日期已经由上一行的「周六 10:08」交代过了）。
+    private var mediumSubLine: String? {
+        if hasRemainingToday { return dayPrefix }
+        let map = entry.focus?.map ?? ""
+        return map.isEmpty ? nil : map
     }
 
     // MARK: - 时间轴弧
@@ -772,10 +852,26 @@ struct RedstoneFace: View {
                     timerLabel(text: "还有", from: entry.date, to: focus.startAt)
                 }
             case .endedToday:
-                caption("今日已结束")
+                // 3.16.0：原来是干巴巴的「今日已结束」，读者仍不知道下一场在哪天几点。
+                // 现在三档都写"哪一天的几点"：小/中号 `周六 10:08`，大号连地图一起给。
+                caption(endedTodayText)
             case .notGenerated:
                 caption("暂无后续场次")
             }
+        }
+    }
+
+    /// 「今天已无剩余场次」时，倒计时那一行改写成的文案。
+    ///
+    /// - 大号：`周六 10:08 · 禁阁·星漠水母湾` —— 这一行横向有 306pt，放得下；
+    /// - 小号 / 中号：只给 `周六 10:08`。小号 158pt 见方要塞下"5 天后 + 时刻 + 地图"会挤爆，
+    ///   中号的地图放进左栏第三行（`mediumSubLine`），这一行只负责日期。
+    private var endedTodayText: String {
+        switch family {
+        case .systemLarge:
+            return nextDetailText ?? "今日已结束"
+        default:
+            return nextWhenText ?? "今日已结束"
         }
     }
 

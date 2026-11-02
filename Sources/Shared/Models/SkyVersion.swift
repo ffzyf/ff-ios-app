@@ -53,6 +53,12 @@ struct SkyAppVersion: Decodable, Identifiable {
     let current: String?
     let latest: String?
     let previous: String?
+    /// 上一版自己的发布日期（date-only `"2026-10-21"`，可能为 null）。
+    ///
+    /// 与 `previous` 同源（服务端 v2.3.0 的版本流水）：`previous` 有值它才有值。
+    /// **不要转 Date**（时区会把 21 号漂成 20 号），展示走 `Formatters.versionDateText`。
+    /// 可空 + `try?` 解码：老快照 / 老部署没有这个键，缺键不能让整页解码失败。
+    let previousReleaseDate: String?
     /// date-only 字符串 `"2026-10-28"`，**不要转 Date**（时区会把 28 号漂成 27 号）
     let releaseDate: String?
     let checkedAt: Date?
@@ -73,6 +79,7 @@ struct SkyAppVersion: Decodable, Identifiable {
         case current
         case latest
         case previous
+        case previousReleaseDate
         case releaseDate
         case checkedAt
         case status
@@ -91,6 +98,8 @@ struct SkyAppVersion: Decodable, Identifiable {
         current = try? container.decode(String.self, forKey: .current)
         latest = try? container.decode(String.self, forKey: .latest)
         previous = try? container.decode(String.self, forKey: .previous)
+        // 老快照 / 老部署没有这个键：`try?` 解不出来就是 nil，不能让整页解码失败
+        previousReleaseDate = try? container.decode(String.self, forKey: .previousReleaseDate)
         releaseDate = try? container.decode(String.self, forKey: .releaseDate)
         checkedAt = try? container.decode(Date.self, forKey: .checkedAt)
         let rawStatus = (try? container.decode(String.self, forKey: .status)) ?? ""
