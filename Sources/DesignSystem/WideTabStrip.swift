@@ -37,8 +37,9 @@ struct WideTabStrip: View {
 
     var body: some View {
         HStack(spacing: itemSpacing) {
-            ForEach(tabs) { tab in
-                tabItem(tab)
+            // 与 `FloatingTabBar` 同一手法：按**位置**驱动，快捷键才拿得到"第几格"
+            ForEach(Array(tabs.indices), id: \.self) { index in
+                tabItem(tabs[index], position: index + 1)
             }
         }
         .padding(.horizontal, Layout.tabStripHorizontalPadding)
@@ -52,7 +53,7 @@ struct WideTabStrip: View {
 
     // MARK: - 单项
 
-    private func tabItem(_ tab: TabSpec) -> some View {
+    private func tabItem(_ tab: TabSpec, position: Int) -> some View {
         let isSelected = (selection == tab.id)
         return Button(action: {
             guard selection != tab.id else { return }
@@ -95,13 +96,27 @@ struct WideTabStrip: View {
         }
         .buttonStyle(.plain)
         // ⌘1–⌘5 切页：与底部栏**同一个键位**，用户不必记住"键盘上哪一条"。
-        // 必须挂在每个 Button 自己身上（挂包装 View 不保证进快捷键表），`tab.id + 1` 的推导
-        // 与 `FloatingTabBar` 完全一致：栏里 5 项是 0…4，快捷键要的是人读的 ⌘1…⌘5。
-        .keyboardShortcut(KeyEquivalent(Character(String(tab.id + 1))), modifiers: .command)
+        // 必须挂在每个 Button 自己身上（挂包装 View 不保证进快捷键表）。
+        // 数字取"栏内位置 + 1"（`position` 由 `body` 的下标传入），与 `FloatingTabBar.commandKey(at:)`
+        // 逐字同一套规则 —— **不按 `tab.id + 1`**：`TabSpec.id` 来自 `AppTab.rawValue`，
+        // 那里留着 earnings = 3 / articles = 5 / ai = 6 的空位，`id + 1` 会把 AI 推到 ⌘7。
+        .keyboardShortcut(commandKey(at: position), modifiers: .command)
         // 指针悬停高亮：纯叠加，不改几何与字色
         .hoverEffect(.highlight)
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+
+    /// 栏内位置（1 起）→ ⌘ 数字键。
+    ///
+    /// 与 `FloatingTabBar.commandKey(at:)` 是同一套规则的两份实现（两个组件互不依赖，
+    /// 各自 keep 一份比抽公共类型更省事：抽出来就要在 DesignSystem 里多一个 internal 类型，
+    /// 而它只服务这两个文件的各一行）。改规则时两处一起改。
+    ///
+    /// 10 项以上用 `min(position, 9)` 夹住：`Character(String(10))` 是两个字素簇，会崩。
+    private func commandKey(at position: Int) -> KeyEquivalent {
+        assert(position >= 1 && position <= 9, "Tab 栏超过 9 项时 ⌘ 数字键不够用")
+        return KeyEquivalent(Character(String(min(position, 9))))
     }
 
     // MARK: - ⌃Tab / ⌃⇧Tab

@@ -121,6 +121,39 @@ enum Endpoint {
     ///   —— 所以 App 不本地拼接，直接重拉一次总览。
     static let earningsActivityPath = "/api/app/earnings/activity"
 
+    // MARK: - AI 聊天（`/api/ai/*`）
+    //
+    // 六个端点全部归**简报站**（`briefBase` = `app.skyzyf335.top`）：AI 那一套与简报同一个
+    // Pages 项目、同一个 KV 绑定、同一个部署 —— 拆到别的站根就是多一套部署与一份密钥。
+    //
+    // 全部要求 `x-ai-token`（唯一持有者是 `Services/AIKeychain.swift`）。
+    // 注意它**不是** `x-release-token`：那个能传包、能删版本（管理权限），
+    // 绝对不能进 App；AI token 只有"问一句答一句 + 读自己的历史"这一档窄权限。
+
+    /// 模型清单 + auto 判据回显 + 今日配额（`GET`）
+    static let aiModelsPath = "/api/ai/models"
+
+    /// 流式聊天（`POST`，响应是 **SSE**：`data: {"delta":"光遇"}` … 末帧 `data: {"done":true,…}`）。
+    ///
+    /// 客户端不能走 `data(for:)`（它要等整个响应结束才返回，逐字上屏就没了），
+    /// 必须 `URLSession.bytes(for:)` + `bytes.lines`。见 `AIChatStore.performStream`。
+    static let aiChatPath = "/api/ai/chat"
+
+    /// 历史会话列表（`GET`，游标分页 `?cursor=`）
+    static let aiConversationsPath = "/api/ai/conversations"
+
+    /// 单个会话：`GET ?id=` 读详情（会话 + 全部消息），`DELETE ?id=` 删掉。
+    ///
+    /// 读写同一条路径、只靠 HTTP 方法区分（服务端 `conversation.js` 就是按方法分发的）。
+    /// 这里坚持"一个路径一个常量"，不为了命名好看拆成两条 —— 拆了一定会有一次只改一半。
+    static let aiConversationPath = "/api/ai/conversation"
+
+    /// 穿搭建议（`POST`，非流式）。
+    ///
+    /// 服务端按「坐标 + 日期」缓存 6 小时（`ai:outfit:<lat>,<lon>:<yyyyMMdd>`），
+    /// 所以同一个地方同一天问两次只花一次上游的钱。
+    static let aiOutfitPath = "/api/ai/outfit"
+
     // MARK: - 构造
 
     /// 统一的 URL 构造入口。`query` 为空时不写 `queryItems`，

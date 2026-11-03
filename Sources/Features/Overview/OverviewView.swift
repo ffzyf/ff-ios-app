@@ -10,7 +10,8 @@ import Foundation
 /// 公告横幅（远程配置下发才有，3.9.0 热更通道）
 /// ─ 32 ─
 /// 红石 medium 168                  ┐ 组内 12
-/// 简报 medium 168                  ┘
+/// 简报 medium 168                  │
+/// AI 穿搭卡（高自适应，3.28.0）      ┘
 /// ─ 32 ─
 /// 「今日一览」+ 两张 96 tile
 /// ─ 32 ─
@@ -24,6 +25,11 @@ import Foundation
 ///
 /// 职责边界不变：数据只从 `AppModel` / `RockStore` 读（页面绝不自己发请求），
 /// Tab 状态由 `RootView` 通过 `selectedTab` 注入。
+///
+/// 3.28.0 唯一的例外是首屏那张 AI 穿搭卡：它自带数据源（`AIOutfitStore`，6 小时缓存），
+/// 由**卡片自己**在"天气变了 / 回到前台"时刷新。那份数据与本站的 feed 完全无关，
+/// 塞进 `AppModel` 只会让两个不相干的网络域互相牵连（feed 失败要连带清空 AI 卡，
+/// 而那没有道理）。页面本身仍然一行请求都不发。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
     /// 尺寸模型（设计文档 §3.2）：概览是**单列**页 —— 一屏一个锚点，红石与简报并排会让
@@ -63,7 +69,7 @@ struct OverviewView: View {
                     showsSettings = true
                 }
                 announcementSlot
-                topPair
+                topGroup
                 loadedBlocks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -189,6 +195,34 @@ struct OverviewView: View {
                     openSkyRoom()
                 }
             }
+        }
+    }
+
+    // MARK: - 首屏那一组（"此刻"）
+
+    /// 首屏一组：红石卡 + 天气卡 + **AI 穿搭卡**（3.28.0）。
+    ///
+    /// ## 穿搭卡为什么放在这里
+    ///
+    /// 三个候选位置，只有这里成立：
+    /// · **放进「今日一览」那一组**：那组是"读数"（红石几场 / 距日落），穿搭卡是一段话，
+    ///   放进去会让 22pt 分区标题下面既有一行字又有两张 tile，读者分不清谁是标题的下属；
+    /// · **放在页面最下面**：它是"今天出门穿什么"，是最容易被一天开头就用到的信息，
+    ///   埋在「继续读」后面等于没有；
+    /// · **紧跟天气卡（选它）**：它和天气卡说的是同一件事的两个层次 ——
+    ///   天气卡报"今天 12°、多云"，穿搭卡说"所以穿薄外套"。两张卡挨着，
+    ///   用户不需要在大脑里做一次跳转。
+    ///
+    /// 所以它与红石卡、天气卡**同一组**（组内 12 `cardGap`），与下一组隔 32
+    /// （`sectionGapLoose`）—— 间距差本身就是"这是一组的"这句话。
+    ///
+    /// 注意：它在 `loadedBlocks` **之外**。`loadedBlocks` 会因为 feed 请求失败整块换成
+    /// 错误态，而穿搭卡的数据源（`AIOutfitStore`，POST /api/ai/outfit）与 feed 完全无关，
+    /// 没有理由被连坐 —— 首页不该因为博客挂了就少一块。
+    private var topGroup: some View {
+        VStack(alignment: .leading, spacing: Spacing.cardGap) {
+            topPair
+            AIOutfitCard()
         }
     }
 

@@ -5,7 +5,8 @@ import UIKit
 
 /// 更多（Tab 5，PRD P13）。
 ///
-/// 四行列表：问卷工作台 / 推送监控 / 设置 / 关于。
+/// 两组：「工具」= 收益（3.28.0 从底栏搬来）/ 问卷工作台 / 推送监控 / 检查更新；
+/// 「其他」= 设置 / 关于。
 ///
 /// 为什么是两个低频功能 + 设置 + 关于，而不是把它们塞进 Tab：
 /// 问卷是"发起—回收—看结果"的批次动作，监控是"抽查一下"，都不构成每日回路；
@@ -37,10 +38,20 @@ struct MoreView: View {
     /// 滚动偏移保活（B3）：由 RootView 持有字典并作为 Binding 注入。
     let scrollPosition: Binding<ScrollPosition>
 
-    /// 显式空 init：`@State` / `@ObservedObject` 都是 private 存储属性，
-    /// 会把自动生成的 memberwise init 降级成 private，跨文件 `MoreView(scrollPosition:)` 就调不到。
-    init(scrollPosition: Binding<ScrollPosition>) {
+    /// 「收益」入口（3.28.0）。收益已从底栏移出（第 3 格让给 AI），
+    /// 这一页的「工具」组里那一行是它**唯一**的入口。
+    ///
+    /// 为什么把切页动作做成闭包交给 `RootView`：Tab 选择那个 Binding 在根视图手里，
+    /// 触觉与切页动画都挂在它的 setter 里；让本页自己造一个"直接改 tab"的通道，
+    /// 就会出现"从这里进收益是硬切的、从底栏进是滑动过去的"两套手感。
+    private let onOpenEarnings: () -> Void
+
+    /// 显式 init：`@State` / `@ObservedObject` 都是 private 存储属性，
+    /// 会把自动生成的 memberwise init 降级成 private，
+    /// 跨文件 `MoreView(scrollPosition:onOpenEarnings:)` 就调不到。
+    init(scrollPosition: Binding<ScrollPosition>, onOpenEarnings: @escaping () -> Void) {
         self.scrollPosition = scrollPosition
+        self.onOpenEarnings = onOpenEarnings
     }
 
     var body: some View {
@@ -186,6 +197,15 @@ struct MoreView: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "工具")
             VStack(spacing: Spacing.gridUnit) {
+                // 收益（3.28.0）：底栏让位给 AI 之后搬到这里，排在「工具」组第一位 ——
+                // 它是一个完整的工作站（和问卷工作台同级），不该埋进「其他」里跟设置并排
+                MoreRow(
+                    icon: "chart.line.uptrend.xyaxis",
+                    title: "收益"
+                ) {
+                    onOpenEarnings()
+                }
+
                 MoreRow(
                     icon: "list.bullet.rectangle.portrait",
                     title: "问卷工作台",

@@ -303,4 +303,97 @@ enum API {
     static func earningsAuthLogout() -> URL? {
         return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.authLogoutPath)
     }
+
+    // MARK: - AI 聊天（`/api/ai/*`）
+    //
+    // 与上面所有端点同一个分工：**本层只拼地址 + 造 `URLRequest`**，
+    // 解码交给 `APIClient.send(_:as:)`（复用 `APIJSON.decoder` 与
+    // `{ok:false, error:{code,message}}` → `APIError` 的既有映射），
+    // 业务状态（`ok == false` / 流式收尾）由各自的 Store 判。
+    //
+    // 唯一的额外责任是**构造带 `x-ai-token` 的请求**。它放在这里而不是各 Store 里，
+    // 是因为"凭证只进请求头"这条纪律必须只有一处可改（风险清单第 3 条：
+    // 绝不进 URL、绝不进日志）。token 由调用方从 `AIKeychain` 取好再传进来 ——
+    // 本文件在 `Shared/` 里，会被编进小组件 target，而 `AIKeychain` 在 `Services/` 里，读不到。
+
+    /// 模型清单（`GET /api/ai/models`）：可选模型 + auto 判据 + 今日配额
+    static func aiModels() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.aiModelsPath)
+    }
+
+    /// 流式聊天（`POST /api/ai/chat`）。
+    ///
+    /// 只给地址：**不能**用 `APIClient` 发这个请求 —— 那个类的 `URLSession` 是私有且
+    /// 按普通请求配的（`timeoutIntervalForResource = 30`），会把一条正常的长回复掐断。
+    /// 流式那一发由 `AIChatStore` 用自己的 session 走 `bytes(for:)`。
+    static func aiChat() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.aiChatPath)
+    }
+
+    /// 历史会话列表（`GET /api/ai/conversations`）。
+    ///
+    /// - Parameter cursor: 上一页返回的 `nextCursor`；nil / 空串表示从第一页开始
+    ///   （空串要当"没有游标"处理，否则会拼出 `?cursor=` 这种半截参数）
+    static func aiConversations(cursor: String? = nil) -> URL? {
+        let trimmed = (cursor ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = trimmed.isEmpty ? [] : [URLQueryItem(name: "cursor", value: trimmed)]
+        return Endpoint.url(base: briefHost, path: Endpoint.aiConversationsPath, query: query)
+    }
+
+    /// 单个会话（`GET ?id=` 读详情 / `DELETE ?id=` 删除）。
+    ///
+    /// `id` 走 `URLQueryItem`，百分号转义交给 `URLComponents`（服务端 id 是 22 位
+    /// ULID 风格，理论上不会有特殊字符，但边界不猜）。
+    static func aiConversation(id: String) -> URL? {
+        return Endpoint.url(
+            base: briefHost,
+            path: Endpoint.aiConversationPath,
+            query: [URLQueryItem(name: "id", value: id)]
+        )
+    }
+
+    /// 新建一条空会话（`POST /api/ai/conversation`，无 query）。
+    ///
+    /// 聊天本身不需要它：第一轮 `POST /api/ai/chat` 会隐式建会话并在末帧回 `convId`。
+    /// 它是给"先建空会话、再逐轮写"这种形态留的口子（历史列表里的「新建」）。
+    static func aiConversationCreate() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.aiConversationPath)
+    }
+
+    /// 穿搭建议（`POST /api/ai/outfit`，非流式）
+    static func aiOutfit() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.aiOutfitPath)
+    }
+
+    /// 造一个带 `x-ai-token` 的 AI 请求（全模块唯一一处写这个头名）。
+    ///
+    /// - Parameters:
+    ///   - url: 上面几个 `ai*()` 给出的地址
+    ///   - method: `"GET"` / `"POST"` / `"DELETE"`
+    ///   - token: `AIKeychain.token()` 的返回值（**不要**在这里读 Keychain，理由见上）
+    ///   - body: 已编码好的 JSON；nil 就不带 body、也不写 `Content-Type`
+    ///   - accept: 默认 `application/json`；只有 `/api/ai/chat` 传 `text/event-stream`
+    ///
+    /// 缓存策略固定 `.reloadIgnoringLocalCacheData`：所有 AI 响应都是 `no-store`，
+    /// 用一个可能过期的缓存去回答"我刚问了什么"是最难查的一类 bug。
+    ///
+    /// 超时这里给 30 秒（普通请求的语义）；流式那一发会自己再改一次 —— 它的 30 秒是
+    /// **空闲**超时，不是整请求超时，两者的区别写在 `AIChatStore.idleTimeout` 的注释里。
+    static func aiRequest(url: URL,
+                          method: String = "GET",
+                          token: String,
+                          body: Data? = nil,
+                          accept: String = "application/json") -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 30
+        request.setValue(token, forHTTPHeaderField: "x-ai-token")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        if let body = body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        return request
+    }
 }

@@ -80,8 +80,11 @@ struct FloatingTabBar: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
-            ForEach(tabs) { tab in
-                tabItem(tab)
+            // 用**位置**而不是 `tab` 本身驱动：快捷键要的是"第几格"，位置只有在这里才知道。
+            // `Array(tabs.indices)` 而不是 `tabs.indices`：后者会撞上 `ForEach(Range<Int>)`
+            // 那条重载（它按"range 常量"优化，与我们要的 id 语义不是一回事）。
+            ForEach(Array(tabs.indices), id: \.self) { index in
+                tabItem(tabs[index], position: index + 1)
             }
         }
         // 14 而不是 10：两端多出的 4pt 全部让给最外侧项，把「圆的左边缘」往外推，
@@ -99,7 +102,7 @@ struct FloatingTabBar: View {
 
     // MARK: - 单项
 
-    private func tabItem(_ tab: TabSpec) -> some View {
+    private func tabItem(_ tab: TabSpec, position: Int) -> some View {
         let isSelected = (selection == tab.id)
         return Button(action: {
             guard selection != tab.id else { return }
@@ -132,21 +135,31 @@ struct FloatingTabBar: View {
         // ⌘1–⌘5 切页（设计文档 §7.1）。iPad 外接键盘才有意义，iPhone 上无键盘时是死代码、
         // 不占布局、不改变任何像素。
         //
-        // 为什么是 `tab.id + 1` 而不是 `tab.id`：`TabSpec.id` 来自 `AppTab.rawValue`，
-        // 栏里 5 项是 0…4（`articles` 的 rawValue 是 5 但不在栏里）。快捷键必须是人读的
-        // ⌘1…⌘5，所以 +1。写成 `tab.id` 会得到 ⌘0…⌘4 且整体错位一格。
+        // 数字取的是**栏内位置 + 1**（`position` 由 `body` 的下标传入），**不是** `tab.id + 1`。
+        // 3.28.0 修正：`TabSpec.id` 来自 `AppTab.rawValue`，而那一列刻意留着空位
+        // （`earnings = 3` / `articles = 5` / 新增的 `ai = 6`），`id + 1` 会让 AI 变成 ⌘7 ——
+        // 既跳号、又与视觉顺序（第 3 格）矛盾。快捷键表达的是"第几格"。
         //
         // 为什么不用 `.keyboardShortcut(.defaultAction)` 之类：只有"切到第 N 页"有天然的
         // 数字对应关系，其余动作刻意不配快捷键（§7.1 末段）。
-        .keyboardShortcut(
-            KeyEquivalent(Character(String(tab.id + 1))),
-            modifiers: .command
-        )
+        .keyboardShortcut(commandKey(at: position), modifiers: .command)
         // 指针悬停高亮（§7.2）：叠加在 `PressableStyle` / 裸 Button 之上，不改任何几何与字色。
         // iPad 上无指针 —— 完全无影响。
         .hoverEffect(.highlight)
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+
+    /// 栏内位置（1 起）→ ⌘ 数字键。
+    ///
+    /// 为什么单独一个函数：`KeyEquivalent` 只吃 `Character`，而"位置 → 字符"这个转换
+    /// 与"取第几格"是同一件事的两面，写在调用处会让那条注释与代码分家。
+    ///
+    /// 10 项以上用 `min(position, 9)` 夹住：`Character(String(10))` 是**两个**字素簇，
+    /// `Character` 的初始化会在运行期崩。栏里现在只有 5 项，`assert` 只在开发期兜底。
+    private func commandKey(at position: Int) -> KeyEquivalent {
+        assert(position >= 1 && position <= 9, "Tab 栏超过 9 项时 ⌘ 数字键不够用")
+        return KeyEquivalent(Character(String(min(position, 9))))
     }
 
     /// 图标 / 选中圆 / 徽标三层。

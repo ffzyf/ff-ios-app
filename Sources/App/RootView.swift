@@ -1,4 +1,8 @@
+import Combine
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// 根视图。
 ///
@@ -6,7 +10,9 @@ import SwiftUI
 /// 系统 TabBar 无法满足（隐藏系统 bar 再自绘会让安全区塌陷）。
 /// 所以：`ZStack` 内容 + `safeAreaInset(edge: .bottom)` 挂自绘 Tab 栏。
 ///
-/// 五个页面**条件渲染**（B 批次性能点 B3）：只渲染当前 `tab` 对应的 1 个页面，其余不进视图树。
+/// 页面**条件渲染**（B 批次性能点 B3）：只渲染当前 `tab` 对应的 1 个页面，其余不进视图树。
+/// 一共 7 个页面（底栏 5 项 + 不占格的「文章」「收益」），所以新增 `.ai` 后
+/// `page(for:)` 的 `switch` 必须跟着补一个 case —— `switch` 穷尽检查会当场拦住漏写。
 /// 这样「参与渲染的全屏视图」从 5 降到 1，真玻璃采样层、body 重算量都随之骤降。
 /// 滚动位置用 `RootView` 持有的 `scrollPositions` 字典保活（键值随 RootView 常驻，不随页面卸载丢），
 /// 切回 Tab 时 `ScrollView.scrollPosition(_:)` 读回上次偏移，大致回到原位。
@@ -35,6 +41,17 @@ struct RootView: View {
     /// 概览第二张卡的那个入口在 `OverviewView` 自己身上 —— 两处 `SkyRoomView(` 就是全部，
     /// 不许再挂第三个（DESIGN-RULES §4）。
     @State private var showsSkyRoom: Bool = false
+    /// 键盘是不是弹着。**只服务一件事**：底栏在键盘上要让位。
+    ///
+    /// 为什么必须有这一条（3.28.0）：`safeAreaInset(edge: .bottom)` 的内容会被键盘顶到
+    /// **键盘上方** —— 这是系统行为，不是样式问题。AI 聊天页是这个 App 里第一个
+    /// "底栏可见 + 有输入框"的一级页，不处理的话打字时画面上会出现两条横杠：
+    /// 底栏浮在键盘上方，输入框又被底栏顶高 66pt，离手指很远。
+    /// 处理办法只有一个：**键盘弹起时不挂这条 inset**（inset 高度归零，输入框直接贴住键盘）。
+    /// 收起键盘后栏自动回来，用户仍在同一页、同一个滚动位置。
+    ///
+    /// 只在窄档生效：宽档（iPad）的栏在顶部，不会被键盘顶到。
+    @State private var keyboardUp: Bool = false
     /// 天光页 present 的「排队中」标记（3.11.0 深链重入守卫）。
     ///
     /// **为什么需要 pending 守卫**：同一个 `RootView` 上挂了两个 `fullScreenCover`，
@@ -131,6 +148,8 @@ struct RootView: View {
         .onOpenURL { url in
             open(deepLink: url)
         }
+        // 键盘显隐 → `keyboardUp`（只服务"底栏给键盘让位"，理由见那个属性的注释）
+        .modifier(KeyboardVisibilityModifier(isUp: $keyboardUp))
     }
 
     // MARK: - Tab 栏（宽档顶部 / 窄档底部）
@@ -156,7 +175,8 @@ struct RootView: View {
                         .padding(.top, 6)
                 }
         } else {
-            // 窄档：今天这条，逐字不动。
+            // 窄档：与今天逐像素一致。**唯一的新增是键盘弹起时让位**（3.28.0，
+            // 见下方 `keyboardUp` 与那个 `if`）—— 其余几何、内缩、padding 一个字没动。
             //
             // 限宽 + 居中（设计文档 §2.5）。顺序不能动：
             //
@@ -168,13 +188,20 @@ struct RootView: View {
             // 在里面再塞一个 maxWidth 会和它打架，5 项就不再等分。
             pageContent
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    FloatingTabBar(tabs: tabBarTabs, selection: tabSelection)
-                        .frame(maxWidth: metrics.tabBarWidth)
-                        .padding(.horizontal, Spacing.tabBarInset)
-                        .padding(.bottom, Spacing.tabBarBottomGap)
-                        .padding(.top, 6)
-                        // 窄屏下等价于今天的满宽（父级 proposal 本来就等于可用宽度）
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    // 键盘弹起 → 整条 inset 让位（见 `keyboardUp`）。用 `if` 而不是把栏
+                    // 挪走 / 变透明：只有"不挂"才能让 inset 高度真的归零，
+                    // 变透明会留下 66pt 的空白，输入框还是被顶高。
+                    if keyboardUp {
+                        EmptyView()
+                    } else {
+                        FloatingTabBar(tabs: tabBarTabs, selection: tabSelection)
+                            .frame(maxWidth: metrics.tabBarWidth)
+                            .padding(.horizontal, Spacing.tabBarInset)
+                            .padding(.bottom, Spacing.tabBarBottomGap)
+                            .padding(.top, 6)
+                            // 窄屏下等价于今天的满宽（父级 proposal 本来就等于可用宽度）
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
                 }
         }
     }
@@ -290,6 +317,11 @@ struct RootView: View {
             OverviewView(selectedTab: $tab, scrollPosition: scrollBinding(tab))
         case .rock:
             RockCalendarView(scrollPosition: scrollBinding(tab))
+        // AI（3.28.0，第 3 格）。`onBack` 由这里注入而不是页面自己猜：
+        // 这一页是沉浸式的，左上角那个「返回」的语义是"退出这一页"，
+        // 而"退出到哪"是导航的事，只有持有 Tab 选择的 RootView 知道（回到概览）。
+        case .ai:
+            AIChatView(onBack: openOverview)
         case .brief:
             BriefView(scrollPosition: scrollBinding(tab))
         case .earnings:
@@ -297,7 +329,9 @@ struct RootView: View {
         case .articles:
             ArticlesView(scrollPosition: scrollBinding(tab), onOpenArticle: openArticle)
         case .more:
-            MoreView(scrollPosition: scrollBinding(tab))
+            // 收益已移出底栏（3.28.0），「更多」页那一行是它唯一的入口 ——
+            // 切页动作仍由这里的 `tabSelection` setter 负责（触觉与动画都在里面）
+            MoreView(scrollPosition: scrollBinding(tab), onOpenEarnings: openEarnings)
         }
     }
 
@@ -306,6 +340,22 @@ struct RootView: View {
     /// （列表接口不返回 content，PRD F3，不能拿列表数据兜底正文）。
     private func openArticle(_ article: ArticleSummary) {
         openedArticle = article
+    }
+
+    /// 回到概览（AI 页左上角「返回」的去向）。
+    ///
+    /// 走 `tabSelection` 而不是直接写 `tab = .overview`：触觉反馈与 `withAnimation(Motion.tab)`
+    /// 都在那个 Binding 的 setter 里，绕过去就会出现"从 AI 页按返回，页面是硬切过去的"。
+    private func openOverview() {
+        tabSelection.wrappedValue = AppTab.overview.rawValue
+    }
+
+    /// 打开收益页（「更多」页那一行的去向）。
+    ///
+    /// 收益 3.28.0 起不在底栏，但 `AppTab.earnings` 与它的页面都还在 ——
+    /// 这里只是把"另一个入口"接回同一条切换路径，不新建导航栈。
+    private func openEarnings() {
+        tabSelection.wrappedValue = AppTab.earnings.rawValue
     }
 
     // MARK: - 截图模式（仅 Debug 构建）
@@ -442,6 +492,9 @@ private enum AppDeepLink {
     }
 
     /// host → 落在哪个 Tab。认不出返回 nil（调用方整条忽略）
+    ///
+    /// `earnings` 保留：收益已移出底栏（3.28.0），但深链是**外部契约**（小组件里可能还有
+    /// 挂着旧 URL 的实例），删掉它等于让老链接静默失效。页面还在，跳过去仍然有内容。
     static func tab(for host: String) -> AppTab? {
         switch host {
         case "brief":
@@ -450,8 +503,40 @@ private enum AppDeepLink {
             return .rock
         case "earnings":
             return .earnings
+        case "ai":
+            return .ai
         default:
             return nil
         }
+    }
+}
+
+// MARK: - 键盘显隐
+
+/// 键盘是不是弹起来了 → 写回一个 `Bool`。
+///
+/// 为什么单独一个修饰符，而不是在 `body` 里直接挂两个 `.onReceive`：
+/// `UIResponder` 属于 UIKit，需要 `#if canImport(UIKit)` 包住；把条件塞进修饰符内部，
+/// `body` 里就只剩一行 —— 否则整条修饰器链会被 `#if` 切成两半，
+/// 而"两半里漏掉一个修饰器"是最难看出来的一种事故。
+///
+/// 为什么用通知而不是环境值：SwiftUI 没有公开的"键盘可见性"环境值。
+/// 自己包一个 `ObservableObject` 也行，但那是多一个对象、多一处注入，
+/// 而这里只需要一个 Bool、只服务一条 `if`。
+private struct KeyboardVisibilityModifier: ViewModifier {
+    @Binding var isUp: Bool
+
+    func body(content: Content) -> some View {
+        #if canImport(UIKit)
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isUp = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isUp = false
+            }
+        #else
+        content
+        #endif
     }
 }
