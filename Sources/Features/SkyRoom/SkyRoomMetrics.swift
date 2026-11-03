@@ -55,6 +55,65 @@ enum SkyRoomMetrics {
         /// 两侧暗角强度（只对宽档生效）。0.34 足够把视线收回舞台中心，
         /// 又不至于让边缘变成一条黑边。
         static let vignetteAlpha: Double = 0.34
+
+        // MARK: - 双栏（3.27.0：iPad 左右两边的大空缺）
+
+        /// 宽档**内容列**的上限（960）。**天幕不读它。**
+        ///
+        /// ## 为什么必须与 `wideStageMaxWidth`(880) 分开
+        ///
+        /// 880 是**天幕元素**（山脊 / 云 / 太阳 / 星点）的水平舞台上限：它们的水平位置全部按
+        /// `stageWidth` 缩放，一起放大到 1366 会让这几层铺得太开，山与云的疏密全变。
+        /// **地平线弧与地面不在此列**：`HorizonGround` / `HorizonEdge` 一直画满 `frame.width`
+        /// （整屏宽），所以内容列比舞台宽出的那一截，底下仍然是天与地，不是页面底色。
+        /// 但**内容列**没有这个约束 —— 卡片是矩形，多宽都成立。
+        ///
+        /// 3.27.0 第一版就是错在让内容列跟着 880 走：`cardColumnWidth = 880 − 64 = 816`，
+        /// 12.9 英寸横屏 1366 上左右各空 275pt，用户说的"两边特别大的空缺"一处都没修掉
+        /// （补记：这条注释里**不许**出现英寸那个双引号 —— `scripts/preflight.py` 的
+        /// 静态检查会把它当成字符串起点，吞掉后面几十行，报一个假的"括号没闭合"）。
+        ///
+        /// ## 960 的来历（效果图定版）
+        ///
+        /// 1024 画布上定版是 **560 + 28 + 372 = 960**，两侧各 32 的页边距
+        /// （`wideInset` 正好也是 32，所以 1024 − 32×2 = 960 恰好等于内容列上限：
+        /// 1024 上"页边距 32"与"内容封顶 960"是同一条线的两种说法）。
+        static let wideContentMaxWidth: CGFloat = 960
+
+        /// 双栏下两列之间（28）。
+        ///
+        /// 取自效果图定版 560 **+ 28 +** 372，不是 `Layout.gridGutter` 的 24：
+        /// 这是本页内部的两列，设计稿已经按 28 定过版。用 24 的话左栏会宽 4pt、
+        /// 右栏窄 4pt（560/372 → 561/375），以后跟设计稿核对时就对不上这一个数。
+        static let wideColumnGap: CGFloat = 28
+
+        /// 双栏下**左栏**占"可用宽"（内容列宽 − 栏距）的比例。
+        ///
+        /// 写成 `560 / 932` 而不是 0.6 这种小数：可用宽 = 960 − 28 = 932，
+        /// 而效果图定的是左栏 **560** —— 比例就是 560÷932（≈0.6009）。
+        /// 用 0.6 会算出 559 / 373，虽然只差 1pt，但"效果图写 560"这条以后没法再核对。
+        ///
+        /// 为什么左栏明显更宽：左栏是「此刻」（104pt 温度大字 + 气温范围 + 分钟降水），
+        /// 右栏是辅助信息（预警 / 天光弧 / 舒适度 / 风与云量 / 来源），全是 12–13pt 的文字行。
+        static let leftColumnRatio: CGFloat = 560.0 / 932.0
+
+        /// 舞台至少这么宽才允许双栏（780）。
+        ///
+        /// 判据仍读**天幕**宽度（`stageWidth`）而不是内容列：780 这条线说的是
+        /// "这一页还够不够分成左右两半"，与"内容列能放多宽"是两件事。
+        /// 780 的实体含义 = iPad mini 竖屏 744 / Stage Manager 750 级窗口保持单列，
+        /// iPad 竖屏 834 起走双栏。
+        static let twoColumnMinStageWidth: CGFloat = 780
+
+        /// 双栏内容距**安全区顶部**的预留（84）。
+        ///
+        /// 为什么不能用 `topbarReserve`（52）：那个数是"hero 内容居中之后大概落在哪儿"的经验值，
+        /// 单列时 hero 有 62% 屏高、里面还有上下两个 `Spacer`，52 只是让内容别顶到状态栏。
+        /// 双栏下 hero 换成了**自然高度**（顶部紧贴内边距），52 会让温度大字直接钻进顶栏
+        /// 的第二行（地名那一行）—— 顶栏是浮层、没有底板，钻进去就是一团重叠的字。
+        /// 84 是顶栏自己的占位：状态栏之下的 4 + 上下内边距 6×2 + 按钮 44 + 行距 3 + 第二行 ≈ 17，
+        /// 合计 80，再留 4pt 呼吸。
+        static let twoColumnTopReserve: CGFloat = 84
     }
 
     // MARK: - 滚动反馈（只动 offset / scale / opacity）
@@ -448,10 +507,59 @@ enum SkyRoomMetrics {
             return min(0.16, SkyRoomMetrics.Horizon.glowHeight / height)
         }
 
-        /// 卡片列宽度（舞台列再扣掉左右内缩）
+        /// 卡片列宽度 = **内容列**宽度。3.27.0 起与天幕（`stageWidth`）解耦。
+        ///
+        /// ```
+        /// 窄档（iPhone 393）：393 − 20×2 = 353   ← 与 3.26.0 逐像素一致
+        /// 宽档 834 竖屏      ：834 − 32×2 = 770（封顶 960 不生效，接近满宽）
+        /// 宽档 1024          ：1024 − 32×2 = 960 = 效果图的内容列
+        /// 宽档 1366          ：min(1366 − 64, 960) = 960（两侧各 203）
+        /// ```
+        ///
+        /// 为什么不再从 `stageWidth` 推：`stageWidth` 被 `wideStageMaxWidth`(880) 封顶，
+        /// 那是**天幕**的上限（地平线弧的曲率），拿它算列宽会让 1366 上的列只有 816 ——
+        /// 见 `wideContentMaxWidth` 的注释。窄档 `stageWidth == width`，
+        /// 所以换成 `width` 在 iPhone 上算出来是**同一个数**，一个像素都不动。
         var cardColumnWidth: CGFloat {
             let inset = wide ? SkyRoomMetrics.Page.wideInset : SkyRoomMetrics.Page.compactInset
-            return max(stageWidth - inset * 2, 0)
+            let available = max(width - inset * 2, 0)
+            // 窄档不封顶：iPhone 上列宽就是"屏宽 − 40"，没有第二种可能
+            return wide ? min(available, SkyRoomMetrics.Page.wideContentMaxWidth) : available
+        }
+
+        // MARK: - 双栏（3.27.0）
+
+        /// 这一帧走不走双栏。**只影响宽档**：窄档 `wide == false`，下面每个派生值都不会被读到。
+        ///
+        /// 判据是"宽档 + 舞台够宽"，不另造第二套尺寸判定：`wide` 已经由
+        /// `LayoutMetrics.usesWideCards` 决定（那是不看 idiom、只看宽度的全工程唯一判据），
+        /// 这里只补一条"两列各自还站得住"的下限（见 `twoColumnMinStageWidth`）。
+        var isTwoColumn: Bool {
+            return wide && stageWidth >= SkyRoomMetrics.Page.twoColumnMinStageWidth
+        }
+
+        /// 双栏两列加起来真正能用的宽度（= 卡片列宽扣掉**一整个**栏距 `wideColumnGap`；
+        /// 栏距只出现一次，不要理解成"每列各扣一半"）
+        private var twoColumnUsableWidth: CGFloat {
+            return max(cardColumnWidth - SkyRoomMetrics.Page.wideColumnGap, 0)
+        }
+
+        /// 双栏左栏宽（1024 / 1366 → **560**）
+        ///
+        /// 用 `.rounded()`（就近取整）而不是 `.rounded(.down)`：效果图那个 560 是
+        /// `932 × (560 / 932)` 算出来的，浮点上可能落在 559.9999… 也可能落在 560.0000…1，
+        /// 向下取整会在某些宽度上突然变成 559。
+        var leftColumnWidth: CGFloat {
+            return (twoColumnUsableWidth * SkyRoomMetrics.Page.leftColumnRatio).rounded()
+        }
+
+        /// 双栏右栏宽 = 可用宽 − 左栏（1024 / 1366 → **372**）
+        ///
+        /// 用减法而不是再乘一次比例：`left + gap + right` 必须**恒等于**内容列宽。
+        /// 两边各取整一次会留下 1pt 的缝或 1pt 的溢出 ——
+        /// 缝在 `HStack` 里就是右栏右边多出一条线。
+        var rightColumnWidth: CGFloat {
+            return max(twoColumnUsableWidth - leftColumnWidth, 0)
         }
     }
 }

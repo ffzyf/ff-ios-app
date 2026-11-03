@@ -30,6 +30,10 @@ import WidgetKit
 /// 逐层的先后顺序写死在 `SkyLightSky.body` 里（顺序错了会立刻变丑，注释里写明了为什么）：
 /// 天空 → 光晕 → **云** → 地面 → 地平线亮边 → **降水/雾/闪电** → 太阳本体 → **大气雾层** → 文字。
 /// 最后一层雾（3.16.0）盖在太阳之上：浓雾里根本看不见太阳的轮廓 —— 见 `SkyLightSky.body` 的 ⑧。
+///
+/// **缺数据时的规矩（3.27.0）**：`weatherKind == nil` 不只是"不叠云"，
+/// 雾层也必须一起关掉 —— 这条规则住在 `SkyHaze.level`（天气未知 → 0），
+/// App 内天光页与这里读同一份。**"不知道天气"应当是一片干净的天光色，而不是"阴天灰"。**
 struct SkyLightFace: View {
 
     @Environment(\.widgetFamily) private var family
@@ -395,6 +399,21 @@ struct SkyLightSky: View {
         return entry.weatherKind
     }
 
+    /// 这一帧的大气浑浊度（0…1）。
+    ///
+    /// ## "天气未知 → 0" 这条规则住在 `SkyHaze.level` 里，不在这里
+    ///
+    /// 本版第一轮修复时是**这里**自己判的（`guard weatherKind != nil`），App 内天光页
+    /// 没跟着改 —— 于是同一个病（天气接口挂了、能见度上游还活着 → 整片天被压成灰白，
+    /// 而画面上一个天气图形都没有）只在小组件上被治了一半。现在规则收进 `SkyHaze.level`，
+    /// 两个渲染出口自动一致，这里不再自己判一遍（一处规则、一处实现）。
+    ///
+    /// 代价是明确的："不知道天气"不画雾 —— 真起雾而天气接口挂掉时，天空会看着通透。
+    /// 这是"不知道 ≠ 阴天"这条纪律的必然结果，见 `SkyHaze.level` 的注释。
+    private var hazeLevel: Double {
+        return SkyHaze.level(visibilityMeters: entry.visibilityMeters, kind: weatherKind)
+    }
+
     /// 当天已经过去多少（0…1）。
     ///
     /// 云的"飘"全部由它驱动：Widget **没有持续动画**（不能起 Timer、不能 `withAnimation`），
@@ -411,8 +430,9 @@ struct SkyLightSky: View {
     var body: some View {
         let sky = Theme.sky(entry.phase)
         let mark = sunMark
-        // 大气浑浊度：能见度低 → 起雾、掉饱和、削辉光（口径与 App 内天光页完全一致）
-        let haze = SkyHaze.level(visibilityMeters: entry.visibilityMeters, kind: weatherKind)
+        // 大气浑浊度：能见度低 → 起雾、掉饱和、削辉光（口径与 App 内天光页完全一致）。
+        // **天气未知时这里是 0**（"不知道"不许画成"阴天灰"）—— 理由见 `hazeLevel`。
+        let haze = hazeLevel
         let fog = SkyHaze.tint(sky: sky)
 
         GeometryReader { proxy in
@@ -437,6 +457,10 @@ struct SkyLightSky: View {
                 //    为什么在光晕之上：光是穿过云才落到地上的，云压住光晕才有"云在前面飘"的层次；
                 //    为什么在地面之下：地面和地平线亮边是这张卡最硬的一根线，云绝不许盖住它。
                 //    着色模式下云的 α 再乘一档缩放系数（半透明色块染白后太实就是糊斑）。
+                //
+                //    `weatherKind == nil` 时整层不画：这是"缺数据不猜"，而不是"画成晴天"。
+                //    但同时必须让 ⑧ 的雾层一起归零（见 `hazeLevel`），
+                //    否则会出现"没有任何天气图形、整片天却灰蒙蒙"的自相矛盾画面。
                 if let kind = weatherKind {
                     SkyLightCloudField(kind: kind,
                                        sky: sky,
@@ -486,6 +510,9 @@ struct SkyLightSky: View {
                 // ⑧ 大气雾层（3.16.0）：能见度低时把整片天"压白压灰"。
                 //    为什么放在最上层：雾在太阳前面 —— 浓雾里根本看不见太阳的轮廓。
                 //    为什么贴地平线最重：实景里雾是贴地的，天顶反而先透。
+                //    3.27.0：`haze` 现在来自 `hazeLevel` —— **天气未知时它是 0，这一层不画**。
+                //    原来这里的依据只有能见度，于是"天气没拿到"的帧会被画成一片灰，
+                //    和"阴天"长得一模一样（用户说的"像大雾"就是这个）。
                 if haze > 0.01 {
                     let fogScale = entry.phase == .night ? 0.7 : 1.0   // 夜雾靠"压暗"，不靠"提亮"
                     LinearGradient(
@@ -776,14 +803,24 @@ private struct SkyLightCloudSpec {
     // 数量是硬上限（用户："云最多 4 朵"），所以这里只有两张写死的表，
     // 不做"按 cloudiness 算出 3.7 朵再取整"那种聪明事 —— 变化只该发生在大小与透明上。
 
-    /// 多云：2 朵，一高一低，别并排放
+    /// 多云：**3 朵**，一高一中一低，横向各自错开（3.27.0）。
+    ///
+    /// 为什么从 2 朵加到 3 朵、且整体放大（0.46/0.40 → 0.55/0.50 宽）：
+    /// 用户截图里的"多云"是**一朵云都看不见**。原来的两朵按卡宽算只有 46% / 40% 宽、
+    /// 高度 13.5% / 11.5%，在 158pt 的卡上就是两片 72×21pt 的淡色块 —— 不够读成"云"。
+    /// 第三朵放在**右下偏外**（`base 0.84`、`y 0.42`），与上面两朵既不并列也不等距：
+    /// 三朵排成一条斜线，才有"云在天上各走各的"的层次，而不是一行三个贴纸。
     static let partly: [SkyLightCloudSpec] = [
-        SkyLightCloudSpec(base: 0.15, speed: 0.28, y: 0.200, width: 0.46, height: 0.135),
-        SkyLightCloudSpec(base: 0.55, speed: 0.33, y: 0.345, width: 0.40, height: 0.115)
+        SkyLightCloudSpec(base: 0.12, speed: 0.28, y: 0.195, width: 0.55, height: 0.160),
+        SkyLightCloudSpec(base: 0.52, speed: 0.33, y: 0.330, width: 0.50, height: 0.140),
+        SkyLightCloudSpec(base: 0.84, speed: 0.26, y: 0.420, width: 0.40, height: 0.110)
     ]
 
     /// 阴 / 雷雨：4 朵铺满上半部。宽度给到 0.55 以上是为了横向互相压住，
     /// 靠"同色 alpha 叠两次"叠出"压顶"的连续感（用户要的正是这个，不是四朵孤立的云）。
+    ///
+    /// 注意最下面那朵的**下沿**必须留在地平线之上：`y 0.305 + height 0.155 / 2 = 0.38`，
+    /// 大号档地平线在 0.52、中号档在 0.62 —— 两档都有余量（`SkyLightFace.crestY`）。
     static let overcast: [SkyLightCloudSpec] = [
         SkyLightCloudSpec(base: 0.15, speed: 0.28, y: 0.155, width: 0.58, height: 0.150),
         SkyLightCloudSpec(base: 0.42, speed: 0.33, y: 0.275, width: 0.62, height: 0.160),
@@ -808,23 +845,35 @@ private struct SkyLightCloudSpec {
         }
     }
 
-    /// 单朵云的 alpha。多云给足 0.55（天空是亮的，太淡就看不见）；
-    /// 阴天压到 0.42，因为 4 朵会互相叠，单片给高会糊成一整块不透明的板。
+    /// 单朵云的 alpha。
+    ///
+    /// ## 3.27.0 的三个新值，以及"为什么阴天反而更低"
+    ///
+    /// | 类型 | 旧 | 新 | 依据 |
+    /// |---|---|---|---|
+    /// | 多云 | 0.55 | **0.76** | 天空是浅蓝、云是近白（`sky.edge` = `#EAF7FF`），0.55 落在浅蓝上几乎读不出形状 |
+    /// | 阴 | 0.42 | **0.50** | 阴的"沉"来自 4 朵宽云的**重叠覆盖**，不是单朵的浓度 |
+    /// | 雷雨 | 0.48 | **0.54** | 与阴同一套云，再叠一层 `sky.ground` 暗纱，单朵要比阴稍实一点 |
+    ///
+    /// 阴（0.50）比多云（0.76）**单朵更淡**，但整体更沉：`overcast` 是 4 朵 0.56~0.62 宽的云
+    /// 横向互相压住，重叠处 alpha 相乘叠加（0.50 叠两次 ≈ 0.75），再叠上 `thunder` 那层暗纱。
+    /// 反过来，原来 0.42 / 0.55 这一组的问题不只是"阴天看不见云"，而是**多云那两朵也看不见**
+    /// —— 多云只有 2 朵、且互不重叠，0.55 的近白色块压在亮天上是全卡最淡的东西。
     static func alpha(for kind: WeatherKind) -> Double {
         switch kind {
         case .partly:
-            return 0.55
+            return 0.76
         case .overcast:
-            return 0.42
+            return 0.50
         case .thunder:
-            return 0.48
+            return 0.54
         case .clear, .fog, .drizzle, .rain, .snow:
             return 0
         }
     }
 }
 
-/// 云层：按 weather 摆 2 朵或 4 朵，位置随当天进度缓慢横移。
+/// 云层：按 weather 摆 3 朵（多云）或 4 朵（阴 / 雷雨），位置随当天进度缓慢横移。
 private struct SkyLightCloudField: View {
 
     let kind: WeatherKind

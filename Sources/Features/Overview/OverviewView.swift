@@ -3,13 +3,13 @@ import Foundation
 
 /// 概览首页（Tab 1）。
 ///
-/// 版式（设计报告 §4.1）：**1 大 + 1 中 + N 小 + 每组一条横滑**，组间 32 / 组内 12：
+/// 版式（设计报告 §4.1，3.27.0 起上半屏改成一对**等高**卡）：组间 32 / 组内 12：
 /// ```
 /// 日期头
 /// ─ 32 ─
 /// 公告横幅（远程配置下发才有，3.9.0 热更通道）
 /// ─ 32 ─
-/// 红石 hero 240                    ┐ 组内 12
+/// 红石 medium 168                  ┐ 组内 12
 /// 简报 medium 168                  ┘
 /// ─ 32 ─
 /// 「今日一览」+ 两张 96 tile
@@ -26,8 +26,12 @@ import Foundation
 /// Tab 状态由 `RootView` 通过 `selectedTab` 注入。
 struct OverviewView: View {
     @EnvironmentObject private var model: AppModel
-    /// 尺寸模型（设计文档 §3.2）：概览是**单列**页 —— 一屏一锚点，hero 与简报并排会让
-    /// 两个"此刻"互相打架，且 240 与 168 不等高，并排必然一块矮一截。
+    /// 尺寸模型（设计文档 §3.2）：概览是**单列**页 —— 一屏一个锚点，红石与简报并排会让
+    /// 两个"此刻"互相打架。
+    ///
+    /// 注：3.27.0 起两张卡已经等高（都是 168），所以当初"240 与 168 不等高、并排必然一块矮一截"
+    /// 这条理由**不再成立** —— 单列的依据只剩"一屏一个锚点"。真要改成并排，是下一次版式决定，
+    /// 不在这次（用户只要求等高）。
     @Environment(\.layoutMetrics) private var metrics
     /// 红石数据不再由本页直读：hero 卡自己从环境取 `RockStore`。
     /// 请求仍由 `RootView` 的 task 统一发起（页面绝不自己开请求，§7.3）。
@@ -139,7 +143,16 @@ struct OverviewView: View {
     ///
     /// **宽档（rail / bento）改横排**：712 的大卡 + 344 的右栏（设计文档 §4.1）。
     /// 分叉只有这一处，两个分支里的卡片、组件、动作全部是同一批定义 —— 宽档改的是"谁在谁旁边"，
-    /// 不是"再写一套首页"。窄档分支与 3.7.0 逐字一致（纵向 hero 240 + medium 168）。
+    /// 不是"再写一套首页"。窄档分支是纵向的两张 **168** 高等高卡（3.27.0 从这里开始与 3.7.0 不同，
+    /// 见下）。
+    ///
+    /// **3.27.0：窄档红石卡 240 → 168（`tier: .hero` → `.medium`）**。
+    /// 用户过图之后要的是「红石卡与下面那张天气卡等高」：两张卡说的是同一件事（此刻），
+    /// 一高一矮却不并排，读起来就是"上半截更重要的错觉"，而红石卡里真正重要的只有
+    /// 大字 / 倒计时 / 进度轨 —— 多出来的 72pt 全给了留白。
+    /// **宽档那处一个字符都不动（仍是 `.hero` / 344）**：iPad 是横排，左 712 宽卡 + 右 344 右栏，
+    /// 344 是栅格推出来的（40 标题 + 120 tile + 12 + 172 简报），改了右栏就撑不住。
+    /// `CardTier.hero.height = 240` 也保持原值：简报页等别处还在用这一档。
     ///
     /// 判据用 `usesRail` 而不是 `gridColumns == 3`：概览的 bento 行只在"画布 ≥ 1040"时成立，
     /// 1020…1039 那条窄带里它按 §3.2 的约定退回单列（与红石 / 简报 / 更多一致）。
@@ -164,8 +177,13 @@ struct OverviewView: View {
                     )
             }
         } else {
+            // 窄档：两张 **168** 等高的卡（3.27.0 用户过图确认的版式）。
+            //
+            // 判据与卡高是同一件事的两面：这里传 `.medium`，卡内部的 `minHeight` 走
+            // `metrics.cardHeight(.medium)` = 168，与下面那张简报卡（也是 `.medium`）严格等高 ——
+            // 不需要在 VStack 上加任何 `.frame(height:)` 去"对齐"，等高是**同一档位**的自然结果。
             VStack(alignment: .leading, spacing: Spacing.cardGap) {
-                RedstoneCountdownCard(tier: .hero, onOpenRock: openRock)
+                RedstoneCountdownCard(tier: .medium, onOpenRock: openRock)
 
                 TodayBriefTrackCard(snapshot: model.todayBrief) {
                     openSkyRoom()

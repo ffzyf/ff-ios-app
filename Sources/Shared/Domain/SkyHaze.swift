@@ -23,11 +23,56 @@ import SwiftUI
 ///    只用天气类型给一个保守底值（见 `level(visibilityMeters:kind:)`）；
 /// 3. **不 import UIKit**：本文件与 Widget target 共用，只依赖 `SwiftUI` 的 `Color`
 ///    与 `Shared/UI/ColorBlend.swift` 的 `Color.blend`。
+///
+/// ## 3.27.0：「渲染」与「判定」是两个入口，不许混用
+///
+/// - `level(visibilityMeters:kind:)`（**渲染**）：`kind == nil` 时返回 **0**。
+///   不知道天气就不起雾 —— "不知道"和"雾天"是两回事。
+/// - `observedLevel(visibilityMeters:kind:)`（**判定**）：允许只凭能见度给值。
+///   `SkyViewing` 用它把观测翻成"此刻天好不好看"，那里能见度本身就是依据。
+///
+/// 为什么要分成两个而不是加个 `Bool` 参数：一个布尔在调用点读作 `haze(x, y, true)`，
+/// 三个月后没人说得清那个 `true` 是"允许只凭能见度"还是"允许兜底成晴天"。
+/// 两个名字各说一件事，调用点自解释。
 enum SkyHaze {
 
     // MARK: - 浑浊度
 
-    /// 能见度（米）+ 天气类型 → 浑浊度 0…1。
+    /// 能见度（米）+ 天气类型 → 浑浊度 0…1。**渲染层用这一个**。
+    ///
+    /// ## `kind == nil`（天气未知）时恒为 0
+    ///
+    /// 这是 3.27.0 补上的一条：能见度与天气类型走的是**两条不同的上游**
+    /// （`VisibilityProbe` 直连 Open-Meteo；天气走 `/api/app/weather`）。天气那一发
+    /// 超时 / `ok == false` / 后端没给 `code` 时它给不出 `kind`，而能见度那一发可能照样回来。
+    /// 旧实现于是只凭能见度就把 `haze` 推到 0.2…0.56：**画面上没有任何天气图形
+    /// （云、雨、雾带一个都没画），整片天却被压成灰白** —— 用户在小组件上看到的就是
+    /// 卡片写着"多云"、屏上却像大雾。同一个病在 App 内天光页也有一份。
+    ///
+    /// **"不知道"和"阴天"是两回事**：要变灰，得有"这是阴 / 雾 / 雨"的依据。
+    /// 只有能见度、没有天气类型时，"看不清远处"也可能是晴天的霾 ——
+    /// 拿它当雾画，等于替用户猜了一个天气（这条纪律与 `WeatherKind.from(code:)`
+    /// 拒绝兜底成晴天是同一条）。
+    ///
+    /// - Parameters:
+    ///   - visibilityMeters: 水平能见度（米）。nil = 没有数据（不是 0、也不是 24km）
+    ///   - kind: 天气类型。nil = 不知道什么天 → **本函数返回 0**
+    /// - Returns: 0…1 的浑浊度
+    static func level(visibilityMeters: Double?, kind: WeatherKind?) -> Double {
+        // 不知道天气 → 不改画面。判断放在最前面（早于任何曲线计算），
+        // 这样"缺数据"在代码里就是一条 return，不是一个藏在 max() 里的巧合。
+        guard let kind else { return 0 }
+        return observedLevel(visibilityMeters: visibilityMeters, kind: kind)
+    }
+
+    /// 能见度（米）+ 天气类型 → 浑浊度 0…1。**只给"把观测翻成判定"的地方用**。
+    ///
+    /// 与 `level` 的唯一区别：`kind == nil` 时**允许只凭能见度**给值。
+    /// 目前只有 `SkyViewing.verdict` 一个调用者 —— 它回答的是"此刻天好不好看"
+    /// （决定黄金时刻要不要降级、星星要不要撒），而能见度低本身就是"不好看"的
+    /// 直接观测，不需要先知道天气代码。
+    ///
+    /// **渲染层不要用它**：那会把"天气没拿到"画成"阴天灰"，正是 3.27.0 要修的东西。
     ///
     /// 两者都有时取 `max`：雾天即使上游数据说"能见度 10km"，画面也不该通透 ——
     /// 观测点与用户所在位置常常差着几公里，雾的边界又极不规则。宁可雾重一点，
@@ -42,7 +87,7 @@ enum SkyHaze {
     ///   - visibilityMeters: 水平能见度（米）。nil = 没有数据（不是 0、也不是 24km）
     ///   - kind: 天气类型。`WeatherKind.from(code:)` 认不出代码时也是 nil
     /// - Returns: 0…1 的浑浊度；两项都缺时返回 0（没有依据就不改画面）
-    static func level(visibilityMeters: Double?, kind: WeatherKind?) -> Double {
+    static func observedLevel(visibilityMeters: Double?, kind: WeatherKind?) -> Double {
         let fallback = kind.map { baseLevel(for: $0) } ?? 0
         guard let meters = visibilityMeters, meters.isFinite else { return fallback }
         let effective = effectiveVisibility(meters, kind: kind)

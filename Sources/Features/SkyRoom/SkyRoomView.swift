@@ -257,7 +257,12 @@ struct SkyRoomView: View {
         let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
         let sky = Theme.sky(phase)
         let progress = scrollProgress(height: frame.height)
-        // 大气浑浊度（0 = 通透，1 = 浓雾）：能见度 + 天气类型两路取 max，见 `SkyHaze`
+        // 大气浑浊度（0 = 通透，1 = 浓雾）：能见度 + 天气类型两路取 max，见 `SkyHaze`。
+        //
+        // **天气未知（`weatherNow?.kind == nil`）时 `SkyHaze.level` 返回 0**（3.27.0）：
+        // 这一页和天光小组件是同一个病 —— 天气接口挂了、能见度那台上游还活着的时候，
+        // 只凭能见度起雾会把整片天压成灰白，而画面上一个天气图形都没有。
+        // 规则写在 `SkyHaze.level` 里而不是这里，两个渲染出口才不会又一次各修一半。
         let haze = SkyHaze.level(visibilityMeters: visibilityMeters, kind: weatherNow?.kind)
 
         return ZStack(alignment: .top) {
@@ -309,11 +314,21 @@ struct SkyRoomView: View {
                                insets: EdgeInsets,
                                now: Date) -> some View {
         ScrollView {
-            VStack(spacing: 0) {
-                hero(sky: sky, frame: frame, insets: insets, now: now)
-                cards(sky: sky, frame: frame, now: now)
-                    .padding(.top, 6)
-                Color.clear.frame(height: SkyRoomMetrics.Page.tailPadding)
+            // 3.27.0：宽档（iPad）改**双栏**，窄档仍是原来那条纵向流水。
+            //
+            // 为什么必须分支而不是"一套能自适应的 VStack"：这一页的窄档版式已经调过很多轮
+            // （地平线 0.58、hero 62%、卡片 12 间距都是逐项量出来的），把它塞进一个
+            // 参数化的容器里，任何一个"顺手统一"的改动都会让 iPhone 漂 1–2pt。
+            // 所以窄档分支就是**原来的三行代码，一个字都没动**。
+            if frame.isTwoColumn {
+                twoColumnContent(sky: sky, frame: frame, insets: insets, now: now)
+            } else {
+                VStack(spacing: 0) {
+                    hero(sky: sky, frame: frame, insets: insets, now: now)
+                    cards(sky: sky, frame: frame, now: now)
+                        .padding(.top, 6)
+                    Color.clear.frame(height: SkyRoomMetrics.Page.tailPadding)
+                }
             }
         }
         .scrollIndicators(.hidden)
@@ -325,6 +340,78 @@ struct SkyRoomView: View {
         }
     }
 
+    // MARK: - 双栏（3.27.0）
+
+    /// 双栏内容：左「此刻」/ 右「辅助信息」。
+    ///
+    /// ```
+    /// ┌──────────────── 560 ────────────────┐  28  ┌──── 372 ────┐
+    /// │ hero：温度大字 / 现象 / 高低温        │      │ 预警（有则置顶）│
+    /// │ 气温范围卡                            │      │ 今日天光      │
+    /// │ 分钟降水卡                            │      │ 舒适度        │
+    /// │                                      │      │ 风 | 云量     │
+    /// │                                      │      │ 来源页脚      │
+    /// └──────────────────────────────────────┘      └──────────────┘
+    ///      ↑ 560 + 28 + 372 = 960 = 效果图的内容列（1024 画布，两侧各 32）
+    /// ```
+    ///
+    /// 列宽来自 `Frame.leftColumnWidth` / `rightColumnWidth`（由**内容列**切出来的，
+    /// 3.27.0 起与天幕的 880 解耦），两列加起来**恒等于** `cardColumnWidth`；
+    /// 整块内容在屏幕上居中靠 `ScrollView` 里那条 `.frame(maxWidth: .infinity)` ——
+    /// 天幕仍按 880 居中，两套宽度互不影响。
+    ///
+    /// 左栏三块回答的是**同一个问题**（现在什么天、接下来会不会下雨），右栏五块是补充与出处。
+    /// 与 iPhone 的顺序差要说清楚（别照着"和窄档一模一样"去理解）：窄档是
+    /// 「预警 → 天光 → 气温 → 分钟降水 → 舒适度 → 风|云量 → 页脚」，
+    /// 双栏把「预警 / 天光」移到右栏顶部 —— 两列是**并排**读的，预警仍在首屏、
+    /// 仍落在温度大字的右侧第一眼位置，只是不再排在天气之前。
+    /// 换句话说：双栏改的是"谁在谁旁边"，不是"把谁藏起来"。
+    ///
+    /// 两列都 `alignment: .top`：底边齐平靠**两边内容量接近**（左 3 块约 500pt、右 5 块约 520pt），
+    /// 不靠给某一列塞 `Spacer` —— `ScrollView` 里的高度提案是 nil，`Spacer` 撑不开，
+    /// 写了也只是骗自己（而且会让底边差得更多，因为两列各自从自己的自然高度算起）。
+    ///
+    /// 竖向间距沿用 `Page.cardSpacing`（12，组内节奏），**不另造**：
+    /// 双栏只是把一条竖排拆成两条，卡片之间还是同一组卡之间的同一段距离。
+    private func twoColumnContent(sky: Theme.SkyColors,
+                                  frame: SkyRoomMetrics.Frame,
+                                  insets: EdgeInsets,
+                                  now: Date) -> some View {
+        let reveal = cardReveal(height: frame.height)
+        let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
+        let topInset = insets.top + SkyRoomMetrics.Page.twoColumnTopReserve
+
+        return VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: SkyRoomMetrics.Page.wideColumnGap) {
+                VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
+                    // hero 在双栏下**不占 62% 屏高**：左栏高度由内容决定。
+                    // 否则左栏一上来就吃掉半屏，右栏那五块会被推到一个半屏之下。
+                    heroContent(sky: sky, frame: frame)
+                    temperatureCard(sky: sky, frame: frame)
+                    minutelyCard(frame: frame)
+                }
+                .frame(width: frame.leftColumnWidth, alignment: .top)
+
+                VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
+                    alertsBlock(frame: frame)
+                    daylightBlock(sky: sky, phase: phase, frame: frame, now: now)
+                    comfortBlock(frame: frame)
+                    windCloudBlock(frame: frame)
+                    sourceFooterBlock(frame: frame, now: now)
+                }
+                .frame(width: frame.rightColumnWidth, alignment: .top)
+            }
+            // 顶栏是**浮层**（没有底板）：双栏内容整体让开它，否则第一张卡会顶穿顶栏那两行。
+            // 为什么不给两列各加一次：一列一个内边距就等于两处各有一个"顶栏有多高"的猜测。
+            .padding(.top, topInset)
+
+            Color.clear.frame(height: SkyRoomMetrics.Page.tailPadding)
+        }
+        // 玻璃底板的显现进度对两列都生效（与窄档同一条曲线，见 `cardReveal`）
+        .environment(\.skyRoomGlassReveal, reveal)
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: - hero（首屏：温度大字常驻）
 
     /// hero 区高 62%（地平线在 58%）——卡片流恰好从地平线略下方开始，
@@ -334,6 +421,21 @@ struct SkyRoomView: View {
                       frame: SkyRoomMetrics.Frame,
                       insets: EdgeInsets,
                       now: Date) -> some View {
+        heroContent(sky: sky, frame: frame)
+            .padding(.top, insets.top + SkyRoomMetrics.Page.topbarReserve)
+            .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : 0)
+            .frame(height: frame.heroHeight)
+            .frame(width: frame.stageWidth)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// hero 的**内容**（温度大字 + 滚动提示 + 两者之间的弹性留白），不含任何外层尺寸约束。
+    ///
+    /// 单独抽出来的原因：窄档把它塞进 62% 屏高（上下 `Spacer` 把大字摆在中间），
+    /// 双栏下它要按**自然高度**排在左栏顶部（`Spacer` 收到 0）。
+    /// 同一段内容只写一遍，两种排法只差外层的 `.frame`。
+    private func heroContent(sky: Theme.SkyColors,
+                             frame: SkyRoomMetrics.Frame) -> some View {
         // 报告 §三：fade = y/160；温度大字 scale = 1 - fade*0.3，opacity = 1 - fade*1.25
         let fade = min(max(scrollOffset / SkyRoomMetrics.Scroll.heroFadeTravel, 0), 1)
         let gone = max(0, 1 - fade * 1.25)
@@ -352,11 +454,6 @@ struct SkyRoomView: View {
                 .opacity(1 - fade)
                 .padding(.bottom, 14)
         }
-        .padding(.top, insets.top + SkyRoomMetrics.Page.topbarReserve)
-        .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : 0)
-        .frame(height: frame.heroHeight)
-        .frame(width: frame.stageWidth)
-        .frame(maxWidth: .infinity)
     }
 
     /// 温度大字 + 现象 + 今日高低温 —— **常驻、零手势**（3.13.0 的立页之本）。
@@ -458,11 +555,29 @@ struct SkyRoomView: View {
                              frame: SkyRoomMetrics.Frame,
                              insets: EdgeInsets,
                              now: Date) -> some View {
+        // 3.27.0：双栏时顶栏改贴**内容列**（效果图就是这样）。
+        //
+        // 为什么必须跟着内容列走：内容列在 1024 / 1366 上是 960 居中（两侧各 32 / 203），
+        // 而顶栏原来贴着**屏幕**边（内缩 32）—— 1366 上关闭按钮会孤零零挂在离内容左缘
+        // 171pt 的地方，读起来像"页面的工具栏"和"页面的内容"是两件事。
+        // 双栏下把顶栏宽度也收成内容列并居中，关闭按钮就与左栏卡片左缘对齐。
+        //
+        // 内边距为什么在双栏下给 0：`cardColumnWidth` **已经**扣掉了两侧 `wideInset`，
+        // 再加一次 32 就是双份内边距（顶栏会比卡片再缩进 32）。
+        //
+        // 会不会压到卡片：不会。内容整体让开 `twoColumnTopReserve`(84) 才开始排，
+        // 而顶栏自身占位约 80（4 + 6 + 44 按钮 + 3 + 第二行 17 + 6）—— 见那个常量的注释。
+        //
+        // 居中不需要再加一层 `.frame(maxWidth: .infinity)`：`page()` 那个 ZStack 的对齐是
+        // `.top`（水平居中 + 顶部对齐），窄于屏幕的子视图自动居中。
+        // 窄档（`isTwoColumn == false`）两个实参都退回原值：内边距 20、宽度不限。
         return topBar(sky: sky, frame: frame, now: now)
-            .padding(.horizontal, frame.wide ? SkyRoomMetrics.Page.wideInset : SkyRoomMetrics.Page.compactInset)
+            .padding(.horizontal, frame.isTwoColumn
+                     ? 0
+                     : (frame.wide ? SkyRoomMetrics.Page.wideInset : SkyRoomMetrics.Page.compactInset))
             .padding(.vertical, 6)
             .padding(.top, insets.top + 4)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: frame.isTwoColumn ? frame.cardColumnWidth : .infinity)
     }
 
     /// 顶部两行：① 关闭按钮 + 阶段名 + 倒计时；② 定位箭头 + 这里是哪。
@@ -697,74 +812,122 @@ struct SkyRoomView: View {
     /// `reveal` 是本页唯一给卡片的视觉输入：0 = 底板全透明（只剩文字），1 = 白色毛玻璃全显。
     /// 曲线取 `progress` 的 0.2…0.8 段再叠一次 smoothstep —— 起步那一段手指刚动，
     /// 玻璃就"啪"地出现会很脏；缓入缓出读起来才像天光在慢慢沉淀下来。
+    ///
+    /// ## 3.27.0：拆成七块，窄档的顺序与组成一个字没变
+    ///
+    /// 双栏要按「此刻 / 辅助」把同一批卡分成两列，所以这里只保留**窄档那一条纵排**
+    /// （顺序 = 原来的顺序），每一块单独成函数（`alertsBlock` … `sourceFooterBlock`）。
+    /// 拆分的边界是"原来 VStack 里相邻的两个子视图之间"：拆完窄档渲染出来的
+    /// 子视图序列与间距序列与 3.26.0 完全一致。
     private func cards(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame, now: Date) -> some View {
         let reveal = cardReveal(height: frame.height)
         // 与 `page` / 顶栏同一个派生：时段先过天气门控（见 `SkyViewing.effective`）
         let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
         return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
-            // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
-            // 排在气温之前不是排版偏好，是优先级。
-            //
-            // 3.24.0 起这是**三态全覆盖**：有 / 无 / 拿不到。三者视觉重量递减
-            // （预警横幅 → 「当前无预警」状态行 → 「取不到」状态行），但都必须存在 ——
-            // 「没有预警」本身是一条信息，不能靠留白表达。用户原话："没有预警的话
-            // 就显示没有什么什么" —— 空白让他无法区分"今天太平"和"这功能没接"。
-            if alerts.hasAlerts {
-                // 最多列 3 条：极端天气下和风可能返回十几条，全铺开会把整页顶下去，
-                // 反而把温度这些天天要看的东西挤到两屏之外。
-                //
-                // 顺序直接用 `alerts.alerts` 的原序，不在视图里重排 ——
-                // `AlertStore` 已按服务端 severity 排好（extreme→severe→moderate→minor→unknown），
-                // 这里再排一次就是第二个"什么更要紧"的真相，两处早晚会打架。
-                ForEach(alerts.alerts.prefix(3)) { alert in
-                    SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
-                }
-                if alerts.alerts.count > 3 {
-                    Text("另有 \(alerts.alerts.count - 3) 条预警")
-                        .font(SkyRoomMetrics.TextStyle.cardDetail(frame.fontScale))
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else if alertSettled && alerts.isAvailable {
-                // 问过了、拿到了、列表是空的 —— 这才是"确实没有预警"
-                SkyRoomAlertStatusRow(state: .none,
-                                      updatedAt: alerts.updatedAt,
-                                      scale: frame.fontScale)
-            } else {
-                // 还没问 / 问了没拿到。`isAvailable == false` 时 `alerts` 会保留上一次的值
-                // （见 `AlertStore`），所以走到这里意味着真的连旧数据都没有 —— 说"不知道"
-                SkyRoomAlertStatusRow(state: .unknown,
-                                      updatedAt: nil,
-                                      scale: frame.fontScale)
-            }
-            if let times = sunTimes(now: now) {
-                SkyRoomDaylightCard(now: now,
-                                    sunrise: times.sunrise,
-                                    sunset: times.sunset,
-                                    sky: sky,
-                                    scale: frame.fontScale,
-                                    // 与顶栏同一句话：词在这里就要定型，
-                                    // 卡片不持有天气、也不该再判一次
-                                    phaseLabel: phase.label(viewing: viewingVerdict))
-            }
-            SkyRoomTemperatureCard(weather: weatherNow,
-                                   sky: sky,
-                                   scale: frame.fontScale)
-            if let rain = minutely.rain, minutely.hasData {
-                SkyRoomMinutelyCard(rain: rain, scale: frame.fontScale)
-            }
-            SkyRoomComfortCard(weather: weatherNow, scale: frame.fontScale)
-            HStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
-                SkyRoomWindCard(weather: weatherNow, scale: frame.fontScale)
-                SkyRoomCloudCard(weather: weatherNow, scale: frame.fontScale)
-            }
-            // 元信息收尾：谁说的、什么时候说的。放在最后一张卡下面，
-            // 顺序本身就是「从上到下越来越不重要」，不需要额外强调。
-            SkyRoomSourceFooter(weather: weatherNow, now: now, scale: frame.fontScale)
+            alertsBlock(frame: frame)
+            daylightBlock(sky: sky, phase: phase, frame: frame, now: now)
+            temperatureCard(sky: sky, frame: frame)
+            minutelyCard(frame: frame)
+            comfortBlock(frame: frame)
+            windCloudBlock(frame: frame)
+            sourceFooterBlock(frame: frame, now: now)
         }
         .frame(width: frame.cardColumnWidth)
         .frame(maxWidth: .infinity)
         .environment(\.skyRoomGlassReveal, reveal)
+    }
+
+    // MARK: - 卡片块（窄档纵排 / 双栏共用）
+
+    /// 预警区：**三态全覆盖**（有 / 无 / 拿不到）。
+    ///
+    /// 3.24.0 起三者视觉重量递减（预警横幅 → 「当前无预警」状态行 → 「取不到」状态行），
+    /// 但都必须存在 —— 「没有预警」本身是一条信息，不能靠留白表达。用户原话："没有预警的话
+    /// 就显示没有什么什么" —— 空白让他无法区分"今天太平"和"这功能没接"。
+    @ViewBuilder
+    private func alertsBlock(frame: SkyRoomMetrics.Frame) -> some View {
+        // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
+        // 排在气温之前不是排版偏好，是优先级。
+        if alerts.hasAlerts {
+            // 最多列 3 条：极端天气下和风可能返回十几条，全铺开会把整页顶下去，
+            // 反而把温度这些天天要看的东西挤到两屏之外。
+            //
+            // 顺序直接用 `alerts.alerts` 的原序，不在视图里重排 ——
+            // `AlertStore` 已按服务端 severity 排好（extreme→severe→moderate→minor→unknown），
+            // 这里再排一次就是第二个"什么更要紧"的真相，两处早晚会打架。
+            ForEach(alerts.alerts.prefix(3)) { alert in
+                SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+            }
+            if alerts.alerts.count > 3 {
+                Text("另有 \(alerts.alerts.count - 3) 条预警")
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(frame.fontScale))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if alertSettled && alerts.isAvailable {
+            // 问过了、拿到了、列表是空的 —— 这才是"确实没有预警"
+            SkyRoomAlertStatusRow(state: .none,
+                                  updatedAt: alerts.updatedAt,
+                                  scale: frame.fontScale)
+        } else {
+            // 还没问 / 问了没拿到。`isAvailable == false` 时 `alerts` 会保留上一次的值
+            // （见 `AlertStore`），所以走到这里意味着真的连旧数据都没有 —— 说"不知道"
+            SkyRoomAlertStatusRow(state: .unknown,
+                                  updatedAt: nil,
+                                  scale: frame.fontScale)
+        }
+    }
+
+    /// 今日天光（日出日落弧）。拿不到日出日落就整块不画 —— 弧上没有端点只是装饰
+    @ViewBuilder
+    private func daylightBlock(sky: Theme.SkyColors,
+                               phase: SkyPhase,
+                               frame: SkyRoomMetrics.Frame,
+                               now: Date) -> some View {
+        if let times = sunTimes(now: now) {
+            SkyRoomDaylightCard(now: now,
+                                sunrise: times.sunrise,
+                                sunset: times.sunset,
+                                sky: sky,
+                                scale: frame.fontScale,
+                                // 与顶栏同一句话：词在这里就要定型，
+                                // 卡片不持有天气、也不该再判一次
+                                phaseLabel: phase.label(viewing: viewingVerdict))
+        }
+    }
+
+    /// 气温范围卡（「此刻」三块里的第二块）
+    private func temperatureCard(sky: Theme.SkyColors, frame: SkyRoomMetrics.Frame) -> some View {
+        SkyRoomTemperatureCard(weather: weatherNow,
+                               sky: sky,
+                               scale: frame.fontScale)
+    }
+
+    /// 分钟降水卡：没数据 / 没下雨就整块不渲染（`MinutelyStore` 已经判过"要下雨"才带数据）
+    @ViewBuilder
+    private func minutelyCard(frame: SkyRoomMetrics.Frame) -> some View {
+        if let rain = minutely.rain, minutely.hasData {
+            SkyRoomMinutelyCard(rain: rain, scale: frame.fontScale)
+        }
+    }
+
+    /// 舒适度（体感 / 湿度 / 紫外线那几行）
+    private func comfortBlock(frame: SkyRoomMetrics.Frame) -> some View {
+        SkyRoomComfortCard(weather: weatherNow, scale: frame.fontScale)
+    }
+
+    /// 风 | 云量：并排两格。窄档与双栏都是这一个 `HStack`，间距沿用 `cardSpacing`
+    private func windCloudBlock(frame: SkyRoomMetrics.Frame) -> some View {
+        HStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
+            SkyRoomWindCard(weather: weatherNow, scale: frame.fontScale)
+            SkyRoomCloudCard(weather: weatherNow, scale: frame.fontScale)
+        }
+    }
+
+    /// 元信息收尾：谁说的、什么时候说的。放在最后一块下面 ——
+    /// 顺序本身就是「从上到下越来越不重要」，不需要额外强调。
+    private func sourceFooterBlock(frame: SkyRoomMetrics.Frame, now: Date) -> some View {
+        SkyRoomSourceFooter(weather: weatherNow, now: now, scale: frame.fontScale)
     }
 
     /// 卡片底板的显现进度（0…1），见 `cards(sky:frame:now:)` 的注释。

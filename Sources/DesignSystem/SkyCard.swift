@@ -189,6 +189,16 @@ struct SkyCardBody: View {
     /// 让"卡内最大字号 ≥20pt"这条（设计报告 R6）在小卡上也成立
     var titleFont: Font = Typography.titleS
 
+    /// 每行正文的**视觉行数**上限。默认 2（改版前的观感）。
+    ///
+    /// 3.27.0 加这个口子，是因为首页那张 168 摘要卡被自己的续文撑破了：
+    /// 它只放「1 句 + 1 行补充」，可那一行在 353pt 宽、12pt 字号下常常折成两行，
+    /// 卡片自然高度从 144 涨到 181 —— 而它上面那张红石卡是 168，两张"等高"当场失效。
+    ///
+    /// 为什么不在这里直接写死 1：这个组件理论上还要服务更高的卡（简报页 hero 260），
+    /// 在那里两行是有地方放的。**能放几行是调用方的事**，这里只负责不越过地平线。
+    var bodyLineLimit: Int = 2
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -201,7 +211,7 @@ struct SkyCardBody: View {
                 Text(line)
                     .font(Typography.caption)
                     .foregroundStyle(inkDim)
-                    .lineLimit(2)
+                    .lineLimit(bodyLineLimit)
                     .lineSpacing(Typography.lineSpacing(fontSize: 12, multiple: 1.35))
                     .multilineTextAlignment(.leading)
             }

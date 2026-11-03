@@ -18,9 +18,16 @@ import Foundation
 /// 三路输入互相独立，**任何一路说「看不见」就是看不见**：
 /// 云量说没遮，但能见度 800 米，抬头一样是白茫茫一片。所以判定取最坏那一路。
 ///
-/// 浑浊度直接复用 `SkyHaze.level` —— 那是天光页 / 小组件画雾用的同一个数。
+/// 浑浊度直接复用 `SkyHaze.observedLevel` —— 与天光页 / 小组件画雾用的是**同一条曲线**。
 /// 如果这里另立一套能见度阈值，就会出现「画面在起雾、文案说通透」的错位，
 /// 而错位比单点误差更难解释。
+///
+/// 3.27.0 起两者的**入口不同**（曲线相同，纪律不同）：
+/// · 渲染层用 `SkyHaze.level`：`kind == nil`（天气未知）时返回 0，不许把"不知道"画成雾；
+/// · 本文件用 `SkyHaze.observedLevel`：允许只凭能见度给值 —— 判定是"把观测翻成结论"，
+///   能见度 800 米本身就是"看不见"的观测，不需要先知道天气代码。
+/// 所以会出现"判定说 blocked、画面不透灰"的组合：判定降级黄金时刻、撤掉星星，
+/// 但天空仍是那片天。这是刻意的，理由见 `SkyHaze` 的文件头。
 ///
 /// ## 纪律
 ///
@@ -109,8 +116,15 @@ enum SkyViewing {
         //    雨后的霞确实好看，但"此刻正在下"时天边是灰的。
         if let kind, kind.precipitation != nil { return .blocked }
 
-        // ② 浑浊度（与天空渲染同一口径）
-        let haze = SkyHaze.level(visibilityMeters: visibilityMeters, kind: kind)
+        // ② 浑浊度。
+        //
+        // 这里刻意用 `observedLevel` 而**不是**渲染层那个 `level`：
+        // `level` 在 `kind == nil`（天气未知）时返回 0 —— 那是渲染层的纪律
+        // （不知道天气就不许把天空画成雾），而本函数回答的是"此刻天好不好看"，
+        // 能见度有值就是一条直接观测，不需要先知道天气代码。
+        // 换句话说：`kind == nil` 时本函数仍会因为"能见度 3km"判 `blocked`，
+        // 但画面上不会因此起雾 —— 判定与渲染在这里分开，是刻意的（见 `SkyHaze` 的文件头）。
+        let haze = SkyHaze.observedLevel(visibilityMeters: visibilityMeters, kind: kind)
         if haze >= Threshold.hazeBlocked { return .blocked }
 
         var worst: Verdict = haze >= Threshold.hazeVeiled ? .veiled : .clear

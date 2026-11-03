@@ -302,7 +302,12 @@ extension WidgetTheme {
         static let tintedSkyAlpha: Double = 0.35
         /// 着色模式下地面弧保留的不透明度（比天空浅一档：地面必须仍在地平线以下压得住）
         static let tintedGroundAlpha: Double = 0.22
-        /// 着色模式下云朵 α 的缩放系数（云本来就是 0.42–0.55 的半透明色块，再压一档防糊）
+        /// 着色模式下云朵 α 的缩放系数（云是 0.50–0.76 的半透明色块，再压一档防糊）。
+        ///
+        /// 3.27.0 说明：`SkyLightCloudSpec.alpha(for:)` 从 0.42–0.55 提到 0.50–0.76
+        /// （多云那一档原来在浅蓝天上几乎看不见）。这个系数**不动**：
+        /// 乘下来多云是 0.76 × 0.45 ≈ 0.34、阴天 0.50 × 0.45 ≈ 0.23，
+        /// 两者在染白的玻璃上仍读得出"多云比阴天更清楚的单朵形状"，而这个比例正是要的。
         static let tintedCloudAlphaScale: Double = 0.45
         /// 着色模式下太阳核保留的不透明度（实心圆染白后是一块死白，压到半透明才有"辉光点"层次）
         static let tintedSunAlpha: Double = 0.55
