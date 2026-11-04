@@ -495,9 +495,13 @@ final class AIChatStore: ObservableObject {
 
         let body: Data
         do {
+            // 上下文快照在**发请求的这一瞬**取：天气与账本都是 @Published，
+            // 早取一秒就可能少一次刷新，晚取又要跨 await（值会变）。这里取完立刻编码。
             body = try JSONEncoder().encode(AIChatRequest(convId: conversationId,
                                                           model: selectedModel,
-                                                          text: userText))
+                                                          text: userText,
+                                                          weather: Self.weatherSnapshot(),
+                                                          earnings: Self.earningsSnapshot()))
         } catch {
             throw AIError.server("这条消息发不出去。")
         }
@@ -572,6 +576,75 @@ final class AIChatStore: ObservableObject {
         // 走到这里 = 流被对端关掉，却始终没给 `{"done":true}`。
         // 这就是"半截回复"，**不能**标 `.done`（见类型注释第 1 条）
         throw AIError.interrupted
+    }
+
+    // MARK: - 上下文快照（随请求上传）
+
+    /// 把当前天气做成随请求上传的快照。
+    ///
+    /// 为什么标 `@MainActor`：`WeatherStore.shared.current` 是 `@Published`，
+    /// 读它必须在主线程。本类本身就是 `@MainActor`，所以 `performStream` 里
+    /// 直接 `Self.weatherSnapshot()` 就够了，不用再跳一次 actor。
+    ///
+    /// `ok == false` 时返回 nil —— 那表示"这次没拿到天气"，不是"天气是空的"。
+    /// 把一份 `ok == false` 的空壳传上去，等于让 AI 拿一张空白天气卡回答"今天穿什么"。
+    @MainActor
+    private static func weatherSnapshot() -> AIChatWeather? {
+        guard let weather = WeatherStore.shared.current, weather.ok else { return nil }
+
+        // `WeatherNow` 自己不存地名（它只认坐标），地名在 `LocationStore`。
+        // `displayName` 已经处理好"指定城市优先、其次反查当前位置"的优先级，这里不再判 mode。
+        let city = LocationStore.shared.displayName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return AIChatWeather(city: (city?.isEmpty == false) ? city : nil,
+                             temp: weather.temp,
+                             tMin: weather.tMin,
+                             tMax: weather.tMax,
+                             feelsLike: weather.feelsLike,
+                             text: weather.text,
+                             humidity: weather.humidity,
+                             wind: weather.wind,
+                             windDirText: weather.windDirText,
+                             // 分钟降水时段：`WeatherNow` 只有"过去一小时降水量"一个数，
+                             // 没有 from/to/level 的分段数组 —— 传 nil，绝不硬造
+                             precip: nil)
+    }
+
+    /// 把当前收益总览做成随请求上传的快照。
+    ///
+    /// `summary == nil` 就返回 nil：没登录、凭证过期清了缓存、还没拉到，都走这一条 ——
+    /// 服务端于是告诉模型"这次没拿到收益"，AI 就不会编一句"你这个月赚了八千"。
+    ///
+    /// 金额**原样传分**，不做 `÷100`：换算是展示层（`EarningsMoney.formatCents`）的事。
+    /// 这一层换一次、服务端 `earningsDigest` 再换一次，迟早出现两次取整对不上的账。
+    @MainActor
+    private static func earningsSnapshot() -> AIChatEarnings? {
+        guard let summary = EarningsStore.shared.summary else { return nil }
+
+        return AIChatEarnings(total: summary.total,
+                              pending: summary.pending,
+                              receivedUnclosed: summary.receivedUnclosed,
+                              closed: summary.closed,
+                              monthAdded: summary.monthAdded,
+                              activityCount: summary.activityCount,
+                              pendingActivityCount: summary.pendingActivityCount,
+                              platformCount: summary.platformCount,
+                              breakdown: summary.platformBreakdown.map {
+                                  AIChatEarningsPlatform(name: $0.name, amount: $0.amount)
+                              },
+                              updatedAt: Self.isoText(EarningsStore.shared.lastUpdated))
+    }
+
+    /// `Date` → ISO8601 字符串。服务端只把它当"这份数据是什么时候的"参考，不参与任何计算。
+    ///
+    /// 为什么每次新建 formatter 而不存一个 static：`ISO8601DateFormatter` 不是线程安全的，
+    /// 而这条路一轮对话只走一次 —— 省下的那点分配开销，换不来一份共享的可变状态。
+    private static func isoText(_ date: Date?) -> String? {
+        guard let date = date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
     }
 
     // MARK: - 流：看门狗
