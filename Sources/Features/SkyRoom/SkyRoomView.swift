@@ -169,31 +169,9 @@ struct SkyRoomView: View {
         // 强制深色后：玻璃 = 白 6% + 厚材质、文字 = 近白，与天空同一套明暗逻辑。
         .preferredColorScheme(.dark)
         .task {
-            // 0. 先补一次定位（3.26.0）：这一页常见的打开方式是"人已经开了一小时车，
-            //    停下车才把页面点开"。而定位只发生在回前台、以及下面那条 10 分钟循环里 ——
-            //    循环的第一拍要等满 10 分钟，这段时间页面会一直写着出发地的天。
-            //    `refreshIfNeeded()` 内部有 15 分钟有效期 + 60 秒冷却，绝大多数进场是纯短路；
-            //    真换了地方，`didUpdateLocations` 里那条距离判定会强制重取三份数据，
-            //    所以这里不需要它的结果，也就不阻塞后面的请求。
-            await LocationStore.shared.refreshIfNeeded()
-            // 网络请求里预警排第一：命中 `AlertStore` 的 10 分钟本地窗口时它是零成本返回，
-            // 而 `loadWeather()` 走天气整包、最长 15 秒超时。排在后面的代价不是"晚一点到"，
-            // 而是首屏一直挂着「预警数据暂时取不到」—— 那一行就在 hero 下面，第一屏看得见，
-            // 而 `AlertStore` 里可能早躺着一条暴雨预警。
-            //
-            // 串行 await 而不是 `async let`：两者的闸门都在主 actor 上判定，
-            // 并发起跑并不会真的并行，反而会多出一层 actor 跳转的复杂度。两次请求都走
-            // CDN + KV 缓存，实际耗时在百毫秒量级。
-            //
-            // `loadWeather()` 只走 `WeatherStore`，不会连带拉预警 —— 这里不存在重复触发。
-            await alerts.refresh(force: false)
-            // 请求回来（或命中 10 分钟窗口直接返回）之后才算"问过了"。
-            // 放在 await 之后而不是之前：之前置位就等于宣告"查过了"，那是自欺。
-            alertSettled = true
-            await loadWeather()
-            // 分钟降水同样轻量，但它不参与首屏的任何判断（没数据就整块不渲染），
-            // 所以留在天气之后：首屏该最先拿到的是温度那两行大字。
-            await minutely.refresh(force: false)
+            // 首屏要的三份数据在这里一次要齐（3.29.0）：三路并发，细节与"为什么并发
+            // 是真的并发"全部写在 `loadInitialData()` 上，这里只负责发起。
+            await loadInitialData()
         }
         // 天气变了就跟着重画（3.26.0）。
         //
@@ -220,19 +198,14 @@ struct SkyRoomView: View {
         .task {
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(nanoseconds: 600 * 1_000_000_000 * 10)
+                    // 10 分钟。写成 `10 * 60 * 1e9` 而不是 `600 * 1e9 * 10`：后者是 6000 s
+                    // （100 分钟）——多乘的那个 10 藏在行末，读的人不会去算，本轮询就名存实亡。
+                    try await Task.sleep(nanoseconds: 10 * 60 * 1_000_000_000)
                 } catch {
                     break
                 }
-                // 页面开着的时候人也可能在移动（车里架着手机看天）：每轮先过一遍定位闸门。
-                // 这一步是这次修复的另一半 —— 只刷天气不刷位置，会得到"新数据 + 旧坐标"。
-                // 代价可以忽略：内部有 15 分钟有效期 + 60 秒冷却，绝大多数轮次是纯短路返回。
-                await LocationStore.shared.refreshIfNeeded()
-                await WeatherStore.shared.load(force: true)
-                await MinutelyStore.shared.refresh(force: true)
-                // 预警不强制：它自己有 10 分钟窗口，正好与本轮同频；
-                // `force: true` 会绕过那个窗口，反而把额度用在重复请求上
-                await AlertStore.shared.refresh(force: false)
+                // 定位先行 + 三发并发，为什么这样排见 `refreshPolledData()`。
+                await refreshPolledData()
             }
         }
         .onAppear {
@@ -1549,6 +1522,121 @@ struct SkyRoomView: View {
     private var glowBreathAlpha: Double {
         guard !reduceMotion else { return 1 }
         return breathe ? 1 : SkyRoomMetrics.breatheFloor
+    }
+
+    // MARK: - 首屏与轮询的数据加载（3.29.0）
+
+    /// 首屏一次要三份数据：预警、天气、分钟降水。三者**互不依赖**，所以并发取。
+    ///
+    /// ## 为什么必须是 `async let`，而不是原来那样串行 `await`
+    ///
+    /// 3.28.0 及以前这里串着写，附的理由是"两者的闸门都在主 actor 上判定，并发起跑并不会
+    /// 真的并行"。**那个判断是错的**，注释已按实测结论重写：连接复用时三个接口分别是
+    /// 0.31s（预警）/ 0.31s（天气）/ 0.24s（分钟降水），串行等于三者相加 0.86s，
+    /// 再叠上首屏建连的 TLS（约 0.5s），冷启动到出数接近 1.4s；并发只取最大值，约 0.8s。
+    ///
+    /// 错在哪：`AlertStore.refresh` / `MinutelyStore.refresh` / `loadWeather()` 确实都是
+    /// `@MainActor`，但主 actor 只在"进入方法、读写状态"那一刻被占用；一旦执行到
+    /// `await` 的网络请求上，主 actor 立刻空出来去跑别的任务。两个 `async let` 子任务的
+    /// 重叠正发生在"等网络"这一段 —— 而这一段就是全部耗时所在。"闸门在主 actor 上"
+    /// 只让起跑点排个队（微秒级），不会把两个网络请求压成先后。
+    ///
+    /// ## 为什么这个函数自己也要标 `@MainActor`
+    ///
+    /// `async let` 创建的子任务**继承外层的 actor 隔离**。标了 `@MainActor`，三路才都从
+    /// 主 actor 起跑、在 `await` 处让出、回来后仍在主 actor 上写状态。不标的话子任务落在
+    /// 全局并发执行器上，`loadWeather()` 里给 `@State`（`weatherNow` / `visibilityMeters` /
+    /// `previewMoment`）赋值就成了跨 actor 写 UI 状态：`@State` 不是 `Sendable`，
+    /// 本项目 `SWIFT_STRICT_CONCURRENCY = minimal` 下编译器不会拦，但那只是"没报错"，
+    /// 不是"没问题"。标了还有个好处：主 actor 上的方法互相调用不需要额外的 hop。
+    ///
+    /// 补一句保险：即便哪天编译器改了这条继承规则，三个被调方**自己**都标着 `@MainActor`
+    /// （`AlertStore` / `MinutelyStore` 是 `@MainActor` 类，`loadWeather()` 见下），
+    /// 所以状态写入仍然落在主 actor 上 —— 正确性不押在"子任务继承隔离"这一条上，
+    /// 它只决定起跑点要不要 hop。
+    ///
+    /// ## 顺序语义（全函数只有这一处顺序是有意义的）
+    ///
+    /// 先 `await` 预警那一路，回来之后才 `alertSettled = true`。这个标记的含义是
+    /// "**问过**预警了"（见它的声明注释），提前置位等于在请求还没回来时就宣告"查过了"。
+    /// 注意它单独说谎并不会直接产出假文案 —— `alertsBlock` 里「确实没有预警」那一支
+    /// 还要 `alerts.isAvailable`，两个条件同时成立才渲染"没有预警"；settled 只是
+    /// 那道闸门的第二半，不能让它先替数据表态。天气与分钟降水不参与任何"是否查过"的
+    /// 判定，等谁不等谁无所谓，放在后面 await 只是为了让上面那条语义读下来顺序清楚。
+    ///
+    /// `loadWeather()` 里 `#if DEBUG` 的截图模式早退照旧生效：这里只是**调用**它，
+    /// 没有绕进它内部任何分支（Release 里那段代码根本不参与编译）。
+    @MainActor
+    private func loadInitialData() async {
+        // 0. 先补一次定位（3.26.0）：这一页常见的打开方式是"人已经开了一小时车，
+        //    停下车才把页面点开"。而定位只发生在回前台、以及下面那条 10 分钟循环里 ——
+        //    循环的第一拍要等满 10 分钟，这段时间页面会一直写着出发地的天。
+        //    `refreshIfNeeded()` 内部有 15 分钟有效期 + 60 秒冷却，绝大多数进场是纯短路；
+        //    真换了地方，`didUpdateLocations` 里那条距离判定会强制重取三份数据，
+        //    所以这里不需要它的结果，也就不阻塞后面的请求。
+        //    它是主 actor 上的同步方法，本函数也在主 actor 上：直接调，不加 `await`。
+        LocationStore.shared.refreshIfNeeded()
+
+        // 三路并发起跑。子任务继承本函数的 `@MainActor` 隔离，都在主 actor 上启动、
+        // 在各自的 `await` 网络处让出 —— 三个请求真正重叠，总耗时 = 最慢那一个。
+        //
+        // 返回值一律 `Void`（三个 Store 方法都不返回数据，结果走各自的 `@Published`），
+        // 所以逐个 `await` 只是为了等它结束，不需要 `_ =`。
+        async let alertResult: Void = alerts.refresh(force: false)
+        async let weatherResult: Void = loadWeather()
+        async let minutelyResult: Void = minutely.refresh(force: false)
+
+        // 预警先结算：命中 `AlertStore` 的 10 分钟本地窗口时它几乎立刻返回，而那一行状态
+        // 就贴在 hero（62% 视口高）下面、第一屏之内，越早知道越好。
+        // （原来"预警排在天气前面"是怕首屏挂着「取不到」，并发之后这个顾虑消失；
+        //   保留先 await 它只是为了下面那句 settled 的时机。）
+        await alertResult
+        // 请求回来（或命中 10 分钟窗口直接返回）之后才算"问过了"。
+        // 放在 `await` 之后而不是之前：之前置位就等于宣告"查过了"，那是自欺。
+        //
+        // 唯一一个"没真等到结果也算 settled"的分支是 `AlertStore.refresh` 的
+        // `guard !inFlight`：上一发（`startPolling` 那一轮）还在飞时它立刻返回。
+        // 这里照样置位是**故意**的 —— 反过来（挡住就不置位）更糟：
+        //   · 不置位：那一发回来只会改 `isAvailable`，settled 永远停在 false，
+        //     之后每次渲染都落在 `alertsBlock` 的 else 里，明明有数据也写「取不到」；
+        //   · 提前置位：settled 先变 true，但 isAvailable 还是 false，渲染仍是 `.unknown`
+        //     （与未 settled 时同一支），等那一发回来数据一到，显示的就正是
+        //     "确实无预警"—— 与实际一致。settled 单独为真是不会产生假文案的。
+        alertSettled = true
+
+        await weatherResult
+        await minutelyResult
+    }
+
+    /// 页面开着时的 10 分钟一轮刷新（`.task` 里那条 `while !Task.isCancelled` 调的）。
+    ///
+    /// **定位先发一次，但它并不阻塞后面三发**：`LocationStore.refreshIfNeeded()` 是主 actor
+    /// 上的**同步**方法，内部只在需要时 `requestLocation()` 把请求发出去 —— 坐标要等
+    /// `didUpdateLocations` 回调才落地，而那一刻它会 `refreshWeatherSources()` 强制重取
+    /// 三份（见 `LocationStore`）。所以"先调它"只是尽早把定位发出去，下面三发并不
+    /// 依赖它的结果，两者谁先谁后都不会产生"新坐标 + 旧数据"那种自相矛盾的一屏。
+    /// 也正因为它同步，这里**不能**写 `await`（只会换来一条 no 'async' operations 警告）。
+    /// 这一步的代价可以忽略：内部有 15 分钟有效期 + 60 秒冷却，绝大多数轮次是纯短路返回。
+    ///
+    /// 定位之后三发彼此没有依赖 —— 天气走天气整包、分钟降水走上游、预警走自己的
+    /// 10 分钟窗口，不共享请求也不共享解析结果 —— 所以并发起来总耗时 = 最慢那一个，
+    /// 而不是三者相加。`async let` 为什么在这里真的能重叠，与 `loadInitialData()` 同一个
+    /// 道理（那一处有完整解释：主 actor 只在读写状态时被占用，等网络时是空的）。
+    ///
+    /// 预警仍然 `force: false`：它自己有 10 分钟窗口，正好与本轮同频；
+    /// `force: true` 会绕过那个窗口，反而把额度用在重复请求上。
+    @MainActor
+    private func refreshPolledData() async {
+        // 主 actor 上的同步方法，本函数也在主 actor 上：直接调，不加 `await`。
+        LocationStore.shared.refreshIfNeeded()
+
+        async let weatherResult: Void = WeatherStore.shared.load(force: true)
+        async let minutelyResult: Void = MinutelyStore.shared.refresh(force: true)
+        async let alertResult: Void = AlertStore.shared.refresh(force: false)
+
+        await weatherResult
+        await minutelyResult
+        await alertResult
     }
 
     // MARK: - 天气
