@@ -516,9 +516,13 @@ extension AIStreamEvent {
 
 /// `POST /api/ai/chat` 的请求体。
 ///
-/// **没有 `weather` 字段**：契约里它标着可选但没定形状（字符串？摘要对象？），
-/// 而服务端自己会把当天天气摘要拼进 system prompt。猜一个形状发过去，
-/// 只会在某天服务端改了形状时变成 400。要传时先跟服务端把形状定下来。
+/// `weather` / `earnings` 是**这次请求的上下文快照**：服务端不会自己去查天气和账本，
+/// 它只把这两个对象压成摘要拼进 system prompt（见后端 `ai-context.js` 的
+/// `weatherDigest` / `earningsDigest`）。所以「AI 到底知不知道今天多少度、这个月赚了多少」，
+/// 唯一取决于这里有没有传。
+///
+/// 两个字段都可选且默认 nil：没定位 / 没登录收益时就**不传**，
+/// 服务端退化成「这次没拿到数据」，AI 老实说没拿到 —— 比编一个数诚实。
 struct AIChatRequest: Encodable, Sendable {
 
     /// 续聊时带上；新对话为 nil（服务端会建一条并回 `convId`）
@@ -528,10 +532,180 @@ struct AIChatRequest: Encodable, Sendable {
     let model: String
     let text: String
 
-    init(convId: String?, model: String, text: String) {
+    /// 天气快照（见 `AIChatWeather`）。nil = 这次没有可用天气
+    let weather: AIChatWeather?
+
+    /// 收益快照（见 `AIChatEarnings`）。nil = 没登录 / 还没拉到账本
+    let earnings: AIChatEarnings?
+
+    /// 两个上下文都给默认值：现有调用点（只传三件）一个字都不用改
+    init(convId: String?,
+         model: String,
+         text: String,
+         weather: AIChatWeather? = nil,
+         earnings: AIChatEarnings? = nil) {
         self.convId = convId
         self.model = model
         self.text = text
+        self.weather = weather
+        self.earnings = earnings
+    }
+}
+
+/// 随聊天请求上传的天气快照。
+///
+/// 键名与后端 `weatherDigest` 认的键**逐字对齐**（`city` / `temp` / `tMin` / …），
+/// 全部可选、缺省不占位（合成的 `Encodable` 对 Optional 用 `encodeIfPresent`）：
+/// 拿不到的那项就不发，服务端少说那一句，而不是拼出「undefined℃」——
+/// 模型会把那种串当真，再复述给用户。
+struct AIChatWeather: Encodable, Sendable {
+
+    /// 地名（"登封"）。来自 `LocationStore.displayName`
+    let city: String?
+
+    /// 当前气温
+    let temp: Double?
+
+    /// 今日最低 / 最高气温
+    let tMin: Double?
+    let tMax: Double?
+
+    /// 体感温度
+    let feelsLike: Double?
+
+    /// 天气现象（"多云"、"小雨"）
+    let text: String?
+
+    /// 相对湿度（0…100）
+    let humidity: Double?
+
+    /// 风速（m/s）
+    let wind: Double?
+
+    /// 风向中文（"东南"）。服务端已经换算好，客户端只负责透传
+    let windDirText: String?
+
+    /// 分钟级降水时段。
+    ///
+    /// `WeatherNow` 目前只有「过去一小时降水量」这一个数（`precip: Double?`），
+    /// **没有分段时段** —— 所以实际调用时这里恒为 nil。留着字段是为了将来分钟降水
+    /// 真接进来时不必再改一次请求契约；但**绝不为了填满它去硬造数据**。
+    let precip: [AIChatPrecipSlot]?
+
+    init(city: String? = nil,
+         temp: Double? = nil,
+         tMin: Double? = nil,
+         tMax: Double? = nil,
+         feelsLike: Double? = nil,
+         text: String? = nil,
+         humidity: Double? = nil,
+         wind: Double? = nil,
+         windDirText: String? = nil,
+         precip: [AIChatPrecipSlot]? = nil) {
+        self.city = city
+        self.temp = temp
+        self.tMin = tMin
+        self.tMax = tMax
+        self.feelsLike = feelsLike
+        self.text = text
+        self.humidity = humidity
+        self.wind = wind
+        self.windDirText = windDirText
+        self.precip = precip
+    }
+}
+
+/// 一个降水时段（`{from,to,level}`）。
+///
+/// 为什么不复用 `AIOutfitPrecipSlot`：那是 outfit 那份契约的从属类型。
+/// 两个请求体的字段形状今天一样，明天不一定（outfit 已经在讨论加"强度数值"），
+/// 共用之后「改 outfit 顺手改了 chat」就是一次没有任何报错的连锁事故。
+/// 类型只有三个字段，抄一份比拆依赖便宜。
+struct AIChatPrecipSlot: Encodable, Sendable, Equatable {
+
+    /// 形状未定死（"14:00"？ISO 时刻？），原样透传，不做类型假设
+    let from: String
+    let to: String
+
+    /// 强度档位（服务端自定义的名字，客户端不解释）
+    let level: String
+
+    init(from: String, to: String, level: String) {
+        self.from = from
+        self.to = to
+        self.level = level
+    }
+}
+
+/// 随聊天请求上传的收益账本快照。
+///
+/// 金额单位一律是**分**，与 `GET /api/app/earnings` 的 `summary` 完全一致 ——
+/// 客户端**不做任何换算**（换算是展示层 `EarningsMoney` 的事），
+/// 分转元发生在服务端 `earningsDigest` 里。少一层换算就少一处会对不上的账。
+///
+/// 字段都是非可选整数：`EarningsSummary` 解码时缺键已经填了 0，
+/// 到这一层再套一层 Optional 只会让调用点多写几个 `?? 0`。
+struct AIChatEarnings: Encodable, Sendable {
+
+    /// 总收益（分）≡ pending + receivedUnclosed + closed
+    let total: Int
+
+    /// 待发放 / 已到账未结 / 已结清（分）
+    let pending: Int
+    let receivedUnclosed: Int
+    let closed: Int
+
+    /// 本月新增（分）
+    let monthAdded: Int
+
+    /// 活动总数 / 未结清活动数
+    let activityCount: Int
+    let pendingActivityCount: Int
+
+    /// 平台数
+    let platformCount: Int
+
+    /// 各平台金额（分），服务端已按金额降序；这里只带前几个由服务端自己截断
+    let breakdown: [AIChatEarningsPlatform]
+
+    /// 这份数据的生成时刻（ISO8601 字符串）。nil = 不知道什么时候拉的
+    let updatedAt: String?
+
+    init(total: Int = 0,
+         pending: Int = 0,
+         receivedUnclosed: Int = 0,
+         closed: Int = 0,
+         monthAdded: Int = 0,
+         activityCount: Int = 0,
+         pendingActivityCount: Int = 0,
+         platformCount: Int = 0,
+         breakdown: [AIChatEarningsPlatform] = [],
+         updatedAt: String? = nil) {
+        self.total = total
+        self.pending = pending
+        self.receivedUnclosed = receivedUnclosed
+        self.closed = closed
+        self.monthAdded = monthAdded
+        self.activityCount = activityCount
+        self.pendingActivityCount = pendingActivityCount
+        self.platformCount = platformCount
+        self.breakdown = breakdown
+        self.updatedAt = updatedAt
+    }
+}
+
+/// 收益快照里的一个平台（名字 + 金额分）。
+struct AIChatEarningsPlatform: Encodable, Sendable {
+
+    /// 平台名（"抖音"、"哔哩哔哩"）
+    let name: String
+
+    /// 该平台金额（分）
+    let amount: Int
+
+    init(name: String, amount: Int) {
+        self.name = name
+        self.amount = amount
     }
 }
 
