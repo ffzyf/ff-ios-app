@@ -142,7 +142,7 @@ struct AIChatMessageList: View {
                 Text("今天想聊点什么？")
                     .font(Typography.titleM)
                     .foregroundStyle(Theme.textPrimary)
-                Text("天气、红石场次、今天的简报都能问，回答里会带上当天的数据。")
+                Text("我是大肥鱼。天气、穿衣、收益账本都能问，我照着你的真实数据说。")
                     .font(Typography.footnote)
                     .foregroundStyle(Theme.textTertiary)
                     .lineSpacing(Typography.lineSpacing(fontSize: 13, multiple: 1.6))
