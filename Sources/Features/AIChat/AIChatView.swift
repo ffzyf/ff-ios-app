@@ -106,8 +106,38 @@ struct AIChatView: View {
         // 模型清单：顶栏那个名字、模型面板的置灰状态都要它。
         // `loadModels()` 内部不节流，但它很便宜（一次 GET，拿清单 + auto 判据 + 配额），
         // 每次进这一页拉一次比"缓存一份可能过期的清单"更省事。
-        .task {
-            await chat.loadModels()
+        //
+        // 顺便预热天气与收益（3.30.0）。为什么 AI 页要去拉别的页面的数据：
+        // 这一页最常见的打开方式是**从底栏直接进来**，此时 `WeatherStore.shared.current`
+        // 与 `EarningsStore.shared.summary` 很可能一次都没加载过 —— 收益尤其明显，
+        // 它以前只在收益页 `load`。而这两份正是发消息时随请求上传的上下文快照
+        //（见 `AIChatStore.weatherSnapshot()` / `earningsSnapshot()`）：
+        // 不预热，用户进来第一句"这个月收益怎么样"就必然得到"没拿到数据"。
+        //
+        // 三路并发起跑，写法照 `SkyRoomView.loadInitialData()`：子任务继承闭包的
+        // `@MainActor` 隔离（主 actor 只在读写 `@Published` 那一瞬被占用，等网络时是空的），
+        // 所以三个请求真正重叠，总耗时 = 最慢那一个，而不是相加。
+        // 闭包上那行 `@MainActor` 不是装饰：`.task` 的 action 是 `@Sendable` 闭包，
+        // **不会**自动继承 body 的 actor 隔离，不标就访问不了 `WeatherStore.shared`
+        // 这类主 actor 单例（编译期直接报 isolated 错误）。
+        //
+        // 返回值一律 `Void`（三个方法都不返回数据，结果走各自的 `@Published`），
+        // 并且都**不 throws**：预热失败只是让那两份数据停在旧值 / 空缺，
+        // 不会把 `loadModels()` 已经拿到的清单一起带走。
+        //
+        // 刻意不写 `if current == nil` 之类的判断：两个 `load()` 内部都有缓存窗
+        //（120 秒左右）与 `isLoading` 闸门，重复调用是安全的；而手写"没有才加载"
+        // 会漏掉"有旧数据但已经过期"的情况 —— 那恰恰是最该重新拉的时候。
+        .task { @MainActor in
+            async let models: Void = chat.loadModels()
+            async let weather: Void = WeatherStore.shared.load()
+            async let earnings: Void = EarningsStore.shared.load()
+
+            // 模型名先结算：它决定顶栏显示什么，是用户立刻能看见的信息。
+            // 后两句纯粹是等预热落地，不参与任何 UI 判断。
+            await models
+            await weather
+            await earnings
         }
     }
 
