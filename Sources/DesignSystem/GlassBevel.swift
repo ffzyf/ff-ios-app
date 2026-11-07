@@ -88,7 +88,7 @@ struct GlassBevel<S: InsettableShape>: View {
             band(palette.right, from: .trailing, to: Self.rightEnd)
             // ④ 顶部斜面：最后画，永远最亮
             band(palette.top, from: .top, to: Self.topEnd)
-            // ⑤ 内轮廓：内缩 0.25pt 再描 0.5pt —— 落在"边界之内"，与斜面的收口处接住
+            // ⑤ 内轮廓：内缩 0.5pt 再描 0.5pt —— 紧贴外轮廓的内侧，白线是完整一根 0.5pt
             shape
                 .inset(by: Self.outlineInset)
                 .strokeBorder(palette.outlineInner, lineWidth: Self.outlineWidth)
@@ -118,29 +118,44 @@ struct GlassBevel<S: InsettableShape>: View {
     }
 
     // MARK: - 几何常量
+    //
+    // ## 已知限制（3.31.0）
+    //
+    // 这四条是 `UnitPoint` 比例停靠点，而 CSS 原型给的是**绝对 px**（顶部 `inset 0 12px`、
+    // 左右 `10px`）。比例天生不可能让 30pt 的圆钮与 354pt 的大号小组件同时精确 ——
+    // 下面的值是按 116~158pt 这个主力量级反推的，只求把最坏情况收敛到"不像错"，
+    // 真正的绝对停靠点要等 3.32.0 引入 `GeometryReader`（用实际尺寸换算 12pt / 10pt）。
 
-    /// 顶部斜面的淡出终点：只在**顶部 14% 高度**内收完。
+    /// 顶部斜面的淡出终点：顶部 **10%** 高度内收完。
     ///
-    /// 对应 CSS 的 `inset 0 12px 14px -12px`（158pt 高的卡上 12px ≈ 7.6%，
-    /// 再算上 1px blur 的余量，14% 是能让渐变"看起来有厚度但不脏"的档）。
-    /// 拖到 0.3 以上就变成一层顶纱，卡片会重新发雾。
-    private static var topEnd: UnitPoint { UnitPoint(x: 0.5, y: 0.14) }
+    /// 116pt 高的卡上是 11.6pt，最接近 CSS 的 `inset 0 12px`；158pt 上是 15.8pt（1.3×，
+    /// 仍读得出是"接光的那条边"）。取 0.14 时 354pt 的大号小组件顶部会铺开 49.6pt，
+    /// 是目标的 4 倍，整块上半部都被抬亮 —— 那是"发雾"，不是"有厚度"。
+    private static var topEnd: UnitPoint { UnitPoint(x: 0.5, y: 0.10) }
 
-    /// 左侧斜面的淡出终点：左侧 10% 宽度内收完（CSS `inset 10px 0 16px -14px`）
-    private static var leftEnd: UnitPoint { UnitPoint(x: 0.10, y: 0.5) }
+    /// 左侧斜面的淡出终点：左侧 **4%** 宽度内收完（CSS `inset 10px 0 16px -14px`）。
+    ///
+    /// 116pt 宽卡上 4.6pt、158pt 上 6.3pt；393pt 宽的导航栏上是 15.7pt（原来的 0.10 是 39pt，
+    /// 等于给栏体两侧各刷一道宽光晕，左缘比栏心亮出一个量级）。取 0.04 后这道光晕收回边缘。
+    private static var leftEnd: UnitPoint { UnitPoint(x: 0.04, y: 0.5) }
 
-    /// 右侧斜面的淡出终点：右侧 10% 宽度内收完（CSS `inset -10px 0 16px -14px`）
-    private static var rightEnd: UnitPoint { UnitPoint(x: 0.90, y: 0.5) }
+    /// 右侧斜面的淡出终点：右侧 4% 宽度内收完（CSS `inset -10px 0 16px -14px`），与左侧对称
+    private static var rightEnd: UnitPoint { UnitPoint(x: 0.96, y: 0.5) }
 
-    /// 底部暗边的淡出终点：底缘往上 14% 内收完（CSS `inset 0 -12px 16px -12px`）
-    private static var bottomEnd: UnitPoint { UnitPoint(x: 0.5, y: 0.86) }
+    /// 底部暗边的淡出终点：底缘往上 **10%** 内收完（CSS `inset 0 -12px 16px -12px`）。
+    ///
+    /// 与顶部同档：暗边和接光边必须等行程，否则卡片会读成"上厚下薄"的斜面。
+    private static var bottomEnd: UnitPoint { UnitPoint(x: 0.5, y: 0.90) }
 
-    /// 内轮廓的内缩量。0.25pt 让"内白"与"外黑"两根 0.5pt 线**部分重叠**：
-    /// 重叠区由后画的外黑覆盖，于是边界看起来是一根 0.5pt 的暗线 + 紧贴内侧的一根白线，
-    /// 中间没有缝隙 —— 有缝就会露出背景色，圆角处尤其明显。
-    private static var outlineInset: CGFloat { 0.25 }
+    /// 内轮廓的内缩量：**0.5pt** —— 与外轮廓紧邻、不重叠。
+    ///
+    /// 两根线都是 `strokeBorder`（向内画）：外轮廓占 `0~0.5pt`，内轮廓内缩 0.5 后占 `0.5~1.0pt`。
+    /// 若取 0.25，内线落在 `0.25~0.75`，其中 `0.25~0.5` 被后画的外黑盖掉 ——
+    /// 白线实际只剩 **0.25pt**，3x 屏上 0.75 个物理像素，会被抗锯齿摊成一层灰雾，
+    /// "内白外黑"的双轮廓就退化成一条脏边。
+    private static var outlineInset: CGFloat { 0.5 }
 
     /// 双轮廓的线宽，与 CSS 的 `0.5px` 对齐。
-    /// Retina 上 0.5pt = 1 个物理像素，是"能看见但不抢戏"的最小单位。
+    /// Retina 上 0.5pt = 1 个物理像素（3x 屏 1.5 个），是"能看见但不抢戏"的最小单位。
     private static var outlineWidth: CGFloat { 0.5 }
 }
