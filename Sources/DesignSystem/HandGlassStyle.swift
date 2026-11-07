@@ -21,8 +21,8 @@ import SwiftUI
 /// 而原型的"清透"恰恰来自 **blur 只有 2px** —— 天光和云的轮廓还在，只是被抬亮了。
 /// 于是这一版反过来：
 ///
-/// 1. 材质降到 **78%** 不透明度（`shape.fill(level.material).opacity(0.78)`）—— 这不是调模糊，
-///    是把"雾"的占比降下来，让底下的天光重新参与成像；
+/// 1. 材质降到 **78%** 不透明度（`level.materialOpacity`，Tab 栏 / 弹层除外，见该属性注释）
+///    —— 这不是调模糊，是把"雾"的占比降下来，让底下的天光重新参与成像；
 /// 2. 厚度改由**边的明暗分布**表达：四向内斜面 + 内白外黑 0.5pt 双轮廓（`GlassBevel`）。
 ///    旧实现只有"单条顶光描边 + 1pt 内高光"，整圈同亮度，所以看起来像一块平板；
 /// 3. 外投影同步调轻（`glassShadowSoft` 深色 35% → 20%），卡片才是"轻轻浮起"。
@@ -61,15 +61,17 @@ struct HandGlass<S: InsettableShape>: ViewModifier {
     private var fill: some View {
         shape
             // 78% 的材质 = "雾只占七成"：天光、云、地平线仍然透得出来。
+            // （Tab 栏 / 弹层例外，保留 100%，见 `GlassLevel.materialOpacity` —— 它们的底下是
+            //   滚动内容，材质一旦变薄，暗色 11pt 标签就压不住穿透的封面图了。）
             //
-            // 为什么把 `opacity` 挂在 View 层（`shape.fill(...).opacity(0.78)`）而不是写成
-            // `shape.fill(level.material.opacity(0.78))`：
+            // 为什么把 `opacity` 挂在 View 层（`shape.fill(...).opacity(...)`）而不是写成
+            // `shape.fill(level.material.opacity(...))`：
             // 后者要 `ShapeStyle.opacity(_:)`（iOS 17+），虽然目标 18.0 可用，但它在
             // `fill` 的泛型参数 S: ShapeStyle 上做类型推断，是本机无编译器时最不该赌的一行。
             // 而 `View.opacity(_:)` 是 iOS 13 就有的稳定 API，两者合成结果一致 ——
-            // 都是"把材质这一层以 78% 压到背景上"，下面的白叠层 / 染色 / sheen 不受影响。
+            // 都是"把材质这一层按这个比例压到背景上"，下面的白叠层 / 染色 / sheen 不受影响。
             .fill(level.material)
-            .opacity(0.78)
+            .opacity(level.materialOpacity)
             .overlay {
                 shape.fill(level.fillColor)
             }
