@@ -57,9 +57,17 @@ enum Theme {
     // MARK: - 玻璃层（PRD §3.2 玻璃层 7 条）
 
     /// 卡片底
-    static let glassFill = dyna(dark: ("#FFFFFF", 0.06), light: ("#FFFFFF", 0.72))
+    ///
+    /// 3.31.0（B「技能原味」配方）：深色 6% → **9%**。手工玻璃的材质降到 78% 之后
+    /// 背后的天光与云透得更多，白叠层必须略补一点，否则深色卡在亮天空上会"陷"进背景。
+    /// 借的是 CSS 原型的 14%，但我们底下还压着一层 Material，直接上 14 会过白，9% 是折中。
+    /// **浅色 72% 不动**。
+    static let glassFill = dyna(dark: ("#FFFFFF", 0.09), light: ("#FFFFFF", 0.72))
     /// 弹层 / Tab 栏
-    static let glassFillStrong = dyna(dark: ("#FFFFFF", 0.10), light: ("#FFFFFF", 0.88))
+    ///
+    /// 3.31.0：深色 10% → **12%**（理由同 `glassFill`：材质变薄后需要一点白兜住）。
+    /// 浅色 88% 不动 —— 白底上它已经接近实色，再加就没有"玻璃"可言了。
+    static let glassFillStrong = dyna(dark: ("#FFFFFF", 0.12), light: ("#FFFFFF", 0.88))
     /// 上缘描边：深色「接光」，浅色「提亮」。深色下这是玻璃与背景唯一的分界线，不能省
     static let glassStrokeTop = dyna(dark: ("#FFFFFF", 0.18), light: ("#FFFFFF", 0.90))
     /// 下缘描边
@@ -71,11 +79,47 @@ enum Theme {
     static let glassHighlightFade = dyna(dark: ("#FFFFFF", 0.00), light: ("#FFFFFF", 0.00))
     /// 玻璃顶部向内渐亮（V2 手工玻璃里写死的 white 3.5%）
     static let glassSheen = dyna(dark: ("#FFFFFF", 0.035), light: ("#FFFFFF", 0.30))
+
+    // MARK: - 玻璃斜面（3.31.0 · 「技能原味」B 配方）
+    //
+    // 厚度感 = **四向内斜面 + 0.5pt 双轮廓**，不是把 Material 加厚。
+    // 下面六个 token 一一对应 CSS 原型里的六条 inset shadow，几何由 `GlassBevel` 统一画；
+    // App 与小组件共用同一套几何，只是小组件恒深色、强度另给（见 `WidgetGlassCasing`）。
+    //
+    // 浅色为什么整体更高、底部为什么换黑：白斜面叠在白玻璃上是"白上白" ——
+    // 这就是 `glassStaticStroke` 那条老教训（浅底白描边等于没描边）。
+    // 所以浅色顶部必须推到 85% 才看得见，左右降档保住方向感，底部只能靠**黑**表达暗边。
+
+    /// 顶部内斜面 —— CSS `inset 0 12px 14px -12px rgba(255,255,255,0.50)`。
+    /// 全卡最亮的一条：光从左上斜射进来。浅色 85%（白玻璃上 50% 的白几乎不可见）。
+    static let glassBevelTop = dyna(dark: ("#FFFFFF", 0.50), light: ("#FFFFFF", 0.85))
+    /// 左侧内斜面 —— CSS `inset 10px 0 16px -14px rgba(255,255,255,0.22)`（顺光侧，次亮）。
+    /// 浅色 55%：比顶部低一档，"光从顶上来"的方向感才成立。
+    static let glassBevelLeft = dyna(dark: ("#FFFFFF", 0.22), light: ("#FFFFFF", 0.55))
+    /// 右侧内斜面 —— CSS `inset -10px 0 16px -14px rgba(255,255,255,0.12)`（逆光侧，最弱）。
+    /// 浅色 35%：右侧若与左侧同亮，四条斜面会退化成"一圈描边"，方向感全丢。
+    static let glassBevelRight = dyna(dark: ("#FFFFFF", 0.12), light: ("#FFFFFF", 0.35))
+    /// 底缘暗边 —— CSS `inset 0 -12px 16px -12px rgba(0,0,0,0.06)`。
+    /// 没有它卡片是"贴在背景上"而不是浮着：底边一旦也亮，整块就没有向下收的厚度。
+    /// 浅色 5%（比深色略低）：白底上黑影的可见度天然更高，同值会显脏。
+    static let glassBevelBottom = dyna(dark: ("#000000", 0.06), light: ("#000000", 0.05))
+    /// 0.5pt 内轮廓 —— CSS `inset 0 0 0 0.5px rgba(255,255,255,0.30)`。
+    /// 斜面负责"厚度"，轮廓负责"切边干净"，两条缺一不可。浅色 60%：同理白底要更亮。
+    static let glassOutlineInner = dyna(dark: ("#FFFFFF", 0.30), light: ("#FFFFFF", 0.60))
+    /// 0.5pt 外轮廓 —— CSS `0 0 0 0.5px rgba(0,0,0,0.12)`。
+    /// 内白 + 外黑这一对是"玻璃有实体边界"的信号。浅色 10%，且**用纯黑不用 `#1B2E3F`**：
+    /// 这是一根发丝边界线而不是投影，只有投影才需要那个灰蓝（见 `glassShadowNear`）。
+    static let glassOutlineOuter = dyna(dark: ("#000000", 0.12), light: ("#000000", 0.10))
     /// 外投影（弹层 / Tab 栏 / 导航条）
     static let glassShadow = dyna(dark: ("#000000", 0.45), light: ("#1B2E3F", 0.10))
-    /// 卡片层级的外投影比弹层轻一档（V2 `GlassLevel.card.shadowOpacity = 0.35`）。
-    /// 单独一个 token 而不是在 View 里乘 0.35，是为了让深色像素零变化。
-    static let glassShadowSoft = dyna(dark: ("#000000", 0.35), light: ("#1B2E3F", 0.08))
+    /// 卡片层级的外投影比弹层轻一档。
+    ///
+    /// 3.31.0（B 配方）：深色 0.35 → **0.20**。CSS 原型的外投影是
+    /// `0 4px 16px rgba(0,0,0,0.10)` —— 卡片是"轻轻浮起"，而 0.35 投在薄材质上
+    /// 会把刚做出来的"清透"重新压回"厚重"。浅色 0.08 不动（本来就是双层灰蓝）。
+    /// 注意 `glassShadow`（弹层 / Tab 栏）**保持 0.45 不动**：Tab 栏要压得住滚动内容，
+    /// 那是既有结论，不参与本次调薄。
+    static let glassShadowSoft = dyna(dark: ("#000000", 0.20), light: ("#1B2E3F", 0.08))
     /// 浅色专属「近场接触影」。深色下全透明 → 画了等于没画，深色零变化。
     /// PRD §3.1 第 4 条：浅色不能靠黑影做投影（发灰、显脏），必须双层灰蓝。
     static let glassShadowNear = dyna(dark: ("#000000", 0.00), light: ("#1B2E3F", 0.05))
@@ -92,6 +136,10 @@ enum Theme {
     /// 顶缘 1pt 半透高光：深底白 12% / 浅底黑 8%（任务 B1 指定的反向配色）。
     static let glassStaticHighlight = dyna(dark: ("#FFFFFF", 0.12), light: ("#0F1A26", 0.08))
     /// 1pt 描边（与高光反向）：深底黑 8% / 浅底白 12%，保证深浅双主题都"有边"。
+    ///
+    /// 3.31.0 起 `StaticGlass` 不再用它 —— 静态玻璃改画四向斜面 + 双轮廓（`GlassBevel`），
+    /// 单条 1pt 描边正是"看起来像一块平板"的旧配方。token 保留：它是深浅双主题
+    /// "都有边"这个结论的唯一定义处，删掉会让将来想回头用它的地方无处可依。
     static let glassStaticStroke = dyna(dark: ("#0F1A26", 0.08), light: ("#FFFFFF", 0.12))
 
     // MARK: - 品牌青柠（面 / 字 / 面上字 三分，PRD §3.2）
