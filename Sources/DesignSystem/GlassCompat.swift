@@ -39,7 +39,8 @@ enum GlassLevel: String, CaseIterable {
     }
 
     /// 白叠层：材质本身不够「亮」，深底上会显脏，用一层白提亮。
-    /// 深色 = 白 10% / 6%，浅色 = 白 88% / 72%（PRD §3.2 `glassFillStrong` / `glassFill`）。
+    /// 深色 = 白 12% / 9%，浅色 = 白 88% / 72%（PRD §3.2 `glassFillStrong` / `glassFill`）。
+    /// 3.31.0：深色两档各 +2% / +3%（材质降到 78% 后需要一点白兜住，见 `Theme.glassFill`）。
     var fillColor: Color {
         switch self {
         case .sheet, .floating: return Theme.glassFillStrong
@@ -47,14 +48,19 @@ enum GlassLevel: String, CaseIterable {
         }
     }
 
-    /// 顶缘描边 —— **深色背景下玻璃与背景唯一的分界线**，没有它卡片就是一块脏背景；
-    /// 浅色下换成白 90%，作用从"接光"变成"提亮"（PRD §3.2 玻璃层脚注）
+    /// 顶缘描边 —— 3.31.0 起 `HandGlass` **不再使用**：单条同亮度的描边正是
+    /// "像一块平板"的旧配方，改由 `GlassBevel` 的四向斜面 + 双轮廓表达。
+    /// 保留这三个属性（本属性与下面两条）是因为它们仍是 `GlassLevel` 的语义描述，
+    /// 且 `glassStrokeTop` / `glassStrokeBottom` / `glassHighlight` 三个 token 需要唯一出口。
     var strokeTopColor: Color { return Theme.glassStrokeTop }
 
-    /// 下缘描边。浅色用 `#0F1A26` 8%，不用白 —— 白描边压在白底上等于没有
+    /// 下缘描边。浅色用 `#0F1A26` 8%，不用白 —— 白描边压在白底上等于没有。
+    /// 3.31.0 起同样不再被 `HandGlass` 调用（底缘改由 `Theme.glassBevelBottom` 的暗边表达）。
     var strokeBottomColor: Color { return Theme.glassStrokeBottom }
 
-    /// 内侧顶部 1pt 高光（模拟折射，玻璃「有厚度」的感觉 90% 来自这两条边）
+    /// 内侧顶部 1pt 高光（模拟折射）。
+    /// 3.31.0 起不再被 `HandGlass` 调用：单条高光做不出"四向独立衰减"，
+    /// 折射改由 `GlassBevel` 的四条斜面 + 两根 0.5pt 轮廓承担。
     var highlightColor: Color { return Theme.glassHighlight }
 
     /// 外投影：投影是「浮起来」最直接的证据，比加 blur 有效得多。
@@ -68,16 +74,20 @@ enum GlassLevel: String, CaseIterable {
 
     /// 几何固定不随外观变（设计文档 §1.1.4 的取舍：浅色要求 18 而这里是 24，差 6pt 肉眼不可辨，
     /// 真正的观感目标由 `shadowColor` 换灰蓝 + 双层阴影达成）
+    ///
+    /// 3.31.0（B 配方）：`.card` 18 → **14**，`shadowY` 6 → **4**。
+    /// CSS 原型的外投影是 `0 4px 16px rgba(0,0,0,0.10)` —— 卡片的"浮"是轻浮，
+    /// 18/6 在薄材质上会读成"一层厚东西压着"。浮层 / Tab 栏（24/8）不动。
     var shadowRadius: CGFloat {
         switch self {
-        case .card: return 18
+        case .card: return 14
         default: return 24
         }
     }
 
     var shadowY: CGFloat {
         switch self {
-        case .card: return 6
+        case .card: return 4
         default: return 8
         }
     }
@@ -135,13 +145,13 @@ extension View {
 // MARK: - 二级入口（静态玻璃，不采样背景）
 
 extension View {
-    /// 二级玻璃：不采样背景，用 theme-aware 渐变填充 + 顶缘 1pt 半透高光 + 1pt 描边。
+    /// 二级玻璃：不采样背景，用 theme-aware 填充 + 顶部渐亮 + 四向斜面（`GlassBevel`）。
     ///
     /// GPU 成本 ≈ 0，视觉接近真玻璃，用于列表卡等「一屏几十张」、不需要透出滚动内容的场景。
     /// 真玻璃（`glassSurface`）保留给 Tab 栏 / 浮层 / 置顶卡（红石倒计时卡、概览顶部卡）。
     ///
-    /// 颜色全部走 Theme token：深底白线、浅底黑线由 `glassStaticHighlight` / `glassStaticStroke`
-    /// 反向给出，深浅双主题都不必在这里判外观。
+    /// 颜色全部走 Theme token：深浅两套斜面由 `Theme.glassBevel*` / `Theme.glassOutline*`
+    /// 自己解析，深浅双主题都不必在这里判外观。
     ///
     /// 这是与 `glassSurface` 并行的**另一条路径**，由调用方选择；`glassSurface` 本身不变。
     @ViewBuilder
@@ -175,11 +185,12 @@ struct GlassShadow: ViewModifier {
 
 /// 静态玻璃：不采样背景的廉价配方。
 ///
-/// 配方 = theme-aware 渐变填充 + 顶部 1pt 半透高光（深色白 12% / 浅色黑 8%）+ 1pt 描边（反向）。
+/// 配方 = theme-aware 实色填充 + 顶部渐亮 + **四向斜面 + 内白外黑 0.5pt 双轮廓**（`GlassBevel`）。
 /// 视觉接近真玻璃，但零 backdrop 采样，是「列表卡」这类一屏几十张场景的最大性能收益点（B1）。
 ///
-/// 三条叠加与 `HandGlass` 一致：填充打底 → 顶部渐亮模拟折射 → 描边做分界线 → 顶缘 1pt 内高光。
-/// 唯一区别是**不采样背景**，所以填充用 token 实色而非 `Material`，GPU 上几乎是免费的圆角矩形。
+/// 3.31.0：与真玻璃（`HandGlass`）**共用同一套斜面**，区别只剩"采不采样背景"——
+/// 之前这里是"1pt 描边 + 1pt 内高光"，深浅双主题下都只有一条边，所以静态卡看起来
+/// 比真玻璃更平。现在两者的厚度语言统一，同屏混排不会露馅。
 struct StaticGlass<S: InsettableShape>: ViewModifier {
     let shape: S
     var tint: Color?
@@ -195,32 +206,23 @@ struct StaticGlass<S: InsettableShape>: ViewModifier {
                         }
                     }
                     .overlay {
-                        // 顶部向内渐亮：模拟玻璃折射，让静态填充也有"厚度"
+                        // 顶部向内渐亮：模拟玻璃折射，让静态填充也有"厚度"。
+                        // 3.31.0：终点从 `.center` 收到 (0.5, 0.16) —— 与真玻璃的斜面节奏一致，
+                        // 拖到卡片一半高度就会变成一层顶纱，和下面的斜面重叠成灰雾。
                         shape.fill(
                             LinearGradient(
                                 colors: [Theme.glassStaticHighlight, Theme.glassHighlightFade],
                                 startPoint: .top,
-                                endPoint: .center
+                                endPoint: UnitPoint(x: 0.5, y: 0.16)
                             )
                         )
                     }
-            }
-            .overlay {
-                // 1pt 描边：深浅反向（深底白线 / 浅底黑线），玻璃与背景的分界线
-                shape.strokeBorder(Theme.glassStaticStroke, lineWidth: 1)
-            }
-            .overlay {
-                // 顶缘 1pt 内高光：与真玻璃同样的"折射感"来源
-                shape
-                    .inset(by: 0.5)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [Theme.glassStaticHighlight, Theme.glassHighlightFade],
-                            startPoint: .top,
-                            endPoint: UnitPoint(x: 0.5, y: 0.38)
-                        ),
-                        lineWidth: 1
-                    )
+                    .overlay {
+                        // 四向斜面 + 双轮廓：与真玻璃同一份实现、同一套 token。
+                        // 画在背景栈里（填充之上、内容之下）—— 理由见 `HandGlass.body`：
+                        // 斜面是"打在玻璃上的光"，不该压在文字上。
+                        GlassBevel(shape: shape)
+                    }
             }
     }
 }
