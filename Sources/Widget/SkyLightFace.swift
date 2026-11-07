@@ -198,6 +198,10 @@ struct SkyLightFace: View {
 
     /// 文字层：上排（阶段名 + 倒计时）+ 弹性留白 + 下排（大号多一行天气摘要，再接日出日落）。
     /// 中间那片留给天空 —— 参考图里没有任何元素压在地平线上。
+    ///
+    /// 3.31.0：整卡补一层玻璃罩（四向斜面 + 内白外黑双轮廓），只在 `.fullColor` 下加 ——
+    /// 透明 / 着色模式下系统会拿掉背景换成玻璃，再叠一层会发脏，也会破坏 3.8.1
+    /// 修过的"开透明只看见字"那条退路。判定与理由都在 `WidgetGlassCasing` 里。
     private var content: some View {
         VStack(spacing: 0) {
             header
@@ -211,6 +215,7 @@ struct SkyLightFace: View {
         .padding(.horizontal, sidePadding)
         .padding(.vertical, sidePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .modifier(WidgetGlassCasing(enabled: renderMode == .fullColor))
     }
 
     /// 大号底部那行「今日天气摘要」：现象 + 温度 + 高低温（3.12.0）。
