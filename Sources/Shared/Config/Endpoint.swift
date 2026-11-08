@@ -33,6 +33,15 @@ enum Endpoint {
     /// 缺了也只是"画面不动"，不会让天气卡说错话。见 `Shared/Domain/VisibilityProbe.swift`。
     static let openMeteoBase = "https://api.open-meteo.com"
 
+    /// 和风天气官网（3.32.0）。
+    ///
+    /// 只用于「数据来源」署名：和风开发者条款要求使用其服务的产品**清晰展示名称并添加超链接**，
+    /// 且署名要单独放置、不能混在正文段落里。所以这一行放在「更多 → 关于 → 数据来源」组，
+    /// 由 `UIApplication.shared.open` 打开（与 `AnnouncementBanner` / `UpdateInstaller` 同一形态）。
+    ///
+    /// 和 `openMeteoBase` 同属「不是自己家」的一类：域名写在这里，页面里只引用常量。
+    static let qweatherHome = "https://www.qweather.com"
+
     // MARK: - 路径（本批先定稿命名，批次 2/3/4 直接引用，避免各写一遍拼错）
 
     /// 红石日程（合并 schedule + rules）

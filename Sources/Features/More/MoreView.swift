@@ -472,6 +472,11 @@ struct MoreAboutSheet: View {
     @Environment(\.dismiss) private var dismiss
     /// 复制成功后的瞬时提示（与设置页同款：1.8 秒即逝）
     @State private var toast: String?
+    /// 「隐私政策与免责声明」sheet（3.32.0）。
+    ///
+    /// 为什么不并进本页正文：这份文本比整页「关于」还长一个数量级，
+    /// 混排会把「版本 / 数据来源 / 边界」这三组需要 10 秒扫完的信息淹掉。
+    @State private var showsLegal = false
 
     init() {}
 
@@ -522,12 +527,46 @@ struct MoreAboutSheet: View {
                             ) {
                                 copyToPasteboard(API.surveyHost)
                             }
+                            // 天气数据来自和风。开发者条款要求**展示名称 + 可点击超链接**，
+                            // 且署名要单独放置、不能混进正文段落 —— 所以这一行是独立的一行，
+                            // 点一下打开 qweather.com（域名取自 `Endpoint.qweatherHome`）。
+                            GlassListRow(
+                                icon: "wind",
+                                title: "天气数据",
+                                detail: "和风天气 QWeather",
+                                showsChevron: false
+                            ) {
+                                openQWeatherHome()
+                            }
                         }
                         Text("点一下域名可以复制。App 只读这些数据，不会改动任何一篇内容。")
                             .font(Typography.captionXS)
                             .foregroundStyle(Theme.textTertiary)
                             .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
                             .padding(.horizontal, 4)
+                        Text("天气服务由和风天气 QWeather 驱动。")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textTertiary)
+                            .padding(.horizontal, 4)
+                    }
+
+                    // MARK: 法律信息（3.32.0）
+                    //
+                    // 「设置只留可操作项，说明性内容进关于」是本工程的既有原则（见 SettingsView 头注释）。
+                    // 隐私政策属于"读一次就够、但必须随时找得到"的一类，所以挂在关于页而不是设置页；
+                    // 从主界面到这份文本是 3 次点击（Tab → 关于 → 本条），满足《认定方法》
+                    // 「不得多于 4 次点击」的要求。
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("法律信息")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textTertiary)
+                        GlassListRow(
+                            icon: "checkmark.shield",
+                            title: "隐私政策与免责声明",
+                            detail: "更新于 \(LegalDocument.updatedAt)"
+                        ) {
+                            showsLegal = true
+                        }
                     }
 
                     // MARK: 边界说明（原设置页「关于」卡 + 页脚署名 + 只读边界，原句未改）
@@ -569,6 +608,10 @@ struct MoreAboutSheet: View {
             withAnimation(Motion.glassOut) {
                 toast = nil
             }
+        }
+        // 法律文本用 sheet 叠在关于页上：关掉就回到关于，不用重进一次「更多」。
+        .sheet(isPresented: $showsLegal) {
+            PrivacyLegalSheet()
         }
     }
 
@@ -629,5 +672,17 @@ struct MoreAboutSheet: View {
         withAnimation(Motion.glassIn) {
             toast = "已复制 \(value)"
         }
+    }
+
+    /// 打开和风天气官网 —— 不是"提供更多信息"，是**许可协议要求的可点击署名**。
+    ///
+    /// 用 `UIApplication.shared.open` 而不是 `Link` / `openURL`：
+    /// 与 `AnnouncementBanner.openLink()`、`UpdateInstaller` 保持同一种打开方式，
+    /// 避免同一工程里出现两套外链行为（一套走系统浏览器、一套走应用内 SFSafariViewController）。
+    private func openQWeatherHome() {
+        #if canImport(UIKit)
+        guard let url = URL(string: Endpoint.qweatherHome) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        #endif
     }
 }

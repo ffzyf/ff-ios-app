@@ -69,6 +69,12 @@ struct FFWangApp: App {
                         .sheet(item: $update.presentedRelease) { release in
                             UpdateSheet(release: release)
                         }
+                        // 首次启动的法律告知（3.32.0）。
+                        //
+                        // 位置与更新弹层同级：**在 `RootView()` 外面** —— 同意之前不该有任何页面
+                        // 已初始化（尤其天气的定位），否则就等于"先采集、后告知"，
+                        // 正是《App 违法违规收集使用个人信息行为认定方法》里「未经用户同意收集」那条。
+                        .legalConsentGate()
                 }
             }
             .environmentObject(model)
