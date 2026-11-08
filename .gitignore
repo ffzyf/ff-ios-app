@@ -3,3 +3,6 @@ build/
 Payload/
 *.ipa
 .DS_Store
+build-artifact.zip
+__pycache__/
+*.pyc
