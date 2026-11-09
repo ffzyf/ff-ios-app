@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 // MARK: - 文案口径
 
@@ -133,9 +134,15 @@ struct NextEventBar: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let phase = RedstoneTimeline.phase(in: days, now: context.date)
+            // 只有「进行中」才值得动：下一场在几小时后，图标不该一直呼吸——
+            // 一直动的东西等于没有动（常驻动效会退化成背景噪音）。
+            let ongoing: Bool = {
+                if case .ongoing = phase { return true }
+                return false
+            }()
             GlassCard(level: .card) {
                 HStack(alignment: .center, spacing: 12) {
-                    icon
+                    icon(active: ongoing)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(RockPhaseText.headline(phase, now: context.date))
                             .font(Typography.footnoteMedium)
@@ -149,15 +156,52 @@ struct NextEventBar: View {
                 .padding(.horizontal, Spacing.cardPadding)
                 .padding(.vertical, 14)
             }
+            // 场次从「下一场」翻成「进行中」的瞬间给一次触觉——
+            // 这是这条 bar 上唯一真正发生"事件"的时刻，其余都只是数字变化。
+            // 用 `sensoryFeedback` 而不是手写 `Haptics`：它会跟随系统的「减弱动效/触觉」开关，
+            // 而手写的 UIImpactFeedbackGenerator 不会。
+            .sensoryFeedback(.success, trigger: ongoing)
+            // Tip 只在「进行中」时挂：静止状态下这条 bar 没什么可解释的，
+            // 让 Tip 在不该出现的时机出现，等于教会用户忽略 Tip。
+            .popoverTip(tipForOngoing(ongoing))
         }
     }
 
-    private var icon: some View {
+    /// 把「什么时候该有 Tip」这件事显式写成一个函数，而不是就地写三元表达式。
+    ///
+    /// 原因很具体：`popoverTip` 的形参类型是 `(any Tip)?`，
+    /// 而 `ongoing ? RockOngoingTip() : nil` 会被推断成 `RockOngoingTip?`，
+    /// 两者之间的隐式转换在泛型上下文里不一定成立。给返回值写上 `(any Tip)?`
+    /// 就没有推断空间了 —— 这类"本地无编译器"时最容易翻车的点。
+    private func tipForOngoing(_ ongoing: Bool) -> (any Tip)? {
+        ongoing ? RockOngoingTip() : nil
+    }
+
+    /// 图标：进行中时外圈呼吸 + 符号脉冲。
+    ///
+    /// 呼吸用 `phaseAnimator` 而不是 `withAnimation` 循环：
+    /// 前者是声明式的"永远在两个相位之间往返"，不需要自己管 Timer 的启停，
+    /// 视图消失时也自动停——用 Timer 的话每次进出页面都要留一份取消逻辑。
+    private func icon(active: Bool) -> some View {
         ZStack {
             Circle().fill(Theme.surfaceTint2)
+
+            if active {
+                Circle()
+                    .strokeBorder(Theme.limeInk.opacity(0.35), lineWidth: 1)
+                    .phaseAnimator([1.0, 1.3]) { view, scale in
+                        view
+                            .scaleEffect(scale)
+                            .opacity(1.6 - scale)
+                    } animation: { _ in
+                        .easeInOut(duration: 1.4)
+                    }
+            }
+
             Image(systemName: "moon.stars")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Theme.limeInk)
+                .symbolEffect(.pulse, options: .repeating, isActive: active)
         }
         .frame(width: 34, height: 34)
         .accessibilityHidden(true)

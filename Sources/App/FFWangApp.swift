@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// App 入口。
 ///
@@ -38,6 +39,10 @@ struct FFWangApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // TipKit 只需配置一次。不配的话 `.popoverTip` 会静默不显示，
+        // 而"不显示"很难和"逻辑写错了"区分开 —— 所以这段放在 init 最前面。
+        try? Tips.configure()
+
         // 协议缓存必须在第一个请求之前配好：靠服务端 ETag 白拿 304，App 侧不手写 If-None-Match。
         ImageCache.configure()
         _model = StateObject(wrappedValue: AppModel())
