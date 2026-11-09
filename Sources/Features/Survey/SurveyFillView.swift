@@ -21,6 +21,8 @@ struct SurveyFillView: View {
     @State private var errorText: String?
     /// 非 nil = 已提交成功，显示完成态（内容是服务端的 `submitTip`）
     @State private var successTip: String?
+    /// 彩带计数器：交卷成功才 +1（值不变不重放，见 `ConfettiBurst`）
+    @State private var confettiTicket = 0
 
     private let onBack: () -> Void
 
@@ -61,6 +63,12 @@ struct SurveyFillView: View {
         .task {
             // 每次都强拉：题面可能刚被改过，按旧题作答提交会被服务端拒（403/400 都很难解释）
             await store.loadForm(id: surveyId, force: true)
+        }
+        // 彩带盖在整个填答页上（含安全区）：粒子要从完成卡一路落到屏幕底部。
+        // 它自己 `allowsHitTesting(false)`，不会挡住「返回」按钮。
+        .overlay {
+            ConfettiBurst(trigger: confettiTicket)
+                .ignoresSafeArea()
         }
     }
 
@@ -252,6 +260,9 @@ struct SurveyFillView: View {
             switch outcome {
             case .success(let tip):
                 Haptics.success()
+                // 交卷是一次性动作，值得一次「完成了」的视觉奖励。
+                // 放在清空答案**之前**：那一刻用户视线还在提交按钮上，彩带从完成卡的位置炸开才对得上。
+                confettiTicket += 1
                 // 成功后清空答案：这份问卷已经交出去了，留着只会让人以为还能改
                 answers = [:]
                 withAnimation(Motion.glassIn) {
