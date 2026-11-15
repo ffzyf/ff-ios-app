@@ -1,5 +1,4 @@
 import SwiftUI
-import TipKit
 
 /// App 入口。
 ///
@@ -39,10 +38,6 @@ struct FFWangApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        // TipKit 只需配置一次。不配的话 `.popoverTip` 会静默不显示，
-        // 而"不显示"很难和"逻辑写错了"区分开 —— 所以这段放在 init 最前面。
-        try? Tips.configure()
-
         // 协议缓存必须在第一个请求之前配好：靠服务端 ETag 白拿 304，App 侧不手写 If-None-Match。
         ImageCache.configure()
         _model = StateObject(wrappedValue: AppModel())
@@ -74,12 +69,6 @@ struct FFWangApp: App {
                         .sheet(item: $update.presentedRelease) { release in
                             UpdateSheet(release: release)
                         }
-                        // 首次启动的法律告知（3.32.0）。
-                        //
-                        // 位置与更新弹层同级：**在 `RootView()` 外面** —— 同意之前不该有任何页面
-                        // 已初始化（尤其天气的定位），否则就等于"先采集、后告知"，
-                        // 正是《App 违法违规收集使用个人信息行为认定方法》里「未经用户同意收集」那条。
-                        .legalConsentGate()
                 }
             }
             .environmentObject(model)

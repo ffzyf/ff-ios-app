@@ -251,6 +251,13 @@ private struct DaylightLockScreenTinted: View {
 /// 布局刻意只有左上（圆点 + 阶段名 / 倒计时）与左下 / 右下（日出 / 日落）三坨：
 /// 中间整片留给天空 —— 这张卡要传达的是"此刻天怎么样"。
 /// 日期与天气在参考图里没有，3.8.1 起不再画。
+/// 5.1.2 / R3 核对：本卡显示的是**日出 / 日落**（`state.sunrise` / `state.sunset`），
+/// **不含红石场次时间**（没有 `Occurrence.startAt/endAt`）。按「没有数据就说没有，
+/// 绝不编造时间」的纪律，这里不调用 `RedstoneTimeText.endOnly`；R5 调试面板对本组件
+/// 的「结束时间」态登记为「不适用」并置灰，不硬塞一个时间。
+///
+/// 5.1.2 / R5：本 View 已是 `internal` 独立锁屏 Face，调试面板可直接构造
+/// `DaylightActivityAttributes.ContentState` 预览，不需要复制实现。
 struct DaylightLockScreenView: View {
 
     let state: DaylightActivityAttributes.ContentState

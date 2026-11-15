@@ -29,12 +29,19 @@ struct PushStatusRow: View {
             if hasAnyFact {
                 GlassCard {
                     VStack(alignment: .leading, spacing: 8) {
-                        headlineRow
+                        if hasBriefOrMonitorFact {
+                            headlineRow
+                        }
                         if let detail = detailText {
                             Text(detail)
                                 .font(Typography.captionXS)
                                 .foregroundStyle(Theme.textTertiary)
                                 .lineSpacing(Typography.lineSpacing(fontSize: 11, multiple: 1.5))
+                        }
+                        // 5.1.2 · R2 / AC2-5：天气预警推送最近运行 / 失败原因。
+                        // 缺字段（`alertPush == nil` 或 `hasContent == false`）整行隐藏。
+                        if let push = monitor?.alertPush, push.hasContent {
+                            alertPushRow(push)
                         }
                     }
                     .padding(.horizontal, Spacing.cardPadding)
@@ -69,11 +76,42 @@ struct PushStatusRow: View {
 
     // MARK: - 派生
 
+    /// 5.1.2 · R2：天气预警推送最近运行 / 失败原因（AC2-5）。
+    /// 整段可选：老后端 / KV `alert_push_last` 还没写过时 `hasContent == false`，
+    /// 整行隐藏，不写「尚未运行」这种拿不准的空壳（§7-13）。
+    private func alertPushRow(_ push: MonitorAlertPush) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bell.badge")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.textTertiary)
+                .frame(width: 16, alignment: .center)
+            Text("天气预警推送")
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: 6)
+            Text(push.displayText)
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textTertiary)
+                .monospacedDigit()
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     /// 有没有任何一件确定的事实可以展示。没有就整行隐藏。
     ///
     /// 判据取「拿到过简报快照」而不是「今日已推送」：`pushedToday == false` 本身就是一条
     /// 确定的信息（服务端明确说今天还没推），把它也当成"没有数据"会让这一行在早上永远不出现。
+    /// 5.1.2 起「天气预警推送」段也算一条事实 —— 它单独出现时不画 headlineRow，
+    /// 只画自己那一行，避免右侧落一个空的标题。
     private var hasAnyFact: Bool {
+        if hasBriefOrMonitorFact { return true }
+        return monitor?.alertPush?.hasContent == true
+    }
+
+    /// 原来那两路事实（简报快照 / 最近推送时刻）
+    private var hasBriefOrMonitorFact: Bool {
         if snapshot != nil { return true }
         return monitor?.lastPushAt != nil
     }

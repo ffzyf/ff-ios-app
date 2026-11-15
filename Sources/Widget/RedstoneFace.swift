@@ -332,6 +332,17 @@ struct RedstoneFace: View {
                 .minimumScaleFactor(0.7)
                 .widgetAccentable()
 
+            // 5.1.2 / R3：主数字旁补「11:08–12:00」，与 App / 概览卡共用
+            // `RedstoneTimeText.compactRange`；大字仍是时刻，版式一字不改。
+            if let range = RedstoneTimeText.compactRange(entry.focus) {
+                Text(range)
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(band.sky.inkDim)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
             HStack(spacing: 4) {
                 Image(systemName: "arrow.down.right")
                     .font(WidgetTheme.Redstone.label)
@@ -420,6 +431,16 @@ struct RedstoneFace: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .widgetAccentable()
+
+            // 5.1.2 / R3：大号同样补「降落–结束」区间，口径只在 Shared 一处。
+            if let range = RedstoneTimeText.compactRange(entry.focus) {
+                Text(range)
+                    .font(WidgetTheme.Redstone.label)
+                    .foregroundStyle(band.sky.inkDim)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
 
             HStack(spacing: 4) {
                 Image(systemName: "arrow.down.right")
@@ -654,16 +675,30 @@ struct RedstoneFace: View {
     /// 也就是"时刻 + 哪一天"照样能读出来，只是不再有一个 34pt 的「5 天后」。
     private var timeBlock: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(entry.focus?.time ?? "")
-                .font(RedstoneMetric.timeScaled(s))
-                .foregroundStyle(band.sky.ink)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                // 卡面上唯一的"关键数字"进 accent 组：iOS 26 桌面透明 / 着色（accented
-                // 渲染模式）下，系统会把未标记的内容压成 primary、accent 组保持强调色，
-                // 34pt 的主时刻因此仍是第一眼读到的那个数（iOS 16+ API，直接用）
-                .widgetAccentable()
+            VStack(alignment: .leading, spacing: 0) {
+                Text(entry.focus?.time ?? "")
+                    .font(RedstoneMetric.timeScaled(s))
+                    .foregroundStyle(band.sky.ink)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    // 卡面上唯一的"关键数字"进 accent 组：iOS 26 桌面透明 / 着色（accented
+                    // 渲染模式）下，系统会把未标记的内容压成 primary、accent 组保持强调色，
+                    // 34pt 的主时刻因此仍是第一眼读到的那个数（iOS 16+ API，直接用）
+                    .widgetAccentable()
+
+                // 5.1.2 / R3：小号两行 `11:08` / `至 12:00`（跨日「至 次日 00:22」）。
+                // 结束时刻只读 `Occurrence.endAt`，不重算 52 分钟；`endLine(Occurrence?)`
+                // 在 notGenerated 时返回 nil → 整行不渲染，不出现占位时间。
+                if let endLine = RedstoneTimeText.endLine(entry.focus) {
+                    Text(endLine)
+                        .font(RedstoneMetric.endpoint)
+                        .foregroundStyle(band.sky.inkDim)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
 
             if entry.phase.isOngoing {
                 Text("进行中")
@@ -845,7 +880,17 @@ struct RedstoneFace: View {
             switch entry.phase {
             case .ongoing:
                 if focus.endAt > entry.date {
-                    timerLabel(text: "还剩", from: entry.date, to: focus.endAt)
+                    VStack(alignment: .leading, spacing: 1) {
+                        timerLabel(text: "还剩", from: entry.date, to: focus.endAt)
+                        // 5.1.2 / R3：进行中补「12:00 结束」，复用既有 `focus.endAt`
+                        // 判定（不新增时间源），文案仍走 Shared 的 `endOnly`。
+                        Text(RedstoneTimeText.endOnly(focus))
+                            .font(WidgetTheme.Redstone.label)
+                            .foregroundStyle(band.sky.inkDim)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
                 }
             case .upcoming:
                 if focus.startAt > entry.date {

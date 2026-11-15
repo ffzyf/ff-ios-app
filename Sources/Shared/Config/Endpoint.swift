@@ -33,15 +33,6 @@ enum Endpoint {
     /// 缺了也只是"画面不动"，不会让天气卡说错话。见 `Shared/Domain/VisibilityProbe.swift`。
     static let openMeteoBase = "https://api.open-meteo.com"
 
-    /// 和风天气官网（3.32.0）。
-    ///
-    /// 只用于「数据来源」署名：和风开发者条款要求使用其服务的产品**清晰展示名称并添加超链接**，
-    /// 且署名要单独放置、不能混在正文段落里。所以这一行放在「更多 → 关于 → 数据来源」组，
-    /// 由 `UIApplication.shared.open` 打开（与 `AnnouncementBanner` / `UpdateInstaller` 同一形态）。
-    ///
-    /// 和 `openMeteoBase` 同属「不是自己家」的一类：域名写在这里，页面里只引用常量。
-    static let qweatherHome = "https://www.qweather.com"
-
     // MARK: - 路径（本批先定稿命名，批次 2/3/4 直接引用，避免各写一遍拼错）
 
     /// 红石日程（合并 schedule + rules）
@@ -162,6 +153,40 @@ enum Endpoint {
     /// 服务端按「坐标 + 日期」缓存 6 小时（`ai:outfit:<lat>,<lon>:<yyyyMMdd>`），
     /// 所以同一个地方同一天问两次只花一次上游的钱。
     static let aiOutfitPath = "/api/ai/outfit"
+
+    // MARK: - 5.1.2 · 天气预警推送 / 联网能力（R2 / R4a）
+    //
+    // 三条路径全部归简报站（`briefBase`）：与 `alerts` / `tts` / `ai/*` 是同一个
+    // Pages 项目、同一份 KV 绑定、同一次部署。域名仍然只在上面「站点根」那一节出现，
+    // 下面只写路径 —— 换域名时依旧只改 4 行。
+
+    /// 天气预警推送配置（`GET` 匿名只读 / `POST` 用 `x-ai-token`，架构 §3.4）。
+    ///
+    /// 网页 `settings.js` 与 App 本端点是**两个写入口、一个真相源**：都读写
+    /// KV `alert_push_config`。本文件只负责给出地址，不关心谁在写。
+    static let alertPushConfigPath = "/api/app/alert-push-config"
+
+    /// 天气预警差异检测 / Bark 推送（cron-job.org 第三个任务，`GET`）。
+    ///
+    /// 归 `/api/push/*`：`_middleware.js` 对这一族直接放行，cron 请求不带任何请求头。
+    /// `?dry=1` 是只读预演（不推 Bark、不写去重 KV），需登录态。
+    static let alertPushRunPath = "/api/push/weather-alert"
+
+    /// 联网能力状态的查询地址。
+    ///
+    /// **刻意不新开端点**：能力状态随 `GET /api/ai/models` 响应的
+    /// `capabilities.webSearch` 一段下发（架构 §1.5.1 / §3.4），旧响应缺该段即「不可用」。
+    /// 这里给的是语义化别名，值必须与 `aiModelsPath` 逐字相同 —— 另写一条字符串
+    /// 迟早会让「能力查询」与「模型清单」读到两份不同的部署事实。
+    static let aiSearchConfigPath = aiModelsPath
+
+    /// 预警数据源的完整地址（诊断区固定显示这一行，Q7 / AC1-5）。
+    ///
+    /// 「接口 + 最近结果 + 时刻」里的接口只认这一个拼接：预警不设第二上游。
+    /// 放在 `Endpoint` 里是因为 `briefBase` 这个域名只允许在本文件出现。
+    static var alertsEndpointText: String {
+        return briefBase + alertsPath
+    }
 
     // MARK: - 构造
 

@@ -108,6 +108,20 @@ struct RedstoneDaySheet: View {
                     }
                     Spacer(minLength: 0)
                 }
+                // 5.1.2 / R3：每场补 `daySheet()`「11:08 → 12:00（52 分钟）」。
+                // 时长读 `endAt - startAt`（唯一真值，不是 startAt + 52*60），
+                // 脏数据导致分钟数 ≤ 0 时 `daySheet` 自己整段不写时长。
+                let occurrences = RedstoneTimeline.occurrences(on: day)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(occurrences, id: \.startAt) { occurrence in
+                        Text(RedstoneTimeText.daySheet(occurrence))
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                }
             }
         }
     }
@@ -144,6 +158,8 @@ struct RedstoneDaySheet: View {
     private var detentHeight: CGFloat {
         var height: CGFloat = 196
         if day.times.isEmpty { height += 8 }
+        // 5.1.2 / R3：每场多一行「11:08 → 12:00（52 分钟）」，约 16pt
+        height += CGFloat(RedstoneTimeline.occurrences(on: day).count) * 16
         if !day.note.isEmpty { height += 58 }
         return min(520, max(220, height))
     }

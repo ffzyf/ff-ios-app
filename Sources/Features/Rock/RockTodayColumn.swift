@@ -30,13 +30,18 @@ struct RockTodayColumn: View {
 
     var body: some View {
         if let day, day.times.isEmpty == false {
+            // 5.1.2 / R3：把 `day.times` 摊成 `Occurrence`，才有 `endAt` 可显示结束时刻。
+            // `occurrences(on:)` 会丢掉脏时刻，所以按 `time` 字符串回查，不靠下标对齐。
+            let occurrences = RedstoneTimeline.occurrences(on: day)
             // `SectionHeader` 自带 12pt 下距，所以外层用 `spacing: 0` 就是"标题 + 12 + 卡"
             VStack(alignment: .leading, spacing: 0) {
                 SectionHeader(title: "今日场次")
                 GlassCard(level: .card) {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(day.times.enumerated()), id: \.offset) { pair in
-                            row(time: pair.element, day: day)
+                            row(time: pair.element,
+                                occurrence: occurrences.first { $0.time == pair.element },
+                                day: day)
                             // 分割线只画在行与行之间：末行下面再画一条就是"卡里多一道杠"
                             if pair.offset < day.times.count - 1 {
                                 Rectangle()
@@ -59,13 +64,26 @@ struct RockTodayColumn: View {
     /// 地点用 `day.map` 的**全名**（`霞谷·圆梦村`）而不是月历格子里的短名（`圆梦村`）：
     /// 月历一格只有 88pt 宽、必须缩，而这一栏有 344pt，没有任何理由再裁一次地名。
     /// 全名也让「霞谷的 11:08」和「霞谷的 17:08」在同一栏里能一眼分开。
-    private func row(time: String, day: RedstoneDay) -> some View {
+    private func row(time: String, occurrence: Occurrence?, day: RedstoneDay) -> some View {
         HStack(spacing: 10) {
-            Text(time)
-                .font(Typography.footnoteMedium)
-                .foregroundStyle(Theme.textPrimary)
-                .monospacedDigit()
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(time)
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.textPrimary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                // 5.1.2 / R3：每场补「降落 11:08 · 结束 12:00」。结束时刻只读
+                // `Occurrence.endAt`（唯一真值），不在 UI 里重算 52 分钟；
+                // 拿不到 occurrence（脏时刻）时整行不渲染，绝不留空占位。
+                if let detail = RedstoneTimeText.detail(occurrence) {
+                    Text(detail)
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.textTertiary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
 
             Text(day.map)
                 .font(Typography.footnote)
@@ -81,6 +99,8 @@ struct RockTodayColumn: View {
         .frame(minHeight: rowHeight)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(day.map + "，" + time + (RedstoneRules.rateText(day.rate).map { "，" + $0 } ?? ""))
+        .accessibilityLabel(day.map + "，" + time
+                            + (RedstoneTimeText.detail(occurrence).map { "，" + $0 } ?? "")
+                            + (RedstoneRules.rateText(day.rate).map { "，" + $0 } ?? ""))
     }
 }

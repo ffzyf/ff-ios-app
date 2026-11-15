@@ -23,6 +23,10 @@ import WidgetKit
 ///   RedstoneFace 内部的空态 / 收官文案只作为兜底，绝不出现 00:00 或假地图名；
 /// - **本月过完了就说收官**：排期有、只是这个月的都过完了，同样交给天光面 ——
 ///   用户不需要一张"挂着红石但什么都没有"的卡（3.8.1 用户反馈）。
+/// 5.1.2 / R3 说明：三档卡面的「降落–结束」时间文案统一走
+/// `Sources/Shared/Domain/RedstoneTimeText.swift`（`compactRange` / `endLine` / `endOnly`），
+/// 结束时刻只读 `Occurrence.endAt`，不在渲染层重算 52 分钟。本文件仅更新注释，
+/// family / supportedFamilies / 三套版式 / 深链一字未改。
 struct RedstoneWidget: Widget {
 
     /// WidgetKit 用 kind 匹配已上桌的实例，改名等于让所有用户的小组件失效

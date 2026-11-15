@@ -52,9 +52,19 @@ struct SunEventLiveActivity: Widget {
                                         .fill(Theme.lime)
                                 }
                         }
-                        Text(context.attributes.startTime)
-                            .font(.system(size: 15, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Theme.textPrimary)
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(context.attributes.startTime)
+                                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Theme.textPrimary)
+                            // 5.1.2 / R3：灵动岛补「12:00 结束」，与锁屏同一份 `endText`
+                            if let endText = SunEventText.endText(state: context.state) {
+                                Text(endText)
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Theme.textSecondary)
+                                    .monospacedDigit()
+                                    .lineLimit(1)
+                            }
+                        }
                     }
                 }
 
@@ -84,6 +94,9 @@ struct SunEventLiveActivity: Widget {
 // MARK: - 锁屏视图（轨迹卡风格）
 
 /// 锁屏卡片：渐变背景 + 弧线（72 分钟窗口）+ 发光节点 + 文字内容。
+/// 5.1.2 / R5：本 View 已是 `internal` 的独立锁屏 Face（`SunEventLockScreenView`），
+/// `WidgetDebugPreviewContainer` 可直接用 `SunEventActivityAttributes` + `ContentState`
+/// 构造模拟状态预览，**不需要复制实现、不需要改访问级别**。
 struct SunEventLockScreenView: View {
 
     let state: SunEventActivityAttributes.ContentState
@@ -164,9 +177,19 @@ struct SunEventLockScreenView: View {
 
             Spacer(minLength: 4)
 
-            Text(attributes.startTime)
-                .font(.system(size: 17, weight: .bold, design: .monospaced))
-                .foregroundStyle(Theme.textPrimary)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(attributes.startTime)
+                    .font(.system(size: 17, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Theme.textPrimary)
+                // 5.1.2 / R3：锁屏补「12:00 结束」，复用 `ContentState.endAt` 判定
+                if let endText = SunEventText.endText(state: state) {
+                    Text(endText)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
         }
     }
 }
@@ -246,5 +269,26 @@ enum SunEventText {
             return "已结束"
         }
         return "还有 \(state.minutesLeft(now: now)) 分钟"
+    }
+
+    /// 5.1.2 / R3：结束时刻「12:00 结束」。
+    ///
+    /// 复用 `ContentState.endAt`（现有判定源，不新增任何时间字段）；把它摊成
+    /// `Occurrence` 后交给 Shared 的 `RedstoneTimeText.endOnly`，保证与桌面
+    /// `RedstoneFace` / App 的结束文案同一口径。`endAt <= startAt` 的脏数据返回 nil，
+    /// 调用方整块不渲染，绝不补一个假时间。
+    static func endText(state: SunEventActivityAttributes.ContentState) -> String? {
+        guard state.endAt > state.startAt else { return nil }
+        let occurrence = Occurrence(
+            date: RedstoneClock.dayKey(state.startAt),
+            startAt: state.startAt,
+            endAt: state.endAt,
+            time: Formatters.timeHHmm(state.startAt),
+            map: state.map,
+            rate: state.rate,
+            needsCheck: state.needsCheck,
+            type: "红石"
+        )
+        return RedstoneTimeText.endOnly(occurrence)
     }
 }

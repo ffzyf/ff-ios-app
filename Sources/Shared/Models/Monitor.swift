@@ -223,6 +223,95 @@ struct MonitorAppVersion: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+// MARK: - 天气预警推送（5.1.2 · R2 / AC2-5）
+
+/// 推送监控里「天气预警推送」那一段（`GET /api/app/monitor` 的 `alertPush`）。
+///
+/// 服务端每跑完一次 `/api/push/weather-alert` 写一次 KV `alert_push_last`，
+/// 监控端点只读回显。整段**可选**：老后端 / KV 还没写过时
+/// `MonitorResponse.alertPush == nil`，App 侧整行隐藏，
+/// 不显示「尚未运行」这种拿不准的空壳（§7 空值不占位）。
+///
+/// 时间照例保留原始 ISO 字符串、再用 `MonitorTime.parse` 解析：
+/// 这份响应会走网络（`APIJSON.decoder`）与磁盘快照（`JSONDecoder()`）两条解码路径，
+/// 直接存 `Date` 必然在其中一条上读出 nil（见 `MonitorTime` 的注释）。
+struct MonitorAlertPush: Codable, Sendable, Equatable {
+
+    /// 最近一次运行的时刻（原始 ISO 字符串）
+    let lastRunAtRaw: String?
+
+    /// 这次运行是否成功；nil = 服务端没给，不猜
+    let ok: Bool?
+
+    /// 失败原因（服务端原话）；nil = 没有失败
+    let lastError: String?
+
+    /// 这次实际推了几条；nil = 服务端没给
+    let pushedCount: Int?
+
+    /// 最近一次运行时刻（解析失败为 nil）
+    var lastRunAt: Date? { MonitorTime.parse(lastRunAtRaw) }
+
+    /// 这一整段有没有值得显示的东西。
+    /// 四个字段全空 = 服务端只回了 `{}`，调用方整行隐藏。
+    var hasContent: Bool {
+        return lastRunAt != nil || ok != nil || lastError != nil || pushedCount != nil
+    }
+
+    /// 一行可直接上屏的状态：`最近 18:20 · 推送 2 条` / `最近 18:20 · 失败：…`。
+    /// 没有时刻就只说结果，绝不编一个「刚刚」出来。
+    var displayText: String {
+        var parts: [String] = []
+        if let at = lastRunAt {
+            parts.append("最近 " + Formatters.timeHHmm(at))
+        }
+        if let error = lastError,
+           !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("失败：" + error)
+        } else if let count = pushedCount {
+            parts.append("推送 \(count) 条")
+        } else if ok == false {
+            parts.append("失败")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lastRunAt
+        case ok
+        case lastError
+        case pushedCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastRunAtRaw = try? c.decode(String.self, forKey: .lastRunAt)
+        ok = try? c.decode(Bool.self, forKey: .ok)
+        lastError = try? c.decode(String.self, forKey: .lastError)
+        pushedCount = try? c.decode(Int.self, forKey: .pushedCount)
+    }
+
+    /// 手写 `encode(to:)`：把内部属性名写回线上键名（理由同 `MonitorAppVersion`）
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(lastRunAtRaw, forKey: .lastRunAt)
+        try c.encodeIfPresent(ok, forKey: .ok)
+        try c.encodeIfPresent(lastError, forKey: .lastError)
+        try c.encodeIfPresent(pushedCount, forKey: .pushedCount)
+    }
+
+    /// 供预览 / 测试直接构造（自定义 `init(from:)` 会吃掉 memberwise init）
+    init(lastRunAtRaw: String? = nil,
+         ok: Bool? = nil,
+         lastError: String? = nil,
+         pushedCount: Int? = nil) {
+        self.lastRunAtRaw = lastRunAtRaw
+        self.ok = ok
+        self.lastError = lastError
+        self.pushedCount = pushedCount
+    }
+}
+
 // MARK: - 监控总响应
 
 /// `GET /api/app/monitor` 的响应。
@@ -242,6 +331,10 @@ struct MonitorResponse: Codable, Sendable, Equatable {
     /// 最近一次推送成功的时刻（原始 ISO 字符串，解析见 `lastPushAt`）
     let lastPushAtRaw: String?
     let pushWindow: PushWindow?
+
+    /// 5.1.2 · R2：天气预警推送的运行结果。
+    /// 缺字段 / `null` → nil，App 侧整行隐藏（AC2-5「失败可见」但不编造）。
+    let alertPush: MonitorAlertPush?
 
     /// 服务端当前时刻
     var serverTime: Date? { MonitorTime.parse(serverTimeRaw) }
@@ -267,6 +360,7 @@ struct MonitorResponse: Codable, Sendable, Equatable {
         case pending
         case lastPushAt
         case pushWindow
+        case alertPush
     }
 
     init(from decoder: Decoder) throws {
@@ -278,6 +372,8 @@ struct MonitorResponse: Codable, Sendable, Equatable {
         pending = (try? container.decode(Int.self, forKey: .pending)) ?? 0
         lastPushAtRaw = try? container.decode(String.self, forKey: .lastPushAt)
         pushWindow = try? container.decode(PushWindow.self, forKey: .pushWindow)
+        // 5.1.2 追加段：老响应没有这个键，解不开只是「这一行不显示」
+        alertPush = try? container.decode(MonitorAlertPush.self, forKey: .alertPush)
     }
 
     /// 手写 `encode(to:)`：把内部属性名写回线上键名（理由同 `MonitorAppVersion`）
@@ -290,6 +386,7 @@ struct MonitorResponse: Codable, Sendable, Equatable {
         try container.encode(pending, forKey: .pending)
         try container.encodeIfPresent(lastPushAtRaw, forKey: .lastPushAt)
         try container.encodeIfPresent(pushWindow, forKey: .pushWindow)
+        try container.encodeIfPresent(alertPush, forKey: .alertPush)
     }
 
     init(
@@ -299,7 +396,8 @@ struct MonitorResponse: Codable, Sendable, Equatable {
         apps: [MonitorAppVersion],
         pending: Int,
         lastPushAtRaw: String?,
-        pushWindow: PushWindow?
+        pushWindow: PushWindow?,
+        alertPush: MonitorAlertPush? = nil
     ) {
         self.ok = ok
         self.apiVersion = apiVersion
@@ -308,6 +406,7 @@ struct MonitorResponse: Codable, Sendable, Equatable {
         self.pending = pending
         self.lastPushAtRaw = lastPushAtRaw
         self.pushWindow = pushWindow
+        self.alertPush = alertPush
     }
 }
 

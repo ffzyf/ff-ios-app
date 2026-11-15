@@ -20,15 +20,21 @@ struct AIChatComposer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 9) {
-            field
-            sendButton
+        VStack(spacing: 0) {
+            // 5.1.2 · R4c：能力 chip 行在输入框正上方，与 Composer 同属一个竖列，
+            // 不另起一张卡片（架构 §1.4 / §2.1 #22）。总闸关时它自己置灰并给出说明。
+            AIChatCapabilityBar()
+
+            HStack(alignment: .bottom, spacing: 9) {
+                field
+                sendButton
+            }
+            .padding(.horizontal, Spacing.page)
+            .padding(.top, 6)
+            // 底部 10：Tab 栏已经由 `RootView` 的 `safeAreaInset` 让开，
+            // 这里只留"输入框与栏之间"的那一点呼吸
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal, Spacing.page)
-        .padding(.top, 6)
-        // 底部 10：Tab 栏已经由 `RootView` 的 `safeAreaInset` 让开，
-        // 这里只留"输入框与栏之间"的那一点呼吸
-        .padding(.bottom, 10)
     }
 
     // MARK: - 输入框

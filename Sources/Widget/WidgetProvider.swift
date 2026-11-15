@@ -2,47 +2,11 @@ import Foundation
 import SwiftUI
 import WidgetKit
 
-// MARK: - 深链（点小组件 → 跳进 App 对应页面）
 
-/// 小组件深链的唯一出处。
-///
-/// 为什么集中在一个 enum 里：scheme / host 是**跨 target 的契约** ——
-/// 这头是 `Info.plist` 的 `CFBundleURLTypes` + 小组件的 `.widgetURL(...)`，
-/// 那头是 `RootView.onOpenURL`。三处各写一份字符串，改一处忘两处就会出现
-/// "点了没反应"这种最难查的 bug。Widget 侧只从这里取 URL，不允许再写字面量。
-///
-/// 注意 App target **不能**引用本类型（它属于 Widget target），所以 `RootView` 里
-/// 有一份只含 scheme + host 映射的同构实现，两边靠注释互相指认。
-enum WidgetDeepLink {
+/// 5.1.2 · T03：`WidgetDeepLink` 已下沉到
+/// `Sources/Shared/Config/WidgetDeepLink.swift` —— 主 App target 也要编译各
+/// `*Face`，两个 target 共用同一份深链常量（各 Face 都要 `.widgetURL`）。
 
-    /// URL scheme，必须与 `Resources/Info.plist` 的 `CFBundleURLSchemes` 逐字一致
-    static let scheme = "skyapp"
-
-    /// 简报小组件 → 简报 Tab
-    static let briefHost = "brief"
-    /// 红石小组件 → 红石 Tab
-    static let rockHost = "rock"
-    /// 沉浸式天光页（3.11.0）。**不是 Tab** —— App 侧会全屏呈现 `SkyRoomView`。
-    ///
-    /// 为什么把天光 / 日弧 / 月相 / 风 四张卡一起改成它：这四张卡画的都是"此刻的天"
-    /// （同一片天空、同一颗太阳、同一轮月亮、同一阵风），点开就该进那个更大的同一片天；
-    /// 而 `brief` 是"今天有什么事"，与看天是两件事（用户原话："这个页面就从相关的小组件
-    /// 和概览-第二个小组件可以点击今日"）。
-    /// App 侧同一份契约在 `RootView.swift` 的 `AppDeepLink.skyHost`，两边必须逐字一致。
-    static let skyHost = "sky"
-
-    /// 拼一个合法的深链；拼不出来返回 nil（`.widgetURL` 接受 nil，等于"这张卡不可点"）
-    static func url(host: String) -> URL? {
-        return URL(string: scheme + "://" + host)
-    }
-
-    /// 简报小组件整卡点击目标
-    static let brief = url(host: briefHost)
-    /// 红石小组件整卡点击目标
-    static let rock = url(host: rockHost)
-    /// 天光页（天光 / 日弧 / 月相 / 风 四张卡共用）
-    static let sky = url(host: skyHost)
-}
 
 // MARK: - Timeline 时间刻度
 
@@ -474,90 +438,13 @@ enum WidgetFetch {
     }
 }
 
-// MARK: - 红石 entry
 
-/// 红石小组件的一条 Timeline entry。
-///
-/// 为什么把 `phase` / `todayOccurrences` 在**生成 entry 时**就算好、而不是在 View 里算：
-/// entry 的 `date` 就是"这一条被渲染的时刻"，而 View 里拿不到时间机器 ——
-/// 直接把结论带进去，View 只负责画，不会出现「View 用 `Date()` 现算」导致
-/// 预渲染与真实显示不一致的经典小组件 bug。
-struct RedstoneEntry: TimelineEntry {
-    let date: Date
-    /// 有没有排期数据（false = 显示「暂无排期」，绝不显示 00:00 或假地图）
-    let hasData: Bool
-    /// 数据最后生成时间（过期提示用；nil 时不提示）
-    let updatedAt: Date?
-    let phase: RockPhase
-    /// 今日全部场次（含已过），中号右半用它画列表
-    let todayOccurrences: [Occurrence]
-    /// 今日场次数
-    let todayCount: Int
-    /// 今日是否有待核对场次
-    let needsCheck: Bool
-    /// 空窗期（`focus == nil`）时整卡切换的天光帧。
-    ///
-    /// 为什么由 Provider 在生成 entry 时顺带算好、而不是视图里现造：红石卡面只能在
-    /// **自己的 entry** 上画（provider 契约一张卡一个 Provider，视图里再起一个
-    /// `SkyLightProvider` 会破坏这条契约），而 `SkyLightFace` 吃的是 `SkyLightEntry`。
-    /// 同进程同 target，直接用 `SkyLightEntry.make(date:)`（纯函数、零网络）造一帧
-    /// 带在身上即可。有场次的日子它根本不会被读到，成本只是几次日出日落三角函数。
-    ///
-    /// **3.23.0 修**：这里曾经的调用点只传 `date`，天气取第二个参数的默认值 nil →
-    /// `SkyViewing.verdict(of: nil) == nil` → `claimsColor == false` → 这张天光面
-    /// **永远**写「入夜剩余」，晴天傍晚也一样；早晨的「黄金时刻」也永远不出现。
-    /// 现在天气由 `RedstoneProvider.getTimeline` 拉好后逐帧传进来（见 `weatherFreshness`），
-    /// 与天光卡用同一个 `SkyLightWeatherFeed`（同一个 `/api/app/weather`，服务端 10 分钟缓存）。
-    ///
-    /// 天气判定不另存一份：它已经躺在 `daylight.viewing` 里（`SkyLightEntry` 的既有字段），
-    /// 再往 `RedstoneEntry` 上加一个 `viewing` 就有了两个真值来源 —— 词只能从
-    /// `daylight.phase.label(viewing: daylight.viewing)` 这一处派生。
-    let daylight: SkyLightEntry?
+// MARK: - 红石 entry（值类型已抽到 Shared）
 
-    /// 一份天气观测最多往后认多久（秒）。
-    ///
-    /// 为什么红石卡需要这个上限、天光卡不需要：天光卡一轮 timeline 到**下一个阶段边界**
-    /// 就重排一轮（最多几小时就换一份新观测）；红石卡一轮铺满 24 小时、只在 `.atEnd`
-    /// 再取，如果照单全收，早上六点的一次观测会被画到深夜的天上 —— 温度、云量、
-    /// 以及「黄金时刻 / 蓝调剩余」这类**承诺颜色**的词一起过期，正是本轮要消灭的那类假话。
-    ///
-    /// 3 小时的依据：`/api/app/weather` 服务端缓存 10 分钟，所以载荷本身的观测龄很短；
-    /// 真正会拉长的是"这一帧离我们拉取时刻有多远"。三小时是"同一次天气过程的量级"
-    /// —— 再往后云系真的会换，我们没有数据，就该退回纯天文说法（`nil` → 不说颜色）。
-    /// 超限的帧退回 `nil`：词变成「晨光剩余」/「入夜剩余」，天气摘要与云层整块不画，
-    /// 也就是**现在这种缺数据形态**，不会比现状更差。
-    static let weatherFreshness: TimeInterval = 3 * 3600
-
-    /// 「本周排期」（3.11.0，大号卡下半部那 3–4 行）。
-    ///
-    /// 为什么新增字段而不是让 `RedstoneFace` 自己算：entry 是**预渲染帧**，
-    /// 而 `days` 只活在 Provider 手里 —— 视图里拿不到整月排期（也不该拿，
-    /// 那会让视图依赖"数据怎么来的"）。这里在造 entry 时顺手折好，
-    /// 视图只负责画。空数组 = 没有未来场次，大号卡下半部整块不渲染。
-    let weekRows: [RedstoneWeekRow]
-
-    /// 下一场 / 进行中的那一场（没有就 nil）
-    var focus: Occurrence? { phase.occurrence }
-}
-
-// MARK: - 本周排期行
-
-/// 红石大号卡「本周排期」的一行：一天一条。
-///
-/// 只带**展示需要的三个字符串**（不塞 `[Occurrence]`）：entry 会进 Timeline 缓存，
-/// 让每行背着整天的场次对象既没必要，也让"哪天开始多带一个字段"变得难以察觉。
-struct RedstoneWeekRow: Identifiable, Equatable {
-    /// `"2026-11-01"`
-    let dayKey: String
-    /// `"今天"` / `"明天"` / `"周三"`
-    let dayLabel: String
-    /// `"11:08 · 17:08 · 23:08"`
-    let timesLabel: String
-    /// `"霞谷·圆梦村"`；空串 = 待确认（渲染层照样不编地名）
-    let map: String
-
-    var id: String { dayKey }
-}
+/// 5.1.2 · T03：`RedstoneEntry` / `RedstoneWeekRow` 的值类型定义已抽到
+/// `Sources/Shared/WidgetDebug/WidgetEntries.swift`（App / Widget 双 target 共用）。
+/// 下面这个 `extension` 里的工厂方法依赖 Widget-only 的 `RedstoneDay` /
+/// `WidgetTheme` / `SkyLightEntry.make`，继续只在本文件（Widget target）编译。
 
 extension RedstoneEntry {
 
@@ -717,103 +604,13 @@ extension RedstoneEntry {
     }
 }
 
-// MARK: - 简报 entry
+// MARK: - 简报 entry 工厂方法
 
-struct BriefEntry: TimelineEntry {
-    let date: Date
-    let hasData: Bool
-    /// `"10月30日"`
-    let dateText: String
-    /// `"周四"`
-    let weekdayText: String
-    /// 前 2 段
-    let paragraphs: [String]
-    let pushedToday: Bool
-    let pushedAt: Date?
-    /// 生日文案（`07-17` / `1995-07-17` / `7月17日` 三种都见过），`nil` = 服务端没给
-    let birthday: String?
-    /// 宜（服务端 `brief.yi[]`，已按服务端顺序排好）
-    let yi: [String]
-    /// 忌
-    let ji: [String]
-    /// 服务端给的日出文案；nil 时渲染层退回 `SunClock` 现算（**不编造**）
-    let sunrise: String?
-    /// 服务端给的日落文案
-    let sunset: String?
-    /// 今天的天气实况（`GET /api/app/weather`）。
-    ///
-    /// **拉失败就是 nil** —— 卡片退回无天气形态（不画粒子、底色回到原来那张夜纸），
-    /// 绝不猜一个晴天出来。天气只决定"氛围"，简报正文才是这张卡的主体：
-    /// 一次网络抖动不该让整张卡变成错误态。
-    ///
-    /// 为什么整份 `WeatherNow` 带进 entry 而不是只带一个 `WeatherKind`：
-    /// 除了画什么粒子，卡片迟早要显示温度 / 天气文案（"阴 21°"），
-    /// 而 entry 是**预渲染帧**，View 里现取 `Date()` 或现发请求都会导致帧错位。
-    /// 这是纯追加字段，`BriefEntry` 原有的 12 个字段一个都没动。
-    let weather: WeatherNow?
+/// 5.1.2 · T03：`BriefEntry` 的值类型定义已抽到 Shared（同上）。
+/// `make(date:payload:weather:minutely:)` 依赖 Widget-only 的 `BriefCachePayload`，
+/// 继续只在本文件编译。
 
-    /// 未来两小时的分钟级降水（`GET /api/app/minutely`）。**纯追加字段**：
-    /// 上面 13 个字段（含 3.10.0 追加的 `weather`）一个都没动（3.25.0）。
-    ///
-    /// ## 为什么它随帧而变，而不是整轮共用一个值
-    /// `weather` 是"今天是晴是雨"，一天之内不会变；minutely 是**逐 5 分钟的预报**，
-    /// 每一帧读到的都是"从现在起的两小时"。所以它只发给**落在时间窗内的帧**，
-    /// 窗口外的帧一律 nil（见 `BriefProvider.entries` 与 `BriefMinutely.Window.covers`）——
-    /// 否则两小时后的帧会把一份过期降水当成"未来两小时"继续画。
-    ///
-    /// ## nil 的三种来源，语义都是「没拿到」，不是「无降水」
-    /// 请求超时 / `ok == false`（境外无雷达外推数据）/ 后端没给 `points`。
-    /// 三者都让底部的柱状图**整块不画** —— `wet == false` 才是「确实不下」，
-    /// 那时画一行「未来两小时无降水」。这两种状态绝不能合并。
-    let minutely: MinutelyRain?
-
-    /// 页脚文案：「今日已推送 07:02」/「今日未推送」。没有简报数据时整条页脚不画
-    var footerText: String? {
-        guard hasData else { return nil }
-        if pushedToday {
-            guard let pushedAt = pushedAt else { return "今日已推送" }
-            return "今日已推送 " + Formatters.timeHHmm(pushedAt)
-        }
-        return "今日未推送"
-    }
-
-    /// 地平线**以下**那行注脚：`宜 打猎、散步 · 忌 店铺开业`。
-    ///
-    /// 为什么放在地面区而不是天空区：地平线是硬的，任何正文越过它都会被那条亮边切开，
-    /// 宜忌属于"历书注脚"，只有落在地平线以下才不会被打断（与 App 内 `SkyCard` 的 `note` 位同理）。
-    ///
-    /// 空则返回 nil —— 调用方整行不画。**取不到就空着，绝不编一条"今日宜出行"出来**。
-    /// 数量上限与 App 内简报卡一致（宜取 2 条、忌取 1 条）：这一行只有 10pt，多了会被截。
-    var ritualText: String? {
-        var parts: [String] = []
-        if !yi.isEmpty {
-            parts.append("宜 " + yi.prefix(2).joined(separator: "、"))
-        }
-        if !ji.isEmpty {
-            parts.append("忌 " + ji.prefix(1).joined(separator: "、"))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// 日出 / 日落文案：优先服务端值（它按当地算过，比 App 自己算的准），
-    /// 缺了才回落到 `SunClock`（天文计算，误差 ±3 分钟，不是编造内容）。
-    /// 两头都拿不到就返回 nil，地面区那一侧整个不画。
-    func sunTexts() -> (rise: String?, set: String?) {
-        if let rise = nonEmpty(sunrise), let set = nonEmpty(sunset) {
-            return (rise, set)
-        }
-        guard let times = SunClock.times(on: date) else {
-            return (nonEmpty(sunrise), nonEmpty(sunset))
-        }
-        return (nonEmpty(sunrise) ?? Formatters.timeHHmm(times.sunrise),
-                nonEmpty(sunset) ?? Formatters.timeHHmm(times.sunset))
-    }
-
-    private func nonEmpty(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
+extension BriefEntry {
 
     static func make(date: Date,
                      payload: BriefCachePayload?,
@@ -857,6 +654,7 @@ struct BriefEntry: TimelineEntry {
         )
     }
 }
+
 
 // MARK: - 红石 Provider
 

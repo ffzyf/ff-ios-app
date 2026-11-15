@@ -30,6 +30,8 @@ struct AIModelPickerSheet: View {
                         modelRow(option)
                     }
 
+                    searchCapabilitySection
+
                     footnote
                 }
                 .padding(.top, 4)
@@ -110,6 +112,100 @@ struct AIModelPickerSheet: View {
             )
             .opacity(0.45)
         }
+    }
+
+    // MARK: - 联网能力 / 当日用量（5.1.2 · R4a，架构 §1.5.1 / §1.5.4）
+
+    /// `/api/ai/models` 下发的两段：`capabilities.webSearch` 与 `toolUsage` 当日读数。
+    /// 客户端**只显示不判定**：总闸是否可开由服务端说了算（AC4-2），
+    /// 缺字段一律不渲染（§7-1），绝不写「云端已支持」这类服务端没告诉我们的话。
+    @ViewBuilder
+    private var searchCapabilitySection: some View {
+        if chat.searchCapability != nil || chat.modelsToolUsage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("联网搜索")
+                    .font(Typography.footnoteMedium)
+                    .foregroundStyle(Theme.textPrimary)
+
+                capabilityLine
+                probeLine
+                usageLine
+            }
+            .padding(.horizontal, Spacing.page)
+            .padding(.top, 18)
+            .padding(.bottom, 4)
+        }
+    }
+
+    /// 能力结论：`enabled == false` 时原样显示 `reason`（本期总闸恒 off）。
+    @ViewBuilder
+    private var capabilityLine: some View {
+        if let capability = chat.searchCapability {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "globe")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                Text(capabilityText(capability))
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func capabilityText(_ capability: AISearchCapability) -> String {
+        if capability.enabled { return "已开启" }
+        let reason = capability.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return reason.isEmpty ? "未开启" : "未开启 · " + reason
+    }
+
+    /// 探测结论（KV `ai_search_probe`，6h）。缺字段不渲染，不臆造上游参数。
+    @ViewBuilder
+    private var probeLine: some View {
+        if let probe = chat.searchCapability?.probe {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(probe.supported ? "上游能力已验证" : "上游能力未验证")
+                    .font(Typography.captionXS)
+                    .foregroundStyle(Theme.textTertiary)
+                if let note = probe.note, !note.isEmpty {
+                    Text(note)
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                if let verifiedAt = probe.verifiedAt, !verifiedAt.isEmpty {
+                    Text("验证时刻：" + verifiedAt)
+                        .font(Typography.captionXS)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+        }
+    }
+
+    /// 当日 toolUsage 读数：`calls / degraded / failed / toolCalls` 全是可选，
+    /// 「缺字段不渲染」，一个数都没有就说没有，不补 0 占位（§7-13）。
+    @ViewBuilder
+    private var usageLine: some View {
+        if let text = usageText {
+            Text(text)
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var usageText: String? {
+        guard let usage = chat.modelsToolUsage else { return nil }
+        let parts = usageParts(usage)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func usageParts(_ usage: AIToolUsageSummary) -> [String] {
+        var parts: [String] = []
+        if let calls = usage.calls { parts.append("当日请求 " + String(calls)) }
+        if let toolCalls = usage.toolCalls { parts.append("工具调用 " + String(toolCalls)) }
+        if let degraded = usage.degraded { parts.append("降级 " + String(degraded)) }
+        if let failed = usage.failed { parts.append("失败 " + String(failed)) }
+        return parts
     }
 
     /// 面板底部说明：说清"为什么有灰的"，以及今天还剩多少条。

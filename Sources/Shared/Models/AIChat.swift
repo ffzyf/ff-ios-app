@@ -59,13 +59,21 @@ struct AIChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// `.failed` 时的原因（一句可直接上屏的中文）
     var errorText: String?
 
+    /// 这一轮回答的引用列表（R4a · 架构 §1.5.3）。
+    ///
+    /// 两条来源走同一份渲染路径：流里的 `citations` 帧由 `AIChatStore` 挂上来，
+    /// 历史会话则由服务端把 `citations` 放进消息 meta 原样回传。
+    /// 可选且缺省为 nil —— **拿不到就整块不渲染，不显示空壳**。
+    var citations: [AICitation]?
+
     init(id: String,
          role: AIChatRole,
          text: String,
          status: Status = .done,
          model: String? = nil,
          createdAt: Date? = nil,
-         errorText: String? = nil) {
+         errorText: String? = nil,
+         citations: [AICitation]? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -73,6 +81,7 @@ struct AIChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.model = model
         self.createdAt = createdAt
         self.errorText = errorText
+        self.citations = citations
     }
 
     /// 手写 `init(from:)` 后编译器不再自动合成 `CodingKeys`，必须显式声明。
@@ -85,6 +94,7 @@ struct AIChatMessage: Identifiable, Codable, Equatable, Sendable {
         case model
         case createdAt
         case errorText
+        case citations
     }
 }
 
@@ -111,6 +121,276 @@ extension AIChatMessage {
         model = try? container.decodeIfPresent(String.self, forKey: .model)
         createdAt = try? container.decodeIfPresent(Date.self, forKey: .createdAt)
         errorText = try? container.decodeIfPresent(String.self, forKey: .errorText)
+        // 历史回放里可能带引用 meta；解不开就当这次没有引用，整块不渲染
+        citations = try? container.decodeIfPresent([AICitation].self, forKey: .citations)
+    }
+}
+
+// MARK: - 5.1.2 · 联网搜索 / 引用 / 能力（R4a，全部可选、全 `try?` 解码）
+//
+// 这一组值类型只描述**帧与响应的形状**，不做任何判定：判定在后端
+// `functions/_lib/ai-search.js` 的纯函数与 App 的 `AIChatStore` 里。
+// 上游真实参数（工具字段名 / 模型名 / 引用字段路径）本环境无法验证，
+// 本批总闸恒 off，因此这些字段在 5.1.2 里只会被解到「空」——
+// 旧帧、旧响应、旧客户端一律零回归。
+
+/// 一条引用（序号 + 标题 + 链接 + 域名，架构 §3.2）。
+///
+/// `domain` 由后端用 `new URL(u).hostname` 算好下发，App 不自己解析 URL：
+/// 两套解析口径迟早会在 `www.` / 端口 / 国际化域名上分叉。
+struct AICitation: Codable, Equatable, Sendable, Identifiable {
+
+    let index: Int
+    let title: String
+    let url: String
+    let domain: String
+
+    /// `ForEach` 用：`index` 单轮内唯一，拼上 url 才不会跨轮撞车
+    var id: String { "\(index)-\(url)" }
+
+    init(index: Int = 0, title: String = "", url: String = "", domain: String = "") {
+        self.index = index
+        self.title = title
+        self.url = url
+        self.domain = domain
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case index
+        case title
+        case url
+        case domain
+    }
+
+    /// 半结构 / 坏 JSON 只让这一条变差，不毁掉整帧、`extractCitations` 也不会抛
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        index = (try? c.decode(Int.self, forKey: .index)) ?? 0
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        url = (try? c.decode(String.self, forKey: .url)) ?? ""
+        domain = (try? c.decode(String.self, forKey: .domain)) ?? ""
+    }
+}
+
+/// 状态帧 `{"search":{"state":"searching|no_results|failed|done","query":…,"message":…}}`
+struct AISearchFrame: Codable, Equatable, Sendable {
+
+    let state: String
+    let query: String?
+    let message: String?
+
+    init(state: String = "", query: String? = nil, message: String? = nil) {
+        self.state = state
+        self.query = query
+        self.message = message
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case query
+        case message
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = (try? c.decode(String.self, forKey: .state)) ?? ""
+        query = try? c.decodeIfPresent(String.self, forKey: .query)
+        message = try? c.decodeIfPresent(String.self, forKey: .message)
+    }
+}
+
+/// 能力探测结果（KV `ai_search_probe` 与 `/api/ai/models` 的 `probe` 段共用一份形状）。
+///
+/// 本批**不做真实探测**：`supported` 恒 false，`model` / `paramShape` /
+/// `citationPath` 一律 nil（绝不臆造上游参数）。云端验证通过后由 T04 只改
+/// `SEARCH_PROBE_CANDIDATES` 那张表，不动这里的形状。
+struct AISearchProbe: Codable, Equatable, Sendable {
+
+    let supported: Bool
+    let model: String?
+    let paramShape: String?
+    let citationPath: String?
+    let verifiedAt: String?
+    let note: String?
+    let error: String?
+
+    init(supported: Bool = false,
+         model: String? = nil,
+         paramShape: String? = nil,
+         citationPath: String? = nil,
+         verifiedAt: String? = nil,
+         note: String? = nil,
+         error: String? = nil) {
+        self.supported = supported
+        self.model = model
+        self.paramShape = paramShape
+        self.citationPath = citationPath
+        self.verifiedAt = verifiedAt
+        self.note = note
+        self.error = error
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case supported
+        case model
+        case paramShape
+        case citationPath
+        case verifiedAt
+        case note
+        case error
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        supported = (try? c.decode(Bool.self, forKey: .supported)) ?? false
+        model = try? c.decodeIfPresent(String.self, forKey: .model)
+        paramShape = try? c.decodeIfPresent(String.self, forKey: .paramShape)
+        citationPath = try? c.decodeIfPresent(String.self, forKey: .citationPath)
+        verifiedAt = try? c.decodeIfPresent(String.self, forKey: .verifiedAt)
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
+        error = try? c.decodeIfPresent(String.self, forKey: .error)
+    }
+}
+
+/// 联网能力的下发结论（`capabilities.webSearch`）。
+///
+/// `enabled == false` 时 App 的能力 chip **置灰并给出 `reason` 说明**，
+/// 按会话记住的开关值不生效（AC4-2 / 架构 §1.5.1）。
+struct AISearchCapability: Codable, Equatable, Sendable {
+
+    let enabled: Bool
+    let reason: String
+    let probe: AISearchProbe?
+
+    init(enabled: Bool = false, reason: String = "未验证", probe: AISearchProbe? = nil) {
+        self.enabled = enabled
+        self.reason = reason
+        self.probe = probe
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case reason
+        case probe
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 缺省按**不可用**算：拿不准就别让用户点，也别产生工具调用费
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+        reason = (try? c.decode(String.self, forKey: .reason)) ?? ""
+        probe = try? c.decodeIfPresent(AISearchProbe.self, forKey: .probe)
+    }
+}
+
+/// `/api/ai/models` 响应里 `capabilities` 那一层包壳。
+struct AISearchCapabilities: Codable, Equatable, Sendable {
+
+    let webSearch: AISearchCapability?
+
+    init(webSearch: AISearchCapability? = nil) {
+        self.webSearch = webSearch
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case webSearch
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        webSearch = try? c.decodeIfPresent(AISearchCapability.self, forKey: .webSearch)
+    }
+}
+
+/// 末帧扩展 `{"toolUsage":{"webSearchCalls":N,"charged":Bool}}`（单独记账）。
+struct AIToolUsage: Codable, Equatable, Sendable {
+
+    let webSearchCalls: Int
+    let charged: Bool
+
+    init(webSearchCalls: Int = 0, charged: Bool = false) {
+        self.webSearchCalls = webSearchCalls
+        self.charged = charged
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case webSearchCalls
+        case charged
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        webSearchCalls = (try? c.decode(Int.self, forKey: .webSearchCalls)) ?? 0
+        charged = (try? c.decode(Bool.self, forKey: .charged)) ?? false
+    }
+}
+
+/// `/api/ai/models` 的 `toolUsage` 当日读数（模型面板显示；客户端只显示不判定）。
+struct AIToolUsageSummary: Codable, Equatable, Sendable {
+
+    let day: String?
+    let calls: Int?
+    let degraded: Int?
+    let failed: Int?
+    let toolCalls: Int?
+
+    init(day: String? = nil,
+         calls: Int? = nil,
+         degraded: Int? = nil,
+         failed: Int? = nil,
+         toolCalls: Int? = nil) {
+        self.day = day
+        self.calls = calls
+        self.degraded = degraded
+        self.failed = failed
+        self.toolCalls = toolCalls
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case day
+        case calls
+        case degraded
+        case failed
+        case toolCalls
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        day = try? c.decodeIfPresent(String.self, forKey: .day)
+        calls = try? c.decodeIfPresent(Int.self, forKey: .calls)
+        degraded = try? c.decodeIfPresent(Int.self, forKey: .degraded)
+        failed = try? c.decodeIfPresent(Int.self, forKey: .failed)
+        toolCalls = try? c.decodeIfPresent(Int.self, forKey: .toolCalls)
+    }
+}
+
+/// App 侧的联网状态行（架构 §1.5.5）。
+///
+/// `noResults` / `failed` / `degraded` 都不是「回答完毕」：消息标 `.done`
+/// 的唯一凭据仍然是末帧 `done == true`，与本枚举无关。
+enum AISearchState: String, Codable, Equatable, Sendable {
+    case idle
+    case searching
+    case noResults
+    case failed
+    case degraded
+    case done
+
+    /// 从状态帧的 `state` 字符串映射；**未知值返回 nil**（跳过不更新），
+    /// 绝不把「没搜到」或坏帧当成「回答完毕」。
+    static func from(_ raw: String?) -> AISearchState? {
+        switch (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "searching":
+            return .searching
+        case "no_results", "noresults":
+            return .noResults
+        case "failed":
+            return .failed
+        case "done":
+            return .done
+        default:
+            return nil
+        }
     }
 }
 
@@ -336,18 +616,29 @@ struct AIModelsResponse: Codable, Sendable {
     let models: [AIModelOption]
     let quota: AIQuota?
 
+    /// 5.1.2 · R4a：联网能力回显。**旧响应没有这一段就是「不可用」**，
+    /// App 的能力 chip 置灰并给出说明，不产生任何工具调用费。
+    let capabilities: AISearchCapabilities?
+
+    /// 联网搜索当日读数（单独记账，模型面板可见；缺字段不渲染）
+    let toolUsage: AIToolUsageSummary?
+
     init(ok: Bool = false,
          apiVersion: Int? = nil,
          defaultModel: String? = nil,
          auto: AIModelAuto? = nil,
          models: [AIModelOption] = [],
-         quota: AIQuota? = nil) {
+         quota: AIQuota? = nil,
+         capabilities: AISearchCapabilities? = nil,
+         toolUsage: AIToolUsageSummary? = nil) {
         self.ok = ok
         self.apiVersion = apiVersion
         self.defaultModel = defaultModel
         self.auto = auto
         self.models = models
         self.quota = quota
+        self.capabilities = capabilities
+        self.toolUsage = toolUsage
     }
 
     enum CodingKeys: String, CodingKey {
@@ -357,6 +648,8 @@ struct AIModelsResponse: Codable, Sendable {
         case auto
         case models
         case quota
+        case capabilities
+        case toolUsage
     }
 }
 
@@ -371,6 +664,9 @@ extension AIModelsResponse {
         auto = try? container.decodeIfPresent(AIModelAuto.self, forKey: .auto)
         models = (try? container.decode([AIModelOption].self, forKey: .models)) ?? []
         quota = try? container.decodeIfPresent(AIQuota.self, forKey: .quota)
+        // 5.1.2 追加的两段全 `try?`：老后端 / 匿名 unauthorized 响应缺字段照常解码
+        capabilities = try? container.decodeIfPresent(AISearchCapabilities.self, forKey: .capabilities)
+        toolUsage = try? container.decodeIfPresent(AIToolUsageSummary.self, forKey: .toolUsage)
     }
 }
 
@@ -466,6 +762,26 @@ struct AIStreamEvent: Codable, Sendable {
 
     let usage: AIUsage?
 
+    // MARK: 5.1.2 · R4a 四类新帧（全部可选 + 全 `try?` 解码）
+    //
+    // 关闭联网时后端**不发出**这四类帧，因此旧客户端 / 旧帧零影响。
+    // 注意 `degraded` 帧是 `{"degraded":true,"reason":"gate_off|…"}`：
+    // 降级原因**复用已有的 `reason` 字段**（末帧里它是 auto 选择原因），
+    // 由 App 在 `degraded == true` 时按降级原因解释。不新造第五个字段，
+    // 保证既有字段名与语义一个不动。
+
+    /// 状态帧：搜索中 / 未找到相关结果 / 引用加载失败 / 完成
+    let search: AISearchFrame?
+
+    /// 引用帧：可整帧一次下发
+    let citations: [AICitation]?
+
+    /// 降级帧：`true` 表示「本轮未联网」，原因看 `reason`
+    let degraded: Bool?
+
+    /// 末帧扩展：单独记账（工具调用次数 / 是否计费）
+    let toolUsage: AIToolUsage?
+
     init(delta: String? = nil,
          done: Bool? = nil,
          convId: String? = nil,
@@ -473,7 +789,11 @@ struct AIStreamEvent: Codable, Sendable {
          error: AIStreamError? = nil,
          model: String? = nil,
          reason: String? = nil,
-         usage: AIUsage? = nil) {
+         usage: AIUsage? = nil,
+         search: AISearchFrame? = nil,
+         citations: [AICitation]? = nil,
+         degraded: Bool? = nil,
+         toolUsage: AIToolUsage? = nil) {
         self.delta = delta
         self.done = done
         self.convId = convId
@@ -482,6 +802,10 @@ struct AIStreamEvent: Codable, Sendable {
         self.model = model
         self.reason = reason
         self.usage = usage
+        self.search = search
+        self.citations = citations
+        self.degraded = degraded
+        self.toolUsage = toolUsage
     }
 
     enum CodingKeys: String, CodingKey {
@@ -493,6 +817,10 @@ struct AIStreamEvent: Codable, Sendable {
         case model
         case reason
         case usage
+        case search
+        case citations
+        case degraded
+        case toolUsage
     }
 }
 
@@ -509,6 +837,11 @@ extension AIStreamEvent {
         model = try? container.decodeIfPresent(String.self, forKey: .model)
         reason = try? container.decodeIfPresent(String.self, forKey: .reason)
         usage = try? container.decodeIfPresent(AIUsage.self, forKey: .usage)
+        // 5.1.2 四类新帧：缺字段 / 半帧 / 坏结构一律只是「这一帧没有」，不中断整条流
+        search = try? container.decodeIfPresent(AISearchFrame.self, forKey: .search)
+        citations = try? container.decodeIfPresent([AICitation].self, forKey: .citations)
+        degraded = try? container.decodeIfPresent(Bool.self, forKey: .degraded)
+        toolUsage = try? container.decodeIfPresent(AIToolUsage.self, forKey: .toolUsage)
     }
 }
 
@@ -538,17 +871,52 @@ struct AIChatRequest: Encodable, Sendable {
     /// 收益快照（见 `AIChatEarnings`）。nil = 没登录 / 还没拉到账本
     let earnings: AIChatEarnings?
 
+    /// 5.1.2 · R4a 联网搜索开关。**可选，默认 nil**。
+    ///
+    /// 关（默认）= nil = `encodeIfPresent` 不写这一键，请求体与 3.31.0
+    /// **逐字一致**（AC4-2：不产生任何工具调用费）；开才写 `webSearch: true`。
+    /// 按会话记忆由 `AIChatStore` 负责（UserDefaults `ai.chat.webSearchByConv.v1`），
+    /// 本类型只管「有没有这个键」。
+    let webSearch: Bool?
+
     /// 两个上下文都给默认值：现有调用点（只传三件）一个字都不用改
     init(convId: String?,
          model: String,
          text: String,
          weather: AIChatWeather? = nil,
-         earnings: AIChatEarnings? = nil) {
+         earnings: AIChatEarnings? = nil,
+         webSearch: Bool? = nil) {
         self.convId = convId
         self.model = model
         self.text = text
         self.weather = weather
         self.earnings = earnings
+        self.webSearch = webSearch
+    }
+
+    /// 手写 `encode(to:)` 而不是依赖合成：把「关闭时 `webSearch` 不编码」这件事
+    /// 变成源码里看得见的一行 `encodeIfPresent`（QA 静态审查 S6 直接卡这一点）。
+    ///
+    /// 字段顺序与合成的 `Encodable` 一致，`weather` / `earnings` 两个上下文快照的
+    /// 注入方式**一个字没改** —— 它们本来就走 `encodeIfPresent`。
+    private enum CodingKeys: String, CodingKey {
+        case convId
+        case model
+        case text
+        case weather
+        case earnings
+        case webSearch
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(convId, forKey: .convId)
+        try container.encode(model, forKey: .model)
+        try container.encode(text, forKey: .text)
+        try container.encodeIfPresent(weather, forKey: .weather)
+        try container.encodeIfPresent(earnings, forKey: .earnings)
+        // 关闭联网时 webSearch == nil → 键不出现 → 与旧版 payload 逐字相同
+        try container.encodeIfPresent(webSearch, forKey: .webSearch)
     }
 }
 

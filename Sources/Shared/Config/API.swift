@@ -396,4 +396,36 @@ enum API {
         }
         return request
     }
+
+    // MARK: - 5.1.2 · 天气预警推送 / 联网能力（R2 / R4a）
+
+    /// 天气预警推送配置（`GET` 读 / `POST` 写）。
+    ///
+    /// 请求方法、`x-ai-token` 头、body 编码与错误映射都由 T03 的
+    /// `AlertPushSettingsSection` 负责 —— 本层只拼地址，与 `tts()` 同一个分工。
+    /// base 用 `briefHost`：配置落在简报站那份 KV，与 `alerts()` 同一台机器。
+    static func alertPushConfig() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.alertPushConfigPath)
+    }
+
+    /// 手动触发一次天气预警差异检测（`/api/push/*`，与 cron 同款端点）。
+    ///
+    /// - Parameter dry: `true` 时拼 `?dry=1`：只读预演，不推 Bark、不写去重 KV。
+    ///   不带该参数时与 cron-job.org 的定时触发逐字相同（无 query 尾巴）。
+    ///
+    /// 响应契约（`examined` / `actions` / `skipped` / `pushed` / `failed`）见架构 §3.4，
+    /// 本层不解码、不判 `ok`。
+    static func alertPushRun(dry: Bool = false) -> URL? {
+        let query = dry ? [URLQueryItem(name: "dry", value: "1")] : []
+        return Endpoint.url(base: briefHost, path: Endpoint.alertPushRunPath, query: query)
+    }
+
+    /// 联网能力状态（`capabilities.webSearch` + `toolUsage` 当日读数）。
+    ///
+    /// 与 `aiModels()` 指向**同一个**地址（见 `Endpoint.aiSearchConfigPath` 的注释）：
+    /// 后端在模型清单响应里追加这两段，不开第四个端点。单独给个名字，
+    /// 是为了让 T03 的模型面板一眼看出「这一发是在读能力状态」。
+    static func aiSearchConfig() -> URL? {
+        return Endpoint.url(base: briefHost, path: Endpoint.aiSearchConfigPath)
+    }
 }

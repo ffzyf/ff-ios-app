@@ -85,6 +85,9 @@ struct AIChatView: View {
                     models: chat.models,
                     canRetry: chat.canRetry,
                     isLoading: chat.isLoadingConversation,
+                    statusLine: searchStatusLine,
+                    statusMessageId: statusMessageId,
+                    citationColumns: citationColumns,
                     suggestions: Self.suggestions,
                     onSuggestion: sendSuggestion,
                     onRetry: retryLast
@@ -139,6 +142,29 @@ struct AIChatView: View {
             await weather
             await earnings
         }
+    }
+
+    // MARK: - R4a 状态行 / 引用列数（只读 Store + 纯函数，不重算语义）
+
+    /// 本轮联网状态行：文案映射交给 `AIChatStatusLine.text(...)` 纯函数，
+    /// 本页只负责把 `AIChatStore` 的两个 `@Published` 喂进去。
+    private var searchStatusLine: String? {
+        return AIChatStatusLine.text(
+            state: chat.searchState,
+            degradationReason: chat.degradationReason
+        )
+    }
+
+    /// 状态行只挂最后一条 assistant 气泡。
+    /// `newConversation()` / `load(id:)` 会把 `searchState` 重置为 `.idle`，
+    /// 所以历史回放拿到的是 nil 文案，天然不误报。
+    private var statusMessageId: String? {
+        return chat.messages.last(where: { $0.role == .assistant })?.id
+    }
+
+    /// iPad rail 档引用列表两列（AC4-6）；single / grid2 / grid3 仍单列。
+    private var citationColumns: Int {
+        return metrics.pageTier == .rail ? 2 : 1
     }
 
     // MARK: - 动作

@@ -4,6 +4,12 @@ import SwiftUI
 ///
 /// 交互：点整卡切到简报 Tab。`onTap` 由上层注入，本组件不持有 Tab 状态。
 /// 四态判定全部收在 `SkyCardPhase.resolve(_:)`，本文件只负责长相。
+/// 5.1.2 / R3 核对结论：本卡是「两服版本状态卡」，**不含红石场次时间**。
+/// `footerText` 里的 `Formatters.relative(checkedAt)` 是「版本检查时刻」，与
+/// `Occurrence.startAt/endAt` 不是同一口径；这里既不自拼降落/结束时间，也不调用
+/// `RedstoneTimeText`（引入它反而成了第二套口径）。架构 AC3-6 要求「概览卡共用同一个
+/// `RockPhaseText`」指的是红石「下一场」那条链路（`NextEventBar.RockPhaseText`），
+/// 与本卡无关 —— 故本文件除本注释外保持不动。
 struct SkyStatusCard: View {
     let status: SkyStatus?
     let onTap: () -> Void

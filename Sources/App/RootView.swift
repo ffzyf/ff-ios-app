@@ -41,6 +41,10 @@ struct RootView: View {
     /// 概览第二张卡的那个入口在 `OverviewView` 自己身上 —— 两处 `SkyRoomView(` 就是全部，
     /// 不许再挂第三个（DESIGN-RULES §4）。
     @State private var showsSkyRoom: Bool = false
+    /// 5.1.2 · R2：深链 `skyapp://sky?focus=alerts` 的可选意图。
+    /// 不带 `focus` 时恒 false → `SkyRoomView` 行为与 5.1.1 逐字一致；
+    /// 关闭天光页（`onDismiss`）即复位，不会把意图带到下一次打开。
+    @State private var skyRoomFocusAlerts: Bool = false
     /// 键盘是不是弹着。**只服务一件事**：底栏在键盘上要让位。
     ///
     /// 为什么必须有这一条（3.28.0）：`safeAreaInset(edge: .bottom)` 的内容会被键盘顶到
@@ -109,10 +113,14 @@ struct RootView: View {
         // 这一页要独占全屏（天空铺到状态栏与 Home Indicator 之外），浮动 Tab 栏必须让位。
         // 环境值（`layoutMetrics` / `themeMetrics` / `reduceMotion`）由模态自动继承，
         // 所以这里不重复注入 —— 只有它真的读 `AppModel` 时才需要 `.environmentObject`。
-        .fullScreenCover(isPresented: $showsSkyRoom) {
+        .fullScreenCover(isPresented: $showsSkyRoom, onDismiss: {
+            // 5.1.2 · R2：一次性意图，关闭即复位
+            skyRoomFocusAlerts = false
+        }) {
             // 传今日简报快照：天光页的朗读要念"宜/忌"。传值而不是环境对象 —— 理由见
             // `SkyRoomView.brief` 的注释（这一页刻意不依赖 environmentObject 注入）。
-            SkyRoomView(brief: model.todayBrief)
+            // `focusAlerts` 只有 `skyapp://sky?focus=alerts` 深链才为 true。
+            SkyRoomView(brief: model.todayBrief, focusAlerts: skyRoomFocusAlerts)
         }
         .task {
             await model.loadOverview()
@@ -399,6 +407,15 @@ struct RootView: View {
     private func open(deepLink url: URL) {
         guard url.scheme?.lowercased() == AppDeepLink.scheme else { return }
 
+        // 5.1.2 · R2：`skyapp://sky?focus=alerts` 的**可选** query。
+        // 只在确实要打开天光页（host == sky）时才消费；不带 focus 时下面的
+        // 所有分支与 5.1.1 逐字一致，不切 Tab、不多滚一屏。
+        let focus = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == AppDeepLink.focusKey })?
+            .value
+        let wantsAlerts = focus == AppDeepLink.alertsFocus
+
         // `skyapp://brief` 的 host 是 "brief"；也兼容 `skyapp:///brief`（host 为空、path 有值）
         let rawHost = url.host ?? url.path
         let host = rawHost
@@ -407,6 +424,10 @@ struct RootView: View {
 
         // 天光页：先把可能挂着的文章详情收起来（否则它盖在上面，用户看不到天光页）
         if AppDeepLink.isSky(host) {
+            // 一次性意图：写进 @State，由 fullScreenCover 的内容闭包传给天光页。
+            // 已经呈现时 guard A 会 return，但 @State 变了 → SwiftUI 重算内容闭包 →
+            // SkyRoomView.onChange(of: focusAlerts) 仍会滚到预警区。
+            skyRoomFocusAlerts = wantsAlerts
             // 守卫 A（入口）：天光页已经在呈现，或者正在呈现的路上 —— 直接放弃本次。
             //
             // `showsSkyRoom` 是真的时候再置一次 true 是纯 no-op（值没变），不会带来
@@ -472,11 +493,13 @@ struct RootView: View {
 
 /// App 侧对小组件深链的**唯一**认知：scheme + host → Tab / 全屏页。
 ///
-/// 为什么不复用 Widget 侧的 `WidgetDeepLink`：那个类型属于 Widget target，
-/// 主 App 的 sources 明确 `excludes: Widget`（见 project.yml 的 R1 —— 否则两个 @main
-/// 会撞成 duplicate symbol），所以 App 引用不到它。两边各留一份，靠
-/// `WidgetProvider.swift` 与 `Resources/Info.plist` 里的注释互相指认：
-/// **改 scheme / host 必须三处一起改**，否则就是"点了没反应"（不报错、不崩溃）。
+/// 为什么这里仍单独留一份 `AppDeepLink`（而不直接调用 `WidgetDeepLink`）：
+/// 5.1.2 / T03 起 `WidgetDeepLink` 已下沉到 `Sources/Shared/Config/WidgetDeepLink.swift`，
+/// App / Widget 两个 target 都编得到它 —— 不再是「App 引用不到 Widget target 的类型」。
+/// 但 `onOpenURL` 只需要 scheme + host（+ 可选 focus）的**字符串解码**，刻意不 import
+/// WidgetKit、不构造 URL，所以保留这份零依赖的窄契约。以 Shared 的 `WidgetDeepLink`
+/// 为单一真相源，这里与 `Resources/Info.plist` 的 `CFBundleURLSchemes` 逐字对齐：
+/// **改 scheme / host 必须同步 Shared 与 Info.plist**，否则就是"点了没反应"（不报错、不崩溃）。
 private enum AppDeepLink {
 
     /// 与 `Info.plist` 的 `CFBundleURLSchemes`、`WidgetDeepLink.scheme` 一致
@@ -485,6 +508,11 @@ private enum AppDeepLink {
     /// 天光页（3.11.0）。**不是 Tab**，走 `RootView.showsSkyRoom` 全屏呈现。
     /// 与 `WidgetDeepLink.skyHost` 逐字一致：天光 / 日弧 / 月相 / 风 四张卡都指向它。
     static let skyHost = "sky"
+
+    /// 5.1.2 · R2：天气预警 Bark 通知带的**可选** query（`skyapp://sky?focus=alerts`）。
+    /// 只新增这两个字符串常量，不带 focus 时所有既有分支行为不变。
+    static let focusKey = "focus"
+    static let alertsFocus = "alerts"
 
     /// 这个 host 是不是"打开天光页"
     static func isSky(_ host: String) -> Bool {

@@ -106,25 +106,14 @@ struct SkyRoomView: View {
     /// 分钟级降水（3.19.0）。同样是独立的 10 分钟轮询。
     @ObservedObject private var minutely = MinutelyStore.shared
 
-    /// 这一页是否已经「问过一次预警」（3.24.0）。
+    /// 预警区**不再**依赖页面内的 `@State`（5.1.2 / R1）。
     ///
-    /// 为什么需要：`AlertStore.isAvailable` 的初值是 `false`（语义 = "还没拿到过有效结果"），
-    /// 冷启动那一瞬它与「接口挂了」长得一模一样。加一个 settled 才能把
-    /// 「还没问」和「问了没拿到」分开，否则首帧会斩钉截铁地说「取不到」。
-    ///
-    /// 初值直接取单例的 `isAvailable`：`AlertStore` 是**跨页面存活**的长生命周期对象，
-    /// 用户上次打开过 App 时它已经拿到过结果 —— 这时再从 `false` 起步，等于让界面在首帧
-    /// 说一句「取不到」，而数据其实就在内存里。这一页尤其吃这个亏：两个入口都是
-    /// `fullScreenCover`，每次进场视图身份新建、`@State` 全部归零，于是"首帧谎报"不是
-    /// 偶发的一次，而是每进一次都重演一遍；而且预警状态行紧贴在 hero（62% 视口高）下面，
-    /// iPhone 15 上落在 y≈534 —— 它在**首屏之内**，用户第一眼就看得到。
-    ///
-    /// 真正的冷启动（一次结果都没有过）时它仍是 `false`，那一帧的「取不到」配着
-    /// 「稍后自动重试」是诚实的。
-    ///
-    /// 取舍：**未 settled 时不隐藏预警区，仍然渲染 `.unknown`**。
-    /// 隐藏等于回到改造前的「这块区域不存在」，用户就又分不清"没有预警"和"没接功能"了。
-    @State private var alertSettled = AlertStore.shared.isAvailable
+    /// 3.24.0 曾用页面内一个「是否已问过」的布尔把「还没问」和「问了没拿到」分开，
+    /// 那是因为 `AlertStore` 当时只有一个 `isAvailable` 布尔，首帧无法区分「没数据」与
+    /// 「加载中」。现在 `AlertStore.state` 是四态互斥的 `AlertPresentationState`
+    /// （`hasAlerts` / `confirmedNone` / `loadingFirst` / `failed`），且 `init` 里
+    /// 同步读 `AlertCache` 定好首帧 —— **判定全在 Store 的纯函数里**，页面只
+    /// `switch` 一个已算好的状态。再留一份 `@State` 就是第二个真相源，必漂移。
 
     /// 今日简报快照（**只服务播报稿的宜忌**）。
     ///
@@ -134,12 +123,21 @@ struct SkyRoomView: View {
     /// 播报是即时动作，打开页面那一刻的快照就够，不需要跟着 `briefState` 重画。
     private let brief: BriefSnapshot?
 
+    /// 5.1.2 · R2：深链 `skyapp://sky?focus=alerts` 带进来的**可选**意图。
+    /// 默认 false —— 不带 focus 时行为与 5.1.1 逐字不变（既不多滚一屏，也不多一次 onChange）。
+    private let focusAlerts: Bool
+
+    /// 预警区的滚动锚点。用常量而不是 UUID：`scrollTo` 才找得到它。
+    private static let alertsAnchor = "sky-room-alerts-anchor"
+
     /// 显式 init：加了 `brief` 之后不能再靠编译器合成的 memberwise init ——
     /// 本视图有大量 `private` 存储属性，合成的 init 会跟着降级成 private，
     /// 跨文件的 `SkyRoomView(brief:)` 直接编译不过（`RootView.init` 记过同一个坑）。
-    /// 其余属性全都有默认值，这里不用逐个赋值。
-    init(brief: BriefSnapshot? = nil) {
+    /// 其余属性全都有默认值，这里不用逐个赋值；`focusAlerts` 也带默认值，
+    /// 概览第二张卡那个旧调用点一字不用改。
+    init(brief: BriefSnapshot? = nil, focusAlerts: Bool = false) {
         self.brief = brief
+        self.focusAlerts = focusAlerts
     }
 
     var body: some View {
@@ -286,30 +284,50 @@ struct SkyRoomView: View {
                                frame: SkyRoomMetrics.Frame,
                                insets: EdgeInsets,
                                now: Date) -> some View {
-        ScrollView {
-            // 3.27.0：宽档（iPad）改**双栏**，窄档仍是原来那条纵向流水。
-            //
-            // 为什么必须分支而不是"一套能自适应的 VStack"：这一页的窄档版式已经调过很多轮
-            // （地平线 0.58、hero 62%、卡片 12 间距都是逐项量出来的），把它塞进一个
-            // 参数化的容器里，任何一个"顺手统一"的改动都会让 iPhone 漂 1–2pt。
-            // 所以窄档分支就是**原来的三行代码，一个字都没动**。
-            if frame.isTwoColumn {
-                twoColumnContent(sky: sky, frame: frame, insets: insets, now: now)
-            } else {
-                VStack(spacing: 0) {
-                    hero(sky: sky, frame: frame, insets: insets, now: now)
-                    cards(sky: sky, frame: frame, now: now)
-                        .padding(.top, 6)
-                    Color.clear.frame(height: SkyRoomMetrics.Page.tailPadding)
+        ScrollViewReader { proxy in
+            ScrollView {
+                // 3.27.0：宽档（iPad）改**双栏**，窄档仍是原来那条纵向流水。
+                //
+                // 为什么必须分支而不是"一套能自适应的 VStack"：这一页的窄档版式已经调过很多轮
+                // （地平线 0.58、hero 62%、卡片 12 间距都是逐项量出来的），把它塞进一个
+                // 参数化的容器里，任何一个"顺手统一"的改动都会让 iPhone 漂 1–2pt。
+                // 所以窄档分支就是**原来的三行代码，一个字都没动**。
+                if frame.isTwoColumn {
+                    twoColumnContent(sky: sky, frame: frame, insets: insets, now: now)
+                } else {
+                    VStack(spacing: 0) {
+                        hero(sky: sky, frame: frame, insets: insets, now: now)
+                        cards(sky: sky, frame: frame, now: now)
+                            .padding(.top, 6)
+                        Color.clear.frame(height: SkyRoomMetrics.Page.tailPadding)
+                    }
                 }
             }
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                // 顶部有内容内边距时要把它折进来，否则第一帧 offset 不从 0 开始
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { _, newValue in
+                scrollOffset = max(0, newValue)
+            }
+            // 5.1.2 · R2：只有深链明确带 `focus=alerts` 时才滚到预警区。
+            // `focusAlerts == false` 时这两条都是空操作，滚动行为与 5.1.1 逐字一致。
+            // `onChange` 兜住「天光页已经开着，又点了一次 Bark 通知」的情形
+            //（RootView 的 guard A 会 return，但 @State 变化会重算本页）。
+            .onAppear {
+                scrollToAlertsIfNeeded(proxy: proxy)
+            }
+            .onChange(of: focusAlerts) { _, _ in
+                scrollToAlertsIfNeeded(proxy: proxy)
+            }
         }
-        .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            // 顶部有内容内边距时要把它折进来，否则第一帧 offset 不从 0 开始
-            geometry.contentOffset.y + geometry.contentInsets.top
-        } action: { _, newValue in
-            scrollOffset = max(0, newValue)
+    }
+
+    /// 只在 `focusAlerts` 为真时滚一次；没带 focus 什么都不做。
+    private func scrollToAlertsIfNeeded(proxy: ScrollViewProxy) {
+        guard focusAlerts else { return }
+        withAnimation(Motion.push) {
+            proxy.scrollTo(Self.alertsAnchor, anchor: .top)
         }
     }
 
@@ -367,6 +385,8 @@ struct SkyRoomView: View {
 
                 VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
                     alertsBlock(frame: frame)
+                        // 5.1.2 · R2：深链 focus=alerts 的滚动锚点（双栏档）
+                        .id(Self.alertsAnchor)
                     daylightBlock(sky: sky, phase: phase, frame: frame, now: now)
                     comfortBlock(frame: frame)
                     windCloudBlock(frame: frame)
@@ -798,6 +818,8 @@ struct SkyRoomView: View {
         let phase = SunClock.phase(at: now).effective(viewing: viewingVerdict)
         return VStack(spacing: SkyRoomMetrics.Page.cardSpacing) {
             alertsBlock(frame: frame)
+                // 5.1.2 · R2：深链 focus=alerts 的滚动锚点（窄档纵排）
+                .id(Self.alertsAnchor)
             daylightBlock(sky: sky, phase: phase, frame: frame, now: now)
             temperatureCard(sky: sky, frame: frame)
             minutelyCard(frame: frame)
@@ -812,43 +834,110 @@ struct SkyRoomView: View {
 
     // MARK: - 卡片块（窄档纵排 / 双栏共用）
 
-    /// 预警区：**三态全覆盖**（有 / 无 / 拿不到）。
+    /// 预警区：**四态全覆盖**（R1 · 架构 §1.1）。
     ///
-    /// 3.24.0 起三者视觉重量递减（预警横幅 → 「当前无预警」状态行 → 「取不到」状态行），
-    /// 但都必须存在 —— 「没有预警」本身是一条信息，不能靠留白表达。用户原话："没有预警的话
-    /// 就显示没有什么什么" —— 空白让他无法区分"今天太平"和"这功能没接"。
+    /// View 只 `switch alerts.state`，**不重算任何语义** —— 判定全部在
+    /// `Sources/Shared/Domain/AlertPresentation.swift` 的纯函数 `reduce` 里。
+    /// 四态互斥：有预警 / 确认无预警 / 首次加载 / 彻底失败。
+    /// `failure` 是前两态的附加信息（断网时横幅照旧渲染，只多一行「显示的是缓存」
+    /// + 重试），不是第五态（AC1-2 / AC1-3）。
     @ViewBuilder
     private func alertsBlock(frame: SkyRoomMetrics.Frame) -> some View {
         // 预警置顶：它是这一页唯一「可能要求用户立刻做点什么」的信息，
         // 排在气温之前不是排版偏好，是优先级。
-        if alerts.hasAlerts {
-            // 最多列 3 条：极端天气下和风可能返回十几条，全铺开会把整页顶下去，
-            // 反而把温度这些天天要看的东西挤到两屏之外。
-            //
-            // 顺序直接用 `alerts.alerts` 的原序，不在视图里重排 ——
-            // `AlertStore` 已按服务端 severity 排好（extreme→severe→moderate→minor→unknown），
-            // 这里再排一次就是第二个"什么更要紧"的真相，两处早晚会打架。
-            ForEach(alerts.alerts.prefix(3)) { alert in
-                SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+        VStack(alignment: .leading, spacing: SkyRoomMetrics.Page.cardSpacing) {
+            switch alerts.state {
+            case .hasAlerts(let list, let lastSuccessAt, let stale, let failure):
+                // 最多列 3 条：极端天气下和风可能返回十几条，全铺开会把整页顶下去。
+                // 顺序直接用 list 的原序，不在视图里重排 —— 服务端已按 severity 排好。
+                ForEach(list.prefix(3)) { alert in
+                    SkyRoomAlertBanner(alert: alert, scale: frame.fontScale)
+                        // 稳定 id + 内容过渡：后台静默刷新只改关联值时不整块重建，
+                        // 横幅不闪烁（AC1-6）。reduceMotion 下退化为无动画。
+                        .id(alert.id)
+                        .contentTransition(.opacity)
+                }
+                if list.count > 3 {
+                    Text("另有 \(list.count - 3) 条预警")
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(frame.fontScale))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // 断网 / ok:false 时横幅照旧，只追加缓存标记 + 重试（AC1-3）
+                alertCacheNote(stale: stale,
+                               failure: failure,
+                               lastSuccessAt: lastSuccessAt,
+                               scale: frame.fontScale)
+
+            case .confirmedNone(let lastSuccessAt, let stale, let failure):
+                SkyRoomAlertStatusRow(state: .none,
+                                      lastSuccessAt: lastSuccessAt,
+                                      failureText: nil,
+                                      onRetry: retryAlerts,
+                                      scale: frame.fontScale)
+                alertCacheNote(stale: stale,
+                               failure: failure,
+                               lastSuccessAt: lastSuccessAt,
+                               scale: frame.fontScale)
+
+            case .loadingFirst:
+                // 首次加载：明确说「正在获取」，**禁止出现「取不到」**（AC1-1 / AC1-2）
+                SkyRoomAlertStatusRow(state: .loading,
+                                      lastSuccessAt: nil,
+                                      failureText: nil,
+                                      onRetry: retryAlerts,
+                                      scale: frame.fontScale)
+
+            case .failed(let reason, let lastSuccessAt):
+                // 连缓存都没有：明确报错，绝不冒充「当前无天气预警」
+                SkyRoomAlertStatusRow(state: .failed,
+                                      lastSuccessAt: lastSuccessAt,
+                                      failureText: reason.userText,
+                                      onRetry: retryAlerts,
+                                      scale: frame.fontScale)
             }
-            if alerts.alerts.count > 3 {
-                Text("另有 \(alerts.alerts.count - 3) 条预警")
-                    .font(SkyRoomMetrics.TextStyle.cardDetail(frame.fontScale))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else if alertSettled && alerts.isAvailable {
-            // 问过了、拿到了、列表是空的 —— 这才是"确实没有预警"
-            SkyRoomAlertStatusRow(state: .none,
-                                  updatedAt: alerts.updatedAt,
-                                  scale: frame.fontScale)
-        } else {
-            // 还没问 / 问了没拿到。`isAvailable == false` 时 `alerts` 会保留上一次的值
-            // （见 `AlertStore`），所以走到这里意味着真的连旧数据都没有 —— 说"不知道"
-            SkyRoomAlertStatusRow(state: .unknown,
-                                  updatedAt: nil,
-                                  scale: frame.fontScale)
+
+            // 数据源诊断：低视觉权重小字，点按/长按复制（AC1-5 / Q7）
+            SkyRoomAlertDiagnosticsView(diagnostics: alerts.diagnostics,
+                                        scale: frame.fontScale)
         }
+        // 平滑切换：状态关联值变化时按 reduceMotion 决定是否过渡（AC1-6）。
+        // 曲线走项目唯一的动效 token `Motion.glassIn`，不就地写 `.easeInOut`（§7-4）。
+        .animation(reduceMotion ? nil : Motion.glassIn, value: alerts.state)
+    }
+
+    /// 缓存兜底 / 失败时的附加行：只在前两态出现，不新增第五态。
+    /// 空值不占位：没有 failure 且非 stale 时整块不渲染。
+    @ViewBuilder
+    private func alertCacheNote(stale: Bool,
+                                failure: AlertFailure?,
+                                lastSuccessAt: Date,
+                                scale: CGFloat) -> some View {
+        if stale || failure != nil {
+            HStack(spacing: 8) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11 * scale, weight: .semibold))
+                    .foregroundStyle(Theme.statusWarn)
+                Text(stale ? "显示的是缓存" : "读取失败")
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                    .foregroundStyle(Theme.statusWarn)
+                Text("最后更新于 " + Formatters.timeHHmm(lastSuccessAt))
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                    .foregroundStyle(Theme.textTertiary)
+                    .monospacedDigit()
+                Spacer(minLength: 4)
+                Button("重试") { retryAlerts() }
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                    .foregroundStyle(Theme.statusWarn)
+                    .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 「重试」唯一出口：一律走 Store 的 `.force`（用户显式动作，不受 300 秒窗口）。
+    private func retryAlerts() {
+        Task { await AlertStore.shared.retry() }
     }
 
     /// 今日天光（日出日落弧）。拿不到日出日落就整块不画 —— 弧上没有端点只是装饰
@@ -1555,14 +1644,13 @@ struct SkyRoomView: View {
     /// 所以状态写入仍然落在主 actor 上 —— 正确性不押在"子任务继承隔离"这一条上，
     /// 它只决定起跑点要不要 hop。
     ///
-    /// ## 顺序语义（全函数只有这一处顺序是有意义的）
+    /// ## 顺序语义
     ///
-    /// 先 `await` 预警那一路，回来之后才 `alertSettled = true`。这个标记的含义是
-    /// "**问过**预警了"（见它的声明注释），提前置位等于在请求还没回来时就宣告"查过了"。
-    /// 注意它单独说谎并不会直接产出假文案 —— `alertsBlock` 里「确实没有预警」那一支
-    /// 还要 `alerts.isAvailable`，两个条件同时成立才渲染"没有预警"；settled 只是
-    /// 那道闸门的第二半，不能让它先替数据表态。天气与分钟降水不参与任何"是否查过"的
-    /// 判定，等谁不等谁无所谓，放在后面 await 只是为了让上面那条语义读下来顺序清楚。
+    /// 三路并发起跑，谁先回来都无所谓 —— 5.1.2 起预警的「问过没问过」由
+    /// `AlertStore.state` 四态自己表达（首帧同步读缓存），页面不再持有
+    /// 那个标记，所以这里没有「必须先 await 预警才能置某个标记」的约束。
+    /// 仍先 `await alertResult` 只是因为那一行状态贴在 hero 下面、第一屏之内，
+    /// 越早知道越好（命中 300 秒窗口时它几乎立刻返回）。
     ///
     /// `loadWeather()` 里 `#if DEBUG` 的截图模式早退照旧生效：这里只是**调用**它，
     /// 没有绕进它内部任何分支（Release 里那段代码根本不参与编译）。
@@ -1582,27 +1670,13 @@ struct SkyRoomView: View {
         //
         // 返回值一律 `Void`（三个 Store 方法都不返回数据，结果走各自的 `@Published`），
         // 所以逐个 `await` 只是为了等它结束，不需要 `_ =`。
-        async let alertResult: Void = alerts.refresh(force: false)
+        async let alertResult: Void = alerts.refreshIfNeeded(.enter)
         async let weatherResult: Void = loadWeather()
         async let minutelyResult: Void = minutely.refresh(force: false)
 
-        // 预警先结算：命中 `AlertStore` 的 10 分钟本地窗口时它几乎立刻返回，而那一行状态
+        // 预警先结算：命中 `AlertStore` 的 300 秒窗口时它几乎立刻返回，而那一行状态
         // 就贴在 hero（62% 视口高）下面、第一屏之内，越早知道越好。
-        // （原来"预警排在天气前面"是怕首屏挂着「取不到」，并发之后这个顾虑消失；
-        //   保留先 await 它只是为了下面那句 settled 的时机。）
         await alertResult
-        // 请求回来（或命中 10 分钟窗口直接返回）之后才算"问过了"。
-        // 放在 `await` 之后而不是之前：之前置位就等于宣告"查过了"，那是自欺。
-        //
-        // 唯一一个"没真等到结果也算 settled"的分支是 `AlertStore.refresh` 的
-        // `guard !inFlight`：上一发（`startPolling` 那一轮）还在飞时它立刻返回。
-        // 这里照样置位是**故意**的 —— 反过来（挡住就不置位）更糟：
-        //   · 不置位：那一发回来只会改 `isAvailable`，settled 永远停在 false，
-        //     之后每次渲染都落在 `alertsBlock` 的 else 里，明明有数据也写「取不到」；
-        //   · 提前置位：settled 先变 true，但 isAvailable 还是 false，渲染仍是 `.unknown`
-        //     （与未 settled 时同一支），等那一发回来数据一到，显示的就正是
-        //     "确实无预警"—— 与实际一致。settled 单独为真是不会产生假文案的。
-        alertSettled = true
 
         await weatherResult
         await minutelyResult
@@ -1623,8 +1697,8 @@ struct SkyRoomView: View {
     /// 而不是三者相加。`async let` 为什么在这里真的能重叠，与 `loadInitialData()` 同一个
     /// 道理（那一处有完整解释：主 actor 只在读写状态时被占用，等网络时是空的）。
     ///
-    /// 预警仍然 `force: false`：它自己有 10 分钟窗口，正好与本轮同频；
-    /// `force: true` 会绕过那个窗口，反而把额度用在重复请求上。
+    /// 预警走 `.enter`：与后端 `s-maxage=300` 对齐的 300 秒窗口由
+    /// `AlertRefreshPolicy.shouldRefresh` 纯函数判定，本轮只负责「进场检查一次」。
     @MainActor
     private func refreshPolledData() async {
         // 主 actor 上的同步方法，本函数也在主 actor 上：直接调，不加 `await`。
@@ -1632,7 +1706,7 @@ struct SkyRoomView: View {
 
         async let weatherResult: Void = WeatherStore.shared.load(force: true)
         async let minutelyResult: Void = MinutelyStore.shared.refresh(force: true)
-        async let alertResult: Void = AlertStore.shared.refresh(force: false)
+        async let alertResult: Void = AlertStore.shared.refreshIfNeeded(.enter)
 
         await weatherResult
         await minutelyResult

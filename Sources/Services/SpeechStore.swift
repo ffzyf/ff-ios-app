@@ -38,14 +38,30 @@ final class SpeechStore: ObservableObject {
         case preparing
         /// 正在播
         case playing
+        /// 已暂停（5.1.2 · R4b）。播放器还在、音频会话不释放，可以随时 `resume()`
+        case paused
         /// 失败。关联值是一句直接可上屏的中文
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
 
-    /// 这一句是不是用户主动点出来的（用于按钮态：喇叭 ↔ 停止）
-    var isBusy: Bool { state == .preparing || state == .playing }
+    /// 这一句是不是用户主动点出来的（用于按钮态：喇叭 ↔ 停止）。
+    /// `.paused` 也算「还在忙」——否则暂停后按钮会变回「朗读」，点下去重开一段。
+    var isBusy: Bool {
+        switch state {
+        case .preparing, .playing, .paused:
+            return true
+        case .idle, .failed:
+            return false
+        }
+    }
+
+    /// 是否处于暂停（T03 的「朗读 / 暂停 / 停止 / 复制」动作行据此切「继续」）
+    var isPaused: Bool {
+        if case .paused = state { return true }
+        return false
+    }
 
     /// 失败文案（没有失败就是 nil）。给页面一行小字用，不用自己 switch
     var failureText: String? {
@@ -116,6 +132,30 @@ final class SpeechStore: ObservableObject {
         teardown()
         state = .idle
         deactivateSession()
+    }
+
+    /// 暂停（5.1.2 · R4b）。
+    ///
+    /// **不动 `generation`**：代次只在「开新的一段 / 彻底停止」时才 +1，
+    /// 暂停只是把当前这一段按住，`speak()` 里那个 `token == generation`
+    /// 的校验必须仍然成立，否则恢复后异步回调会以为自己过期了。
+    /// 同理不 `teardown()`（播放器要留着）、不释放音频会话（恢复更快）。
+    func pause() {
+        guard case .playing = state, let player = player else { return }
+        player.pause()
+        state = .paused
+    }
+
+    /// 继续播放。重复调用安全；没有暂停过就什么也不做。
+    ///
+    /// 重新 `activateSession()` 是幂等的，覆盖「暂停期间被别的 App 抢走会话」的情况。
+    /// `scheduleStatusCheck()` 会先 cancel 暂停前那一次自检，再按恢复时刻重排。
+    func resume() {
+        guard case .paused = state, let player = player else { return }
+        activateSession()
+        player.play()
+        state = .playing
+        scheduleStatusCheck()
     }
 
     // MARK: - 请求

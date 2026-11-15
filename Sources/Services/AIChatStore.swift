@@ -112,6 +112,33 @@ final class AIChatStore: ObservableObject {
     /// 正在拉某条历史会话（骨架态）
     @Published private(set) var isLoadingConversation = false
 
+    // MARK: - 5.1.2 · R4a 联网搜索（对外接口名冻结，T03 UI 直接读这几个）
+    //
+    // 本批总闸恒 off：`searchCapability?.enabled` 拿到的一定是 false / nil，
+    // 于是 chip 置灰、`searchEnabled` 恒 false、请求体不带 `webSearch` 键。
+    // 云端验证通过打开总闸后，UI 一行都不用改。
+
+    /// 本会话的联网开关（按会话记忆，默认关）
+    @Published private(set) var searchEnabled: Bool = false
+
+    /// `/api/ai/models` 下发的 `capabilities.webSearch`；总闸关时 UI 读它的 `reason` 置灰说明
+    @Published private(set) var searchCapability: AISearchCapability?
+
+    /// 本轮联网状态行：`idle/searching/noResults/failed/degraded/done`
+    @Published private(set) var searchState: AISearchState = .idle
+
+    /// 引用按消息 id 归档（与 `AIChatMessage.citations` 同步写，历史回放同一渲染路径）
+    @Published private(set) var citationsByMessage: [String: [AICitation]] = [:]
+
+    /// 末帧扩展 `toolUsage`（本轮工具调用次数 / 是否计费）
+    @Published private(set) var lastToolUsage: AIToolUsage?
+
+    /// 降级状态行的一句人话（"联网不可用，已用普通对话回答"）
+    @Published private(set) var degradationReason: String?
+
+    /// `/api/ai/models` 的 `toolUsage` 当日读数（模型面板显示，缺字段不渲染）
+    @Published private(set) var modelsToolUsage: AIToolUsageSummary?
+
     // MARK: - 常量
 
     /// 空闲超时（秒）：**30 秒收不到任何字节就掐断**。
@@ -140,6 +167,12 @@ final class AIChatStore: ObservableObject {
 
     /// 错误信封最多读多少字节（防止服务端异常时无限读）
     private static let maxErrorBodyBytes = 64 * 1024
+
+    /// 联网开关的按会话记忆（`[convId: Bool]`，架构 §3.5）
+    private static let webSearchByConvKey = "ai.chat.webSearchByConv.v1"
+
+    /// 新会话还没有 convId（第一轮末帧才给），用它当占位键
+    private static let newConversationKey = "__new__"
 
     // MARK: - 私有状态
 
@@ -203,6 +236,8 @@ final class AIChatStore: ObservableObject {
             configuration.httpAdditionalHeaders = ["User-Agent": "FFWang/2.0 (iOS)"]
             self.streamSession = URLSession(configuration: configuration)
         }
+        // 冷启动按「新会话」键恢复一次开关；总闸未知 → 恒关（默认 off）
+        restoreSearchEnabled()
     }
 
     // MARK: - 派生
@@ -295,6 +330,9 @@ final class AIChatStore: ObservableObject {
         lastReason = nil
         lastError = nil
         draft = ""
+        // 5.1.2：新会话用 `"__new__"` 键恢复开关，并清掉上一轮的状态行
+        restoreSearchEnabled()
+        lastToolUsage = nil
     }
 
     // MARK: - 切换 / 加载 / 删除
@@ -319,6 +357,9 @@ final class AIChatStore: ObservableObject {
         messages = []
         lastReason = nil
         lastError = nil
+        // 5.1.2：切到已有会话时恢复它自己记住的联网开关
+        restoreSearchEnabled()
+        lastToolUsage = nil
 
         guard let url = API.aiConversation(id: target) else {
             lastError = .server("地址拼错了。")
@@ -392,6 +433,11 @@ final class AIChatStore: ObservableObject {
             }
             models = response.models
             autoPicked = response.auto?.picked
+            // 5.1.2 · R4a：能力回显与当日读数。旧响应缺这两段时全为 nil，
+            // `reconcileSearchEnabled()` 会把开关钳回 false（chip 置灰）。
+            searchCapability = response.capabilities?.webSearch
+            modelsToolUsage = response.toolUsage
+            reconcileSearchEnabled()
             if let remaining = response.quota?.remaining {
                 quotaRemaining = remaining
             }
@@ -426,6 +472,11 @@ final class AIChatStore: ObservableObject {
         lastError = nil
         lastReason = nil
         isStreaming = true
+        // 5.1.2：开流前重置本轮联网状态。开关打开时先乐观显示「搜索中」，
+        // 后端若判定不支持会发一帧 `degraded`，状态行随即改口。
+        searchState = searchEnabled ? .searching : .idle
+        degradationReason = nil
+        lastToolUsage = nil
 
         streamGeneration &+= 1
         let token = streamGeneration
@@ -501,7 +552,10 @@ final class AIChatStore: ObservableObject {
                                                           model: selectedModel,
                                                           text: userText,
                                                           weather: Self.weatherSnapshot(),
-                                                          earnings: Self.earningsSnapshot()))
+                                                          earnings: Self.earningsSnapshot(),
+                                                          // 关闭时传 nil → `encodeIfPresent` 不写这一键
+                                                          // → 请求体与 3.31.0 逐字一致（AC4-2）
+                                                          webSearch: searchEnabled ? true : nil))
         } catch {
             throw AIError.server("这条消息发不出去。")
         }
@@ -567,6 +621,25 @@ final class AIChatStore: ObservableObject {
                 appendDelta(delta, token: token)
             }
 
+            // 5.1.2 · R4a 四类新帧。全部可选、全 `try?` 解码（在 `AIStreamEvent`
+            // 里已完成），缺字段 / 半帧 / 坏结构都只是「这一帧没有」。
+            // 位置刻意在 `done` 之前：末帧会同时带 `done` 与 `toolUsage`，
+            // 放后面就接不到那一份单独记账。
+            if let frame = event.search {
+                applySearchFrame(frame, token: token)
+            }
+            if let citations = event.citations, !citations.isEmpty {
+                attachCitations(citations, token: token)
+            }
+            if event.degraded == true {
+                applyDegraded(reason: event.reason, token: token)
+            }
+            if let usage = event.toolUsage {
+                applyToolUsage(usage, token: token)
+            }
+
+            // 唯一「完整」凭据仍是 `done == true`：状态帧 `no_results` / `failed` /
+            // 降级帧都**不会**把消息标成回答完毕（半截不冒充完整，AC4-5）
             if event.done == true {
                 finishTurn(with: event, token: token)
                 return
@@ -696,6 +769,9 @@ final class AIChatStore: ObservableObject {
 
         if let id = event.convId, !id.isEmpty {
             conversationId = id
+            // 第一轮从「新会话」拿到真实 convId：把占位键里的开关值迁过去，
+            // 下次 load(id:) 才能恢复这条会话自己的记忆
+            migrateSearchMemory(to: id)
         }
         if let reason = event.reason, !reason.isEmpty {
             lastReason = reason
@@ -812,6 +888,97 @@ final class AIChatStore: ObservableObject {
         default:
             return .server(message.isEmpty ? "服务器打了个喷嚏（\(status)）。" : message)
         }
+    }
+
+    // MARK: - 5.1.2 · R4a 联网搜索状态（按会话记忆 / 帧落地）
+    //
+    // 这一组只做「状态怎么存、怎么落地」，不做任何能力判定：
+    // 能不能用由 `/api/ai/models` 的 `capabilities.webSearch` 说了算，
+    // 上游要不要带工具字段由后端 `ai-search.js` 的纯函数说了算。
+
+    /// 当前会话在 UserDefaults 里用的键；新会话还没有 convId，用 `"__new__"`。
+    private func memoryKey() -> String {
+        return conversationId ?? Self.newConversationKey
+    }
+
+    private func loadSearchMemory() -> [String: Bool] {
+        return (UserDefaults.standard.dictionary(forKey: Self.webSearchByConvKey)
+                as? [String: Bool]) ?? [:]
+    }
+
+    /// 恢复本会话的开关并清掉上一轮状态行。
+    /// `init` / `newConversation()` / `load(id:)` 三处都调它，恢复逻辑只有一份。
+    private func restoreSearchEnabled() {
+        reconcileSearchEnabled()
+        searchState = .idle
+        degradationReason = nil
+    }
+
+    /// 总闸一致化：**总闸关 / 能力未知时恒 false**，记住的值不生效（AC4-2）。
+    private func reconcileSearchEnabled() {
+        guard searchCapability?.enabled == true else {
+            searchEnabled = false
+            return
+        }
+        searchEnabled = loadSearchMemory()[memoryKey()] ?? false
+    }
+
+    /// 对外：能力 chip 切换联网开关（T03 调它）。
+    /// 总闸关时忽略写入并钳回 false，界面据 `searchCapability?.reason` 置灰说明。
+    func setSearchEnabled(_ enabled: Bool) {
+        guard searchCapability?.enabled == true else {
+            searchEnabled = false
+            return
+        }
+        searchEnabled = enabled
+        var memory = loadSearchMemory()
+        memory[memoryKey()] = enabled
+        UserDefaults.standard.set(memory, forKey: Self.webSearchByConvKey)
+    }
+
+    /// 第一轮末帧给了真实 convId：把占位键里的值迁到真实键下。
+    /// 只在「确实存过新会话开关」时写，避免给每条历史会话都塞一条记录。
+    private func migrateSearchMemory(to convId: String) {
+        var memory = loadSearchMemory()
+        guard let pending = memory[Self.newConversationKey] else { return }
+        memory[convId] = pending
+        UserDefaults.standard.set(memory, forKey: Self.webSearchByConvKey)
+    }
+
+    /// 状态帧落地。未知 `state` → `AISearchState.from` 返回 nil → 跳过不更新，
+    /// 绝不把「没搜到」或坏帧当成「回答完毕」。
+    private func applySearchFrame(_ frame: AISearchFrame, token: Int) {
+        guard token == streamGeneration else { return }
+        guard let next = AISearchState.from(frame.state) else { return }
+        searchState = next
+    }
+
+    /// 引用帧落地：同时写 `citationsByMessage` 和消息本身的 `citations`，
+    /// 让「本轮流式」与「历史回放」走同一条渲染路径（缺引用就整块不渲染）。
+    private func attachCitations(_ citations: [AICitation], token: Int) {
+        guard token == streamGeneration else { return }
+        guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
+        let messageId = messages[index].id
+        var merged = citationsByMessage[messageId] ?? []
+        merged.append(contentsOf: citations)
+        citationsByMessage[messageId] = merged
+        messages[index].citations = merged
+        if searchState == .searching || searchState == .idle {
+            searchState = .done
+        }
+    }
+
+    /// 降级帧落地。后端给的是英文降级码（`gate_off` / `probe_failed` / …），
+    /// 只作调试用，上屏固定写这句人话；`degraded` 与 `search.state=done` 互斥。
+    private func applyDegraded(reason: String?, token: Int) {
+        guard token == streamGeneration else { return }
+        searchState = .degraded
+        degradationReason = "联网不可用，已用普通对话回答"
+    }
+
+    private func applyToolUsage(_ usage: AIToolUsage, token: Int) {
+        guard token == streamGeneration else { return }
+        lastToolUsage = usage
     }
 
     /// 统一 trim（空白一律当"没有"）

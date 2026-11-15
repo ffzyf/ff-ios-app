@@ -29,6 +29,10 @@ struct SettingsView: View {
                     group("外观") { AppearanceSection() }
                     // 3.7.0：天气用设备定位（默认关闭，见 LocationStore 的类型注释）
                     group("天气") { WeatherLocationSection() }
+                    // 5.1.2 · R2：天气预警 Bark 推送（后端定时检测 + 差异推送，AC2-3）
+                    group("天气预警推送") { AlertPushSettingsSection() }
+                    // 5.1.2 · R5 / Q3 兼顾：只有一行静态指引，不是入口
+                    group("小组件") { widgetDebugHintRow }
                     // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
                     group("红石") { LiveActivitySection() }
                     // 3.8.0：天光实时活动（3.10.0 起是"状态跟随"按钮，见 DaylightActivitySection）
@@ -100,6 +104,20 @@ struct SettingsView: View {
     }
 
     // MARK: - 各组内容
+
+    /// 5.1.2 · R5 / Q3 兼顾方案：**只有一行静态说明，不是入口**。
+    ///
+    /// 若这里也挂一个呈现面板，就会出现两个呈现点、两份 `isPresented`、
+    /// 两套「退出恢复真实数据」逻辑 —— 违反 `DESIGN-RULES.md` §4
+    /// 「一个页面只从约定好的入口进入」与「不得出现第二个真相源」。
+    /// 让按「在设置中加」来找的人能找到指引就够了；真正的入口只有「更多 → 工具」。
+    private var widgetDebugHintRow: some View {
+        Text("小组件调试在「更多 → 工具」中打开，入口只有那一个。")
+            .font(Typography.captionXS)
+            .foregroundStyle(Theme.textTertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+    }
 
     private var cacheRow: some View {
         GlassListRow(

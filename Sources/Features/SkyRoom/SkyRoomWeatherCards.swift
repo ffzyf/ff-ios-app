@@ -249,7 +249,7 @@ struct SkyRoomAlertBanner: View {
 
 // MARK: - 无预警状态行
 
-/// 无预警时的常驻状态行。
+/// 无预警 / 加载中 / 读取失败时的常驻状态行（R1 · 5.1.2）。
 ///
 /// 为什么要有它：之前「没有预警」等于「这块区域不存在」，用户无法区分
 /// 「今天确实没有预警」和「预警功能没接 / 接口挂了」。一条 20pt 高的行就能消除这个歧义。
@@ -257,79 +257,133 @@ struct SkyRoomAlertBanner: View {
 /// 为什么不用卡片底板：这是「一切正常」的信息，视觉重量必须低于任何一条实况卡 ——
 /// 否则每天占着一块卡片的位置说「没事」，反而制造焦虑。
 ///
-/// 为什么 `.unknown` 也不用警示色：「拿不到数据」不是「有灾害」。用一个橙色三角去说
-/// "接口挂了"，用户会先以为要下暴雨了，然后才发现是 App 的问题 —— 那是消耗信任。
+/// 为什么失败态也不用**预警色**：「拿不到数据」不是「有灾害」。用 `Theme.statusWarn`
+/// （琥珀系，App 内「警告 / 待确认」的既有语义）而不是四色预警色，避免被误读为灾害
+/// （AC1-2 / 架构 §7-4）。这也是 3.26.0「不要用橙色三角说接口挂了」的延续。
 struct SkyRoomAlertStatusRow: View {
 
-    /// .none = 确认无预警；.unknown = 拿不到（不要把「不知道」渲染成「没有」）
+    /// .none = 确认无预警；.loading = 正在获取；.failed = 连缓存都没有的彻底失败。
+    /// **没有 `.unknown`**：5.1.2 起「拿不到」被四态明确拆成 `loadingFirst` / `failed`，
+    /// 不再用一句模糊文案把「首次加载」与「彻底失败」两种语义糊在一起。
     enum State {
         case none
-        case unknown
+        case loading
+        case failed
     }
 
     let state: State
-    let updatedAt: Date?
+    /// 最近一次成功的时刻（`.none` 显示「更新」、`.failed` 显示「最后更新于」）；nil 不写占位
+    let lastSuccessAt: Date?
+    /// 失败原因的一句人话（`AlertFailure.userText`）；仅 `.failed` 渲染
+    let failureText: String?
+    /// 「重试」动作：由调用方接到 `AlertStore.retry()`（Store 的 `.force`）
+    let onRetry: () -> Void
     let scale: CGFloat
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: iconName)
-                .font(.system(size: 12 * scale, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
-            Text(title)
-                .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-            Spacer(minLength: 6)
-            // 右侧小字可缺：`.none` 且 `updatedAt == nil` 时只留「预警」，
-            // `.unknown` 时它是一句承诺（我们真的会自动重试，见 `AlertStore.startPolling`）
-            Text(detail)
-                .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
-                .foregroundStyle(Theme.textTertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: iconName)
+                    .font(.system(size: 12 * scale, weight: .semibold))
+                    .foregroundStyle(iconColor)
+                Text(title)
+                    .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                    .foregroundStyle(titleColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 6)
+                // `.failed` 右侧是「重试」按钮，其余态是右侧小字（可缺，nil 就不渲染）
+                if state == .failed {
+                    Button("重试") { onRetry() }
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                        .foregroundStyle(Theme.statusWarn)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("重试获取预警")
+                } else if let detail = detailText {
+                    Text(detail)
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .monospacedDigit()
+                }
+            }
+
+            // 失败原因（人话）+ 最后更新时刻：各自可缺，缺就不写，绝不补 "--:--"
+            if state == .failed {
+                if let failureText, !failureText.isEmpty {
+                    Text(failureText)
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let at = lastSuccessAt {
+                    Text("最后更新于 " + Formatters.timeHHmm(at))
+                        .font(SkyRoomMetrics.TextStyle.cardDetail(scale))
+                        .foregroundStyle(Theme.textTertiary)
+                        .monospacedDigit()
+                }
+            }
         }
-        // 高度靠内容撑（约 20pt），不设固定 frame：动态字体放大时它该跟着长，
-        // 钉死高度只会换来一行被裁掉的字
+        // 高度靠内容撑，不设固定 frame：动态字体放大时它该跟着长
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // 不做手势、不可点：点它没有去处，可点的东西必须有反馈，这里给不出
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(title + "，" + detail)
+        .accessibilityLabel(accessibilityText)
     }
 
     private var iconName: String {
         switch state {
         case .none: return "checkmark.shield"
-        case .unknown: return "exclamationmark.triangle"
+        case .loading: return "arrow.triangle.2.circlepath"
+        case .failed: return "exclamationmark.triangle"
+        }
+    }
+
+    private var iconColor: Color {
+        switch state {
+        case .none, .loading: return Theme.textSecondary
+        case .failed: return Theme.statusWarn
+        }
+    }
+
+    private var titleColor: Color {
+        switch state {
+        case .none, .loading: return Theme.textSecondary
+        case .failed: return Theme.statusWarn
         }
     }
 
     private var title: String {
         switch state {
         case .none: return "当前无天气预警"
-        case .unknown: return "预警数据暂时取不到"
+        case .loading: return "正在获取预警…"
+        case .failed: return "预警读取失败"
         }
     }
 
-    /// 右侧小字。`.none` 时是「预警 · 18:20 更新」，时间那半句按 `updatedAt` 有无拼接 ——
-    /// **不要**写成 `"预警 · \(time) · 更新"`，`updatedAt` 为 nil 时会渲染出
-    /// 「预警 ·  · 更新」这种空占位（自查项 2）。
-    ///
-    /// 3.26.0 把「和风天气」改成「预警」：这一行左边已经写着"当前无天气预警"，
-    /// 右边再挂一个数据源名，用户会把那个时刻读成**天气**的更新时间 ——
-    /// 而这个时刻其实是预警请求的时刻（`AlertStore.updatedAt`，10 分钟一轮）。
-    /// 于是"顶部 23:30 更新、底部 22:37 更新"被当成同一个数出了两个值，
-    /// 报上来是"天气下面的时间不刷新"。时刻的归属必须写在它自己身上。
-    private var detail: String {
+    /// 右侧小字。`.none` 时是「预警 · 18:20 更新」，时间那半句按 `lastSuccessAt` 有无拼接 ——
+    /// **不要**写成 `"预警 · \(time) · 更新"`，nil 时会渲染出「预警 ·  · 更新」空占位。
+    /// `.loading` 返回 nil（不写「稍后自动重试」那种把加载说成失败的假话）。
+    private var detailText: String? {
         switch state {
         case .none:
-            guard let updatedAt else { return "预警" }
-            return "预警 · " + Formatters.timeHHmm(updatedAt) + " 更新"
-        case .unknown:
-            return "稍后自动重试"
+            guard let at = lastSuccessAt else { return "预警" }
+            return "预警 · " + Formatters.timeHHmm(at) + " 更新"
+        case .loading, .failed:
+            return nil
         }
+    }
+
+    private var accessibilityText: String {
+        var parts = [title]
+        if let detailText { parts.append(detailText) }
+        if let failureText { parts.append(failureText) }
+        if state == .failed, let at = lastSuccessAt {
+            parts.append("最后更新于 " + Formatters.timeHHmm(at))
+        }
+        return parts.joined(separator: "，")
     }
 }
 

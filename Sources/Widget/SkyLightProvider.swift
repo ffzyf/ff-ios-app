@@ -1,96 +1,16 @@
 import Foundation
 import WidgetKit
 
-// MARK: - 天光 entry
 
-/// 天光小组件的一帧。
-///
-/// 为什么把「阶段 / 倒计时目标 / 日出日落」全部在 entry 里算好，而不是留给 View：
-/// entry 是 Timeline **预渲染**的时刻，`date` 就是"这一帧代表哪一刻"。
-/// 如果 View 里现取 `Date()`，系统展示一条旧帧时文字会和真实时间错位
-/// （典型症状：太阳已经偏西，倒计时还停在正午）。
-///
-/// 天光只描述"此刻的光与此刻的天"：天色来自 `SunClock` 的纯函数，
-/// 天气来自一次 `/api/app/weather`。
-///
-/// 两者在 entry 里**汇合而不是互相依赖**：天气拉失败就填 nil，天色照样算得出来 ——
-/// 天光卡的主视觉是"天空 + 地平线 + 太阳"，天气只是叠在它上面的一层，
-/// 所以网络失败绝不会让这张卡变成空白或错误态。
-struct SkyLightEntry: TimelineEntry {
+// MARK: - SkyLightEntry 工厂方法
 
-    /// 这一帧对应的时刻（= 上一个阶段边界，或 15 分钟网格点）
-    let date: Date
-    /// 这一帧属于哪一档天色（七档，见 `SunClock` 文件头的时段定义）
-    let phase: SkyPhase
-    /// 这一帧的**天气判定**（三档，见 `SkyViewing`）。nil = 没拿到数据。
-    ///
-    /// ## 为什么存"观测"而不存"词"
-    ///
-    /// 渲染层要说的话是 `phase.label(viewing: viewing)` —— 一个**纯函数**的结果。
-    /// 如果这里改存 `phaseLabel: String`，同一句话就有了两个真值来源：
-    /// `phase` 变了（时间线换帧、门控降级）而 `phaseLabel` 没跟着变，卡片就会
-    /// 写着「黄金时刻」却配着白天的蓝 —— 而且没有任何编译错误提醒谁去同步。
-    /// 存观测则相反：词永远是这一帧 `phase` × `viewing` 现场算出来的，漂不了。
-    ///
-    /// 这里只放 `Verdict`（`String` 原始值的枚举、纯 Foundation、`Sendable`），
-    /// 不引入 SwiftUI 类型 —— `SkyViewing.swift` 与 Widget target 共用。
-    let viewing: SkyViewing.Verdict?
-    /// 倒计时要数到的时刻：**下一阶段的起点**。夜里是下一次日出
-    let deadline: Date?
-    /// 这一帧所在"一天"的日出（北京时间）；极昼极夜为 nil，地面区整块不画
-    let sunrise: Date?
-    /// 同上的日落
-    let sunset: Date?
-    /// 这一帧要叠加的天气实况。**可空，且 nil 是正常状态**。
-    ///
-    /// 为什么整条 timeline 只拉一次、然后逐帧共用同一个值：
-    /// 天光一轮排 24 小时、约 103 帧（15 分钟网格 96 帧 + 7 个阶段边界），
-    /// 每帧各拉一次就是 103 次请求 —— 刷新预算（每天 40–70 次）会被一轮打穿。
-    /// 而"今天到底有没有云"半小时内不会变，共用一份完全够用。
-    ///
-    /// nil 的三种来源：接口超时 / `ok == false` / 后端没给 `code`。
-    /// 三种都走同一条路：**完全不画叠加层**，天空保持原样。
-    /// 绝不兜底成晴天：把缺数据画成晴天，是这个项目已经踩过一次的坑
-    /// （见 `WeatherKind.from(code:)` 的注释）。
-    let weather: WeatherNow?
+/// 5.1.2 · T03：`SkyLightEntry` 的值类型定义（字段 + 纯计算属性）已抽到
+/// `Sources/Shared/WidgetDebug/WidgetEntries.swift`（App / Widget 双 target 共用）。
+/// 下面的工厂 / 倒计时方法依赖 Widget-only 的 `SunTimesOverride`、
+/// `SkyLightWeatherFeed`，继续只在本文件（Widget target）编译。
 
-    /// 这一帧的能见度（米）。nil = 没数据（不是"很好"，见 `SkyHaze` 的兜底纪律）。
-    ///
-    /// 为什么可空、且 nil 是正常状态：`VisibilityProbe.fetch` 打的是另一台上游
-    /// （Open-Meteo），失败只返回 nil —— 它绝不兜底成 24km，因为"把雾天画成通透天"
-    /// 正是这个功能要解决的问题本身。nil 时 `SkyHaze.level` 只用天气类型给一个保守底值
-    /// （雾 0.85、雨 0.30…），画面照样按"能见度差"变灰。
-    ///
-    /// 为什么和 weather 一样**整轮共用一份**：理由与上面 `weather` 完全一致（一轮 103 帧，
-    /// 每帧拉一次会打穿刷新预算），而且能见度是分钟级的量，一小时内的变化肉眼无差。
-    let visibilityMeters: Double?
+extension SkyLightEntry {
 
-    /// 天气类型（8 组视觉类型）。nil = 不知道什么天 → 叠加层整层不画
-    var weatherKind: WeatherKind? {
-        return weather?.kind
-    }
-
-    /// 距 `deadline` 还有多少秒（已经过点 / 算不出时返回 0）
-    var remaining: TimeInterval {
-        guard let deadline else { return 0 }
-        return max(0, deadline.timeIntervalSince(date))
-    }
-
-    /// 倒计时是否需要"秒级走时"。
-    ///
-    /// < 1 小时才需要：这一档里秒是唯一的变量，交给 `Text(timerInterval:countsDown:)`
-    /// 由系统自绘（Widget 里**不能**起 Timer，进程随时会被挂起）。
-    /// ≥ 1 小时用静态文案（`12小时32分钟`），分钟位由"每 15 分钟一帧"的网格推进 ——
-    /// 在小时量级上，这个精度足够，而且省掉一整块系统计时器。
-    var needsSecondTicker: Bool {
-        return remaining > 0 && remaining < 3600
-    }
-
-    /// ≥ 1 小时用的静态文案：`12小时32分钟` / `49分钟30秒`（规则见 `SkyPhase.countdownText`）
-    var countdownText: String? {
-        guard let deadline else { return nil }
-        return SkyPhase.countdownText(to: deadline, now: date)
-    }
 
     /// 由时刻造一帧（唯一入口，纯函数 —— 可被预览、可被自检复用）
     ///
@@ -453,4 +373,3 @@ enum SkyLightWeatherFeed {
         }
     }
 }
-

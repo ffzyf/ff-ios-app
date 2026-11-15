@@ -29,6 +29,16 @@ struct AIChatMessageList: View {
     /// 有默认值：不加这个参数的老调用点仍然编得过（本页只有一个调用点）。
     var isLoading: Bool = false
 
+    /// 本轮联网状态行文案（由 `AIChatStatusLine.text(...)` 纯函数投影，架构 §1.5.5）。
+    /// 只挂在最后一条 assistant 气泡；nil / 空 → 不渲染。历史回放不会有，天然不误报。
+    var statusLine: String? = nil
+
+    /// 状态行归属的消息 id（最后一条 assistant）。
+    var statusMessageId: String? = nil
+
+    /// 引用区列数：iPad rail 档两列（AC4-6），其余 1 列。
+    var citationColumns: Int = 1
+
     /// 空态的建议问题
     let suggestions: [String]
 
@@ -83,7 +93,9 @@ struct AIChatMessageList: View {
             ForEach(messages) { message in
                 AIChatBubble(
                     message: message,
-                    modelLabel: AIModelNaming.label(message.model, models: models)
+                    modelLabel: AIModelNaming.label(message.model, models: models),
+                    citationColumns: citationColumns,
+                    statusLine: message.id == statusMessageId ? statusLine : nil
                 )
                 .id(message.id)
             }
@@ -222,11 +234,22 @@ private struct AIChatBubble: View {
     let message: AIChatMessage
     /// 助手消息的说话人（用户消息不用它）
     let modelLabel: String?
+    /// 引用区列数（iPad rail 两列，AC4-6）
+    let citationColumns: Int
+    /// 本轮联网状态行文案；历史消息 / 未开启联网时为 nil → 整行不渲染
+    let statusLine: String?
 
     var body: some View {
         VStack(alignment: stackAlignment, spacing: 5) {
             speaker
             row
+
+            // 5.1.2 · R4a / R4b / R4c：引用区、本轮状态行、常驻动作行。
+            // 三块都只在 assistant 气泡下出现，且都走「拿得到才画」：
+            // 历史会话消息与流式消息使用同一个 AIChatBubble，天然全覆盖。
+            if !isUser {
+                assistantExtras
+            }
 
             // 失败 / 被停止之后的一行灰字。放在气泡**下面**（而不是里面）：
             // 它说的是"这条为什么没长完整"，不是这条消息的内容。
@@ -239,6 +262,29 @@ private struct AIChatBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: frameAlignment)
+    }
+
+    /// 引用区 + 状态行 + 动作行。三者都是「可选内容」，缺一块不影响其余两块。
+    @ViewBuilder
+    private var assistantExtras: some View {
+        // 引用：nil / 空数组由 AIChatCitationView 自己整块不渲染（§7-13）
+        if let citations = message.citations, !citations.isEmpty {
+            AIChatCitationView(citations: citations, columns: citationColumns)
+                .padding(.horizontal, 4)
+        }
+
+        // 本轮状态行：no_results / failed / degraded 都只说明这一轮的状态，
+        // 绝不写成「回答完毕」（消息是否完整只由末帧 done==true 决定，架构 §3.3）。
+        if let statusLine, !statusLine.isEmpty {
+            Text(statusLine)
+                .font(Typography.captionXS)
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.horizontal, 4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        AIChatMessageActions(text: message.text, isAvailable: message.status == .done)
+            .padding(.horizontal, 4)
     }
 
     // MARK: - 派生
@@ -437,6 +483,34 @@ enum AIModelNaming {
             return "腾讯混元"
         default:
             return trimmed
+        }
+    }
+}
+
+// MARK: - 本轮联网状态行（纯展示映射）
+
+/// 状态行文案（5.1.2 · R4a，架构 §1.5.5 / §3.3 / §7-13）。
+///
+/// 纯函数：输入是 Store 已经算好的 `AISearchState` + 降级文案，输出只有「显示什么字」。
+/// 三条硬规矩都在这里：
+/// · `noResults` / `failed` / `degraded` **都不返回「回答完毕」**；
+/// · `.done` / `.idle` 不渲染状态行（消息是否完整只由末帧 `done == true` 决定）；
+/// · `.degraded` 固定用 Store 给的 `degradationReason`，后端英文降级码不上屏。
+enum AIChatStatusLine {
+    static func text(state: AISearchState, degradationReason: String?) -> String? {
+        switch state {
+        case .idle, .done:
+            return nil
+        case .searching:
+            return "联网搜索中…"
+        case .noResults:
+            return "未找到相关结果"
+        case .failed:
+            return "引用加载失败 · 可重试"
+        case .degraded:
+            let trimmed = degradationReason?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "联网不可用，已用普通对话回答" : trimmed
         }
     }
 }
