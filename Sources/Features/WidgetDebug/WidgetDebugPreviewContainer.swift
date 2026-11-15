@@ -6,10 +6,10 @@ import WidgetKit
 /// 三条纪律：
 /// 1. **不自己画一套组件**：按 `descriptor.entryKind` 构造对应的模拟 TimelineEntry /
 ///    LiveActivity `ContentState`，直接交给既有 `*Face` / 锁屏 Face。
-/// 2. **按 family 真实画布比例定框**，并用 `.environment(\.widgetFamily, …)` 注入分档
-///    （§8-4：该环境值在 App 进程可写需真机/Xcode 验证；若不可写，退路是新增
-///    `WidgetDebugFamilyKey` 环境值，各 Face 读取处加一行 `override ?? family`，
-///    **只改访问方式、不重画任何视觉**）。
+/// 2. **按 family 真实画布比例定框**，并用 `.environment(\.widgetDebugFamily, …)` 注入分档
+///    （§8-4 的退路已落地：系统 `\.widgetFamily` 是只读 KeyPath，`.environment` 要可写，
+///    所以改用 `WidgetDebugFamilyKey`（`Sources/Shared/WidgetDebug/`）。各 Face 读取处
+///    走 `debugFamily ?? family`，**只改访问方式、不重画任何视觉**）。
 /// 3. **不支持档 / 不适用态不渲染空壳**：直接显示 `WidgetDebugCatalog` 给的 `reason`。
 struct WidgetDebugPreviewContainer: View {
 
@@ -48,7 +48,7 @@ struct WidgetDebugPreviewContainer: View {
     private var previewFrame: some View {
         if let family = widgetFamily {
             framed
-                .environment(\.widgetFamily, family)
+                .environment(\.widgetDebugFamily, family)
         } else {
             // 两个实时活动用伪 family，ActivityKit 锁屏视图不读 `\.widgetFamily`
             framed

@@ -37,6 +37,9 @@ import WidgetKit
 struct SkyLightFace: View {
 
     @Environment(\.widgetFamily) private var family
+
+    /// 5.1.2 · R5：调试面板注入的尺寸档（桌面上恒为 nil）。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
     /// 渲染模式（iOS 16+ 环境值）：桌面透明 / 着色外观下系统用 accented 模式重画，
     /// 此刻必须把"实心层"换成"低不透明度层"、并把关键文字标进 accent 组 ——
     /// 否则用户的观感就是"开了透明之后只能看见字"（3.8.1 用户反馈）。
@@ -57,13 +60,19 @@ struct SkyLightFace: View {
         return WidgetCanvas.textScale(minSide: canvasMinSide)
     }
 
+    /// 这一帧生效的尺寸档：预览注入优先，桌面回落系统 `\.widgetFamily`。
+    /// 三档版式 / 断点 / 字号一字未动，只换读取来源。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
+    }
+
     /// 大号（338×354，3.12.0）。
     ///
     /// 与中号的差别（任务书逐条）：天空区域更大（地平线压低 0.62 → 0.52）、
     /// 顶部阶段名与倒计时各升一档（13 / 15pt）、**底部新增今日天气摘要**
     /// （温度 + 现象 + 高低温）并保留日出日落。
     private var isLarge: Bool {
-        return family == .systemLarge
+        return effectiveFamily == .systemLarge
     }
 
     /// 这一档的地平线弧顶高度：大号把天压得更低（= 天空更大）
@@ -78,7 +87,7 @@ struct SkyLightFace: View {
 
     /// 这一档的四周内边距
     private var sidePadding: CGFloat {
-        switch family {
+        switch effectiveFamily {
         case .systemSmall:
             return WidgetTheme.SkyLight.smallSidePadding
         case .systemLarge:
@@ -139,7 +148,7 @@ struct SkyLightFace: View {
     /// 任何一种可读缩放，参考图的紧凑形态就是纯文字）。
     @ViewBuilder
     private var accessoryContent: some View {
-        if family == .accessoryInline {
+        if effectiveFamily == .accessoryInline {
             Text(inlineText)
                 .font(WidgetTheme.Accessory.inlineText)
                 .widgetAccentable()
@@ -175,7 +184,7 @@ struct SkyLightFace: View {
     }
 
     private var isAccessory: Bool {
-        switch family {
+        switch effectiveFamily {
         case .accessoryCircular, .accessoryRectangular, .accessoryInline:
             return true
         default:
@@ -227,7 +236,7 @@ struct SkyLightFace: View {
     private var largeWeatherSummary: some View {
         if let summary = weatherSummaryText {
             Text(summary)
-                .font(WidgetTheme.SkyLight.summary(family))
+                .font(WidgetTheme.SkyLight.summary(effectiveFamily))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -264,7 +273,7 @@ struct SkyLightFace: View {
             // 桌面档是这张卡最常被看到的位置：词必须与 App 内、锁屏档一致 ——
             // 阴天不能写「蓝调剩余」（天上没有蓝调，哪来"蓝调剩余"）
             Text(entry.phase.label(viewing: entry.viewing))
-                .font(WidgetTheme.SkyLight.phaseLabelScaled(family, scale: s))
+                .font(WidgetTheme.SkyLight.phaseLabelScaled(effectiveFamily, scale: s))
                 .foregroundStyle(sky.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -293,7 +302,7 @@ struct SkyLightFace: View {
         if let deadline = entry.deadline, deadline > entry.date {
             if entry.needsSecondTicker {
                 Text(timerInterval: entry.date...deadline, countsDown: true, showsHours: false)
-                    .font(WidgetTheme.SkyLight.countdownScaled(family, scale: s))
+                    .font(WidgetTheme.SkyLight.countdownScaled(effectiveFamily, scale: s))
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -301,7 +310,7 @@ struct SkyLightFace: View {
                     .widgetAccentable()
             } else {
                 Text(entry.countdownText ?? "")
-                    .font(WidgetTheme.SkyLight.countdownScaled(family, scale: s))
+                    .font(WidgetTheme.SkyLight.countdownScaled(effectiveFamily, scale: s))
                     .foregroundStyle(sky.inkDim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -325,14 +334,14 @@ struct SkyLightFace: View {
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 if let sunrise = entry.sunrise {
                     Text(Formatters.timeHHmm(sunrise))
-                        .font(WidgetTheme.SkyLight.sunTime(family))
+                        .font(WidgetTheme.SkyLight.sunTime(effectiveFamily))
                         .foregroundStyle(sky.edge)
                         .lineLimit(1)
                 }
                 Spacer(minLength: WidgetTheme.SkyLight.dotGap)
                 if let sunset = entry.sunset {
                     Text(Formatters.timeHHmm(sunset))
-                        .font(WidgetTheme.SkyLight.sunTime(family))
+                        .font(WidgetTheme.SkyLight.sunTime(effectiveFamily))
                         .foregroundStyle(sky.inkDim)
                         .lineLimit(1)
                 }

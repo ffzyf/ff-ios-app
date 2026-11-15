@@ -528,6 +528,10 @@ struct BriefFace: View {
 
     @Environment(\.widgetFamily) private var family
 
+    /// 5.1.2 · R5：调试面板注入的尺寸档（`Sources/Shared/WidgetDebug/WidgetDebugFamilyKey.swift`）。
+    /// 桌面上恒为 nil；预览时用来顶替只读的系统 `\.widgetFamily`。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
+
     /// 为什么这里必须读、而且**只在这里读**：`ThemeScope`（App 侧唯一那处）属于 App target，
     /// Widget 进程里没有它；而 `Widget` 本身不是 `View`、拿不到环境 —— 所以"系统是浅色还是
     /// 深色"只能在 `BriefFace`（真正的卡片视图）落到一个枚举上，往下全部走
@@ -553,7 +557,13 @@ struct BriefFace: View {
     }
 
     private var isSmall: Bool {
-        return family == .systemSmall
+        return effectiveFamily == .systemSmall
+    }
+
+    /// 这一帧生效的尺寸档：调试预览注入优先，桌面上回落系统 `\.widgetFamily`。
+    /// **只决定读哪一档**，各档的版式 / 断点 / 字号一字未动。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
     }
 
     /// 今天的天气类型。`nil` = 没拉到天气 / 代码未知 —— 整张卡退回无天气形态。
@@ -601,7 +611,7 @@ struct BriefFace: View {
             if let today = kind {
                 BriefWeatherLayer(kind: today,
                                   date: entry.date,
-                                  family: family,
+                                  family: effectiveFamily,
                                   paper: paperMode,
                                   // 3.25.0：粒子的密度 / 落速按分钟降水的 peak 走，
                                   // 不再只看 WMO code（那个只知道"雨"这个类型，不知道多大）。
@@ -623,7 +633,7 @@ struct BriefFace: View {
     }
 
     private var isLarge: Bool {
-        return family == .systemLarge
+        return effectiveFamily == .systemLarge
     }
 
     /// 量画布**短边**。为什么不是宽度：medium 是 338×158（iPad 364×170），
@@ -680,7 +690,7 @@ struct BriefFace: View {
             }
 
             BriefTrack(progress: dayProgress,
-                       dotCount: BriefMetrics.dotCount(family),
+                       dotCount: BriefMetrics.dotCount(effectiveFamily),
                        ink: ink)
 
             if hasFooter {
@@ -688,8 +698,8 @@ struct BriefFace: View {
                     .padding(.top, BriefMetrics.footerGap)
             }
         }
-        .padding(.horizontal, BriefMetrics.sidePadding(family))
-        .padding(.vertical, BriefMetrics.verticalPadding(family))
+        .padding(.horizontal, BriefMetrics.sidePadding(effectiveFamily))
+        .padding(.vertical, BriefMetrics.verticalPadding(effectiveFamily))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -738,15 +748,15 @@ struct BriefFace: View {
             ritualChips
 
             BriefTrack(progress: dayProgress,
-                       dotCount: BriefMetrics.dotCount(family),
+                       dotCount: BriefMetrics.dotCount(effectiveFamily),
                        ink: ink)
                 .padding(.top, BriefMetrics.largeSectionGap)
 
             largeSunRow
                 .padding(.top, BriefMetrics.footerGap)
         }
-        .padding(.horizontal, BriefMetrics.sidePadding(family))
-        .padding(.vertical, BriefMetrics.verticalPadding(family))
+        .padding(.horizontal, BriefMetrics.sidePadding(effectiveFamily))
+        .padding(.vertical, BriefMetrics.verticalPadding(effectiveFamily))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -1023,7 +1033,7 @@ struct BriefFace: View {
             Text(text)
                 .font(BriefMetrics.bodyScaled(s))
                 .foregroundStyle(inkDim)
-                .lineLimit(BriefMetrics.bodyLineLimit(family))
+                .lineLimit(BriefMetrics.bodyLineLimit(effectiveFamily))
                 .lineSpacing(BriefMetrics.bodyLineSpacing)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1161,7 +1171,7 @@ struct BriefFace: View {
             } else {
                 BriefMinutelyBars(rain: rain,
                                   date: entry.date,
-                                  height: BriefMetrics.minutelyBarHeight(family),
+                                  height: BriefMetrics.minutelyBarHeight(effectiveFamily),
                                   ink: ink,
                                   font: BriefMetrics.minutelySummaryScaled(s))
             }

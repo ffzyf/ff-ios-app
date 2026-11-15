@@ -178,6 +178,9 @@ struct RedstoneFace: View {
     /// 尺寸档：三个尺寸三套版式，只在这里分叉
     @Environment(\.widgetFamily) private var family
 
+    /// 5.1.2 · R5：调试面板注入的尺寸档（桌面上恒为 nil）。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
+
     private let entry: RedstoneEntry
 
     /// 画布短边（pt）。0 = 还没量到 → 比例为 1 → 与 3.4.0 逐像素一致（降级方向安全）。
@@ -191,6 +194,12 @@ struct RedstoneFace: View {
     /// 这一帧的字号比例（158 → 1.0；iPad 小号 ≈170 → 1.076，上限 1.15）
     private var s: CGFloat {
         return WidgetCanvas.textScale(minSide: canvasMinSide)
+    }
+
+    /// 这一帧生效的尺寸档：预览注入优先，桌面回落系统 `\.widgetFamily`。
+    /// 三档版式 / 断点 / 字号一字未动，只换读取来源。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
     }
 
     /// 本月窗口三态：与 App 首页红石卡**同一份判定**（`Sources/Shared/Domain/RedstoneWindow.swift`）。
@@ -216,7 +225,7 @@ struct RedstoneFace: View {
 
     var body: some View {
         Group {
-            switch family {
+            switch effectiveFamily {
             case .systemMedium:
                 mediumFace
             case .systemLarge:
@@ -237,7 +246,7 @@ struct RedstoneFace: View {
 
     /// 三个尺寸各自的内边距（中/大号按 338 宽配平，见 `WidgetTheme.Redstone`）
     private var canvasPadding: CGFloat {
-        switch family {
+        switch effectiveFamily {
         case .systemMedium:
             return WidgetTheme.Redstone.mediumPadding
         case .systemLarge:
@@ -525,7 +534,7 @@ struct RedstoneFace: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(maxHeight: .infinity, alignment: family == .systemLarge ? .center : .top)
+        .frame(maxHeight: .infinity, alignment: effectiveFamily == .systemLarge ? .center : .top)
     }
 
     /// 量画布**短边**。为什么不是宽度：medium 是 338×158，按宽度算会得到 2.14 再被 clamp 到
@@ -864,7 +873,7 @@ struct RedstoneFace: View {
     /// 为什么做成计算属性而不是三处各写一遍 `.font(...)`：`countdownText` 被三个尺寸共用，
     /// 里面 `timerLabel` / `caption` 两处都要字号 —— 传参数进去会让这条调用链变得又长又容易漏。
     private var countdownFont: Font {
-        switch family {
+        switch effectiveFamily {
         case .systemMedium, .systemLarge:
             return WidgetTheme.Redstone.countdown
         default:
@@ -912,7 +921,7 @@ struct RedstoneFace: View {
     /// - 小号 / 中号：只给 `周六 10:08`。小号 158pt 见方要塞下"5 天后 + 时刻 + 地图"会挤爆，
     ///   中号的地图放进左栏第三行（`mediumSubLine`），这一行只负责日期。
     private var endedTodayText: String {
-        switch family {
+        switch effectiveFamily {
         case .systemLarge:
             return nextDetailText ?? "今日已结束"
         default:

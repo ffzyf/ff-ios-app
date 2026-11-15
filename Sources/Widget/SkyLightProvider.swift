@@ -6,8 +6,10 @@ import WidgetKit
 
 /// 5.1.2 · T03：`SkyLightEntry` 的值类型定义（字段 + 纯计算属性）已抽到
 /// `Sources/Shared/WidgetDebug/WidgetEntries.swift`（App / Widget 双 target 共用）。
-/// 下面的工厂 / 倒计时方法依赖 Widget-only 的 `SunTimesOverride`、
-/// `SkyLightWeatherFeed`，继续只在本文件（Widget target）编译。
+/// 下面的 `make` / `sunTimes` 依赖 Widget-only 的 `SunTimesOverride`、
+/// `SkyLightWeatherFeed`，继续只在本文件（Widget target）编译；
+/// 只依赖 Shared 的 `deadline(for:phase:)` / `upcomingSunrise(after:)` 已一同下沉到
+/// `WidgetEntries.swift`（`DaylightLiveActivity` 进主 App 后要调它们）。
 
 extension SkyLightEntry {
 
@@ -61,28 +63,12 @@ extension SkyLightEntry {
         )
     }
 
-    // MARK: - 倒计时目标
+    // MARK: - 倒计时目标（已下沉 Shared）
 
-    /// 这一档的倒计时目标。夜里特殊处理，其余直接复用 `SkyPhase.deadline(at:)`。
-    ///
-    /// 为什么夜里不能直接用 `SkyPhase.deadline(at:)`：那个实现在 `.night` 分支里
-    /// 固定取"now + 24 小时那天的日出"，过了子夜就会指向**明天**的日出
-    /// （凌晨 1 点看到"29 小时"，明显不对）。天光的夜间倒计时是这张卡的主信息，
-    /// 所以这里自己算"下一次日出"：今天的还没到就用今天的，已经过了才顺延到明天。
-    static func deadline(for date: Date, phase: SkyPhase) -> Date? {
-        if phase == .night {
-            return upcomingSunrise(after: date)
-        }
-        return phase.deadline(at: date)
-    }
-
-    /// 严格晚于 `date` 的下一次日出
-    static func upcomingSunrise(after date: Date) -> Date? {
-        guard let today = SunClock.times(on: date) else { return nil }
-        if today.sunrise > date { return today.sunrise }
-        let tomorrow = date.addingTimeInterval(86_400)
-        return SunClock.times(on: tomorrow)?.sunrise
-    }
+    // 5.1.2 · T03：`deadline(for:phase:)` 与 `upcomingSunrise(after:)` 已**纯平移**到
+    // `Sources/Shared/WidgetDebug/WidgetEntries.swift` 的 `extension SkyLightEntry` ——
+    // `DaylightLiveActivity.swift` 已进主 App target，需要 `SkyLightEntry.deadline(for:phase:)`。
+    // 实现与注释逐字未改；本文件里 `make` 的调用点无需改动（仍解析到同一个 static 方法）。
 
     /// 地面区要显示的日出 / 日落。
     ///

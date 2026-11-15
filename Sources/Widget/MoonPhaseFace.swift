@@ -68,6 +68,9 @@ struct MoonPhaseFace: View {
 
     @Environment(\.widgetFamily) private var family
 
+    /// 5.1.2 · R5：调试面板注入的尺寸档（桌面上恒为 nil）。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
+
     private let entry: MoonPhaseEntry
 
     init(entry: MoonPhaseEntry) {
@@ -79,9 +82,14 @@ struct MoonPhaseFace: View {
         return Theme.sky(.night)
     }
 
+    /// 这一帧生效的尺寸档：预览注入优先，桌面回落系统 `\.widgetFamily`。版式 / 断点一字未动。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
+    }
+
     var body: some View {
         Group {
-            switch family {
+            switch effectiveFamily {
             case .accessoryCircular:
                 MoonDisc(illumination: entry.illumination,
                          isWaxing: MoonPhaseMath.isWaxing(entry.age),
@@ -120,7 +128,7 @@ struct MoonPhaseFace: View {
     }
 
     private var isSystemFamily: Bool {
-        switch family {
+        switch effectiveFamily {
         case .accessoryCircular, .accessoryRectangular, .accessoryInline:
             return false
         default:

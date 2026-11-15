@@ -235,9 +235,10 @@ struct MoonPhaseEntry: TimelineEntry {
 /// 存「观测」而不存「词」：渲染层说的话是 `phase.label(viewing:)` 这个纯函数的结果，
 /// 若改存 `phaseLabel: String`，同一句话就有了两个真值来源，会写出「黄金时刻」却配着
 /// 白天的蓝且没有编译错误提醒。
-/// `static func make / deadline / upcomingSunrise / sunTimes` 等工厂方法依赖
-/// Widget-only 的 `SunTimesOverride` / `SkyLightWeatherFeed`，留在
-/// `SkyLightProvider.swift` 的 `extension SkyLightEntry`。
+/// `static func make / sunTimes` 等工厂方法依赖 Widget-only 的 `SunTimesOverride` /
+/// `SkyLightWeatherFeed`，留在 `SkyLightProvider.swift` 的 `extension SkyLightEntry`；
+/// 只依赖 Shared 的 `deadline(for:phase:)` / `upcomingSunrise(after:)` 已在本文件下沉
+/// （见下方 `extension SkyLightEntry`）。
 struct SkyLightEntry: TimelineEntry {
 
     /// 这一帧对应的时刻（= 上一个阶段边界，或 15 分钟网格点）
@@ -279,6 +280,50 @@ struct SkyLightEntry: TimelineEntry {
     var countdownText: String? {
         guard let deadline else { return nil }
         return SkyPhase.countdownText(to: deadline, now: date)
+    }
+}
+
+// MARK: - SkyLightEntry 倒计时目标（5.1.2 从 SkyLightProvider.swift 纯平移）
+
+/// 5.1.2 · T03：`deadline(for:phase:)` / `upcomingSunrise(after:)` 从
+/// `Sources/Widget/SkyLightProvider.swift` **纯平移**到这里。
+///
+/// ## 为什么必须下沉
+/// `DaylightLiveActivity.swift` 已显式接入主 App target（R5 调试面板），它要现造一帧
+/// `SkyLightEntry`，倒计时目标就写 `SkyLightEntry.deadline(for:phase:)`。原实现只在
+/// Widget target 的 Provider 文件里 —— 主 App 看不到那个 static 方法，于是把
+/// `SkyLightEntry.deadline` 解析成**实例属性** `let deadline: Date?`，报
+/// `cannot call value of non-function type 'Date?'`。
+///
+/// ## 为什么可以下沉
+/// 这两个方法只依赖 Shared 里的 `SunClock` / `RedstoneClock` 与 `SkyPhase.deadline(at:)`，
+/// 不碰 `SunTimesOverride` / `SkyLightWeatherFeed` 这些 Widget-only 类型
+/// （那些仍留在 `SkyLightProvider.swift` 的 `extension SkyLightEntry`）。
+///
+/// ## 抽取纪律
+/// 实现与注释逐字未改：同一套 `SunClock` 算法，夜间仍走「下一次日出」而不是
+/// `SkyPhase.deadline(at:)`（后者过了子夜会指向明天，凌晨 1 点会显示 29 小时）。
+extension SkyLightEntry {
+
+    /// 这一档的倒计时目标。夜里特殊处理，其余直接复用 `SkyPhase.deadline(at:)`。
+    ///
+    /// 为什么夜里不能直接用 `SkyPhase.deadline(at:)`：那个实现在 `.night` 分支里
+    /// 固定取"now + 24 小时那天的日出"，过了子夜就会指向**明天**的日出
+    /// （凌晨 1 点看到"29 小时"，明显不对）。天光的夜间倒计时是这张卡的主信息，
+    /// 所以这里自己算"下一次日出"：今天的还没到就用今天的，已经过了才顺延到明天。
+    static func deadline(for date: Date, phase: SkyPhase) -> Date? {
+        if phase == .night {
+            return upcomingSunrise(after: date)
+        }
+        return phase.deadline(at: date)
+    }
+
+    /// 严格晚于 `date` 的下一次日出
+    static func upcomingSunrise(after date: Date) -> Date? {
+        guard let today = SunClock.times(on: date) else { return nil }
+        if today.sunrise > date { return today.sunrise }
+        let tomorrow = date.addingTimeInterval(86_400)
+        return SunClock.times(on: tomorrow)?.sunrise
     }
 }
 

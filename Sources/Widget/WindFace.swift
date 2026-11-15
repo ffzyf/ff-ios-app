@@ -23,10 +23,18 @@ struct WindFace: View {
 
     @Environment(\.widgetFamily) private var family
 
+    /// 5.1.2 · R5：调试面板注入的尺寸档（桌面上恒为 nil）。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
+
     private let entry: WindEntry
 
     init(entry: WindEntry) {
         self.entry = entry
+    }
+
+    /// 这一帧生效的尺寸档：预览注入优先，桌面回落系统 `\.widgetFamily`。版式 / 断点一字未动。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
     }
 
     /// 风卡底色：跟随当前天色的单色系渐变（与日弧 / 天光同一套语言）。
@@ -37,10 +45,10 @@ struct WindFace: View {
 
     var body: some View {
         Group {
-            if family == .accessoryRectangular || family == .accessoryInline {
+            if effectiveFamily == .accessoryRectangular || effectiveFamily == .accessoryInline {
                 accessoryContent
                     .containerBackground(for: .widget) { Color.clear }
-            } else if family == .systemLarge {
+            } else if effectiveFamily == .systemLarge {
                 largeContent
                     .containerBackground(for: .widget) {
                         LinearGradient(colors: [sky.top, sky.horizon],
@@ -265,7 +273,7 @@ struct WindFace: View {
 
     @ViewBuilder
     private var accessoryContent: some View {
-        if family == .accessoryInline {
+        if effectiveFamily == .accessoryInline {
             Text(inlineText)
                 .font(WidgetTheme.Accessory.inlineText)
                 .widgetAccentable()

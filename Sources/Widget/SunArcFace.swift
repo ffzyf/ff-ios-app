@@ -39,6 +39,9 @@ struct SunArcFace: View {
 
     @Environment(\.widgetFamily) private var family
 
+    /// 5.1.2 · R5：调试面板注入的尺寸档（桌面上恒为 nil）。只改"档位从哪来"。
+    @Environment(\.widgetDebugFamily) private var debugFamily
+
     private let entry: SunArcEntry
 
     init(entry: SunArcEntry) {
@@ -49,8 +52,13 @@ struct SunArcFace: View {
         return Theme.sky(entry.phase)
     }
 
+    /// 这一帧生效的尺寸档：预览注入优先，桌面回落系统 `\.widgetFamily`。版式 / 断点一字未动。
+    private var effectiveFamily: WidgetFamily {
+        return debugFamily ?? family
+    }
+
     private var isAccessory: Bool {
-        switch family {
+        switch effectiveFamily {
         case .accessoryCircular, .accessoryRectangular, .accessoryInline:
             return true
         default:
@@ -86,7 +94,7 @@ struct SunArcFace: View {
     /// 2. 太阳点更大（10 → 16pt），两端时刻 15 → 22pt；
     /// 3. 底部**新增**一句今日天气（`weatherSummary`），中间那行倒计时放大到 17pt。
     private var isLarge: Bool {
-        return family == .systemLarge
+        return effectiveFamily == .systemLarge
     }
 
     /// 弧顶高度（大号拉得更长）
@@ -203,7 +211,7 @@ struct SunArcFace: View {
     /// 不成立就整段不画（下一帧 30 分钟内会来）。
     @ViewBuilder
     private var countdownRow: some View {
-        if family != .systemSmall, let event = entry.nextEvent, event > entry.date {
+        if effectiveFamily != .systemSmall, let event = entry.nextEvent, event > entry.date {
             HStack(spacing: 5) {
                 Text(entry.date < (entry.sunset ?? event) ? "距日落" : "距日出")
                     .font(WidgetTheme.SunArc.tagLabel)
@@ -257,7 +265,7 @@ struct SunArcFace: View {
     /// 硬缩放出来的图形是不可读的噪点 —— 参考图的"紧凑一行"正是纯文字形态）。
     @ViewBuilder
     private var accessoryContent: some View {
-        switch family {
+        switch effectiveFamily {
         case .accessoryInline:
             // 一行：↑06:05 ↓18:13（参考图那种"紧凑一行"）
             Text(accessoryTimesText(separator: "  "))
