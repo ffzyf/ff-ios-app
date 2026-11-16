@@ -23,7 +23,7 @@ struct ArticleRailCard: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 卡内图圆角走 `Radius.insideCard`（同心圆角：14 − 12 ≈ 8 级别），不是又一个新圆角
-            CoverArt(seed: article.coverSeed, title: article.title, watermarkSize: 34, showsGrain: false)
+            CoverArt(seed: article.coverSeed, title: article.title, coverURL: article.cover?.imageURL, watermarkSize: 34, showsGrain: false)
                 .frame(height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.insideCard, style: .continuous))
 
