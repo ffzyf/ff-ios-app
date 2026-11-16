@@ -44,6 +44,8 @@ struct ArticleDetail: Decodable, Identifiable {
     let wordCount: Int
     let readingMinutes: Int
     let coverSeed: Int
+    /// 真实封面；为 nil 时正文头部退回渐变封面。
+    let cover: ArticleCover?
     let blocks: [Block]
     let blockCount: Int
     let blocksTruncated: Bool
@@ -62,6 +64,7 @@ struct ArticleDetail: Decodable, Identifiable {
         case wordCount
         case readingMinutes
         case coverSeed
+        case cover
         case blocks
         case blockCount
         case blocksTruncated
@@ -84,6 +87,7 @@ struct ArticleDetail: Decodable, Identifiable {
         readingMinutes = (try? container.decode(Int.self, forKey: .readingMinutes)) ?? 1
         let decodedSeed = try? container.decode(Int.self, forKey: .coverSeed)
         coverSeed = decodedSeed ?? CoverSeed.value(for: rawID)
+        cover = try? container.decode(ArticleCover.self, forKey: .cover)
         blocks = (try? container.decode([Block].self, forKey: .blocks)) ?? []
         blockCount = (try? container.decode(Int.self, forKey: .blockCount)) ?? blocks.count
         blocksTruncated = (try? container.decode(Bool.self, forKey: .blocksTruncated)) ?? false
