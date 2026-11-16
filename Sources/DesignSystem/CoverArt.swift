@@ -1,24 +1,45 @@
 import SwiftUI
 
-/// 程序化封面（PRD §3.1.2）。
+/// 封面：优先真实图片，缺失时退回程序化渐变（PRD §3.1.2）。
 ///
-/// 后端 article **没有** cover 字段（PRD F1），所以不能留灰块占位。规则：
-/// `coverSeed`（0–3，服务端 `fnv1a(id) % 4`）映射到 4 组青柠/深空渐变 +
-/// 标题首字水印（48pt Bold）+ 极细噪点（避免纯渐变的塑料感）。
+/// 服务端现在会下发 `cover`（写在博客后台的那张图，和网页、RSS 是同一张），
+/// 有就铺满容器；为 nil 时退回老方案：`coverSeed`（0–3，服务端 `fnv1a(id) % 4`）
+/// 映射到 4 组青柠/深空渐变 + 标题首字水印 + 极细噪点。
 ///
-/// 这个方案是「不完美但体面」的取舍：与其显示一堆灰色占位方块，
-/// 不如让每篇文章有独一无二的渐变身份；P1 拿到真实封面后只替换图片层，布局不变。
+/// 渐变始终画在最底层：图片加载中或加载失败时，看到的是渐变而不是灰块，
+/// 所以这个视图在任何网络状态下都不会出现空白。
 ///
 /// 双主题（批次 1）：4 组渐变的两套停靠点全部在 Theme 的 coverLime / coverDeep / coverAmber / coverCool 里
 /// （PRD §3.2 末表逐行照抄），本文件只剩"水印 + 噪点"两个不透明度，也各自有 token。
 struct CoverArt: View {
     let seed: Int
     let title: String
+    /// 服务端下发的真实封面；为 nil 时只用渐变。
+    var coverURL: URL? = nil
     /// 首字水印字号（大卡 48 / 列表缩略 20 / 详情 Hero 96）
     var watermarkSize: CGFloat = 48
     var showsGrain: Bool = true
 
     var body: some View {
+        ZStack {
+            gradientLayer
+            if let coverURL {
+                // 图片铺满裁切；加载中/失败都留空，露出下面的渐变
+                AsyncImage(url: coverURL, transaction: Transaction(animation: .easeOut(duration: 0.25))) { phase in
+                    if case .success(let image) = phase {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    }
+                }
+            }
+        }
+        .clipped()
+        .accessibilityHidden(true)
+    }
+
+    /// 渐变底 + 水印 + 噪点：没有封面时它就是封面，有封面时它是加载占位。
+    private var gradientLayer: some View {
         ZStack {
             LinearGradient(
                 colors: Theme.coverColors(seed: seed),
@@ -34,8 +55,6 @@ struct CoverArt: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.4)
         }
-        .clipped()
-        .accessibilityHidden(true)
     }
 
     /// 标题首字：1 个汉字或字母。空标题给一个中性点，绝不留空。
