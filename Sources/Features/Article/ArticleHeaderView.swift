@@ -24,7 +24,7 @@ struct ArticleHeaderView: View {
     // MARK: - 区块
 
     private var cover: some View {
-        CoverArt(seed: detail.coverSeed, title: detail.title, watermarkSize: 64)
+        CoverArt(seed: detail.coverSeed, title: detail.title, coverURL: detail.cover?.imageURL, watermarkSize: 64)
             .aspectRatio(16.0 / 10.0, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
