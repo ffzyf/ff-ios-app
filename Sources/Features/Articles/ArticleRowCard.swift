@@ -157,7 +157,7 @@ struct ArticleRowCard: View {
     // MARK: - 内容
 
     private var thumbnail: some View {
-        CoverArt(seed: article.coverSeed, title: article.title, watermarkSize: 20, showsGrain: false)
+        CoverArt(seed: article.coverSeed, title: article.title, coverURL: article.cover?.imageURL, watermarkSize: 20, showsGrain: false)
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: Radius.smallCard, style: .continuous))
             .overlay(alignment: .topLeading) {
