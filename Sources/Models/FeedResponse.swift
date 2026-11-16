@@ -132,6 +132,8 @@ struct ArticleSummary: Decodable, Identifiable {
     let createdAt: Date?
     let updatedAt: Date?
     let coverSeed: Int
+    /// 真实封面；旧版服务端没有这个字段，缺失时为 nil，视图退回渐变。
+    let cover: ArticleCover?
     let wordCount: Int?
     let readingMinutes: Int?
 
@@ -146,6 +148,7 @@ struct ArticleSummary: Decodable, Identifiable {
         case createdAt
         case updatedAt
         case coverSeed
+        case cover
         case wordCount
         case readingMinutes
     }
@@ -164,6 +167,7 @@ struct ArticleSummary: Decodable, Identifiable {
         pinned = (try? container.decode(Bool.self, forKey: .pinned)) ?? false
         createdAt = try? container.decode(Date.self, forKey: .createdAt)
         updatedAt = try? container.decode(Date.self, forKey: .updatedAt)
+        cover = try? container.decode(ArticleCover.self, forKey: .cover)
         wordCount = try? container.decode(Int.self, forKey: .wordCount)
         readingMinutes = try? container.decode(Int.self, forKey: .readingMinutes)
         // 服务端一定会算好 coverSeed；字段缺失时用同算法本地兜底，保证封面永远有渐变
