@@ -116,6 +116,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # 只改 project.yml（版本号 / target 设置）的提交，增量编译可能整棵跳过、
+      # 直接复用缓存里的旧 .app（3.14.0 事故：包内版本停在 3.13.0）。
+      # 清掉产物目录强制重新链接打包；.o 中间产物留在 build/ 里，增量编译照常生效。
+      - name: Clear stale products
+        run: rm -rf build/Build/Products
+
       # 必须用 -scheme + -destination：-derivedDataPath 只对 scheme 构建生效。
       # 走 legacy 的 target 构建时，产物落在 <projdir>/build/Release-iphoneos/，
       # 而不是 build/Build/Products/Release-iphoneos/，导致找不到 .app。
