@@ -41,6 +41,65 @@ UA = 'ff-release/2.0'
 CM = os.environ.get('CODEMAGIC_API_TOKEN', '').strip()
 RT = os.environ.get('RELEASE_TOKEN', '').strip()
 
+# 腾讯云 COS（CDN 回源）。2026-11-17 起下载接口会 302 到 cdn.skyzyf335.top，
+# 所以发版要顺手把包同步到桶里，否则新版本只能走 KV 直出（慢 3–4 倍）。
+COS_BUCKET = os.environ.get('TENCENT_COS_BUCKET', 'ff-assets-1315861330').strip()
+COS_REGION = os.environ.get('TENCENT_COS_REGION', 'ap-hongkong').strip()
+
+
+def tencent_env():
+    """腾讯云密钥：优先环境变量，其次 ~/.secrets/tencent.env（本机习惯，不进仓库）。"""
+    sid = os.environ.get('TENCENT_SECRET_ID', '').strip()
+    skey = os.environ.get('TENCENT_SECRET_KEY', '').strip()
+    if sid and skey:
+        return sid, skey
+
+    path = os.path.expanduser('~/.secrets/tencent.env')
+    if not os.path.exists(path):
+        return '', ''
+    with open(path, encoding='utf-8') as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith('TENCENT_SECRET_ID='):
+                sid = line.split('=', 1)[1]
+            elif line.startswith('TENCENT_SECRET_KEY='):
+                skey = line.split('=', 1)[1]
+    return sid, skey
+
+
+def upload_to_cos(path, key_name):
+    """把 ipa 同步到对象存储，供 CDN 回源。
+
+    失败只警告不中断：KV 里已经有包，下载接口探测到 CDN 404 会自动回退 KV
+    直出（慢一点但能装）。发版失败比下载慢更糟，所以这里不 raise。
+    """
+    sid, skey = tencent_env()
+    if not sid or not skey:
+        print('提示：没找到腾讯云密钥，跳过 COS 同步（下载会走 KV，慢 3–4 倍）')
+        return
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+    except ImportError:
+        print('提示：没装 cos-python-sdk-v5，跳过 COS 同步')
+        return
+
+    try:
+        client = CosS3Client(
+            CosConfig(Region=COS_REGION, SecretId=sid, SecretKey=skey,
+                      Scheme='https', Timeout=300)
+        )
+        with open(path, 'rb') as fh:
+            client.put_object(
+                Bucket=COS_BUCKET, Body=fh, Key=key_name,
+                ContentType='application/octet-stream',
+                # 文件名带版本号，内容不会再变；CDN 那条 30 天规则也认这个头
+                CacheControl='public, max-age=31536000, immutable',
+                EnableMD5=False,
+            )
+        print('COS 同步 -> %s/%s' % (COS_BUCKET, key_name))
+    except Exception as error:
+        print('警告：COS 同步失败（%s），本次下载会回退 KV 直出' % str(error)[:200])
+
 
 def cm_api(path, method='GET', body=None, timeout=180):
     """Codemagic REST。注意它只认 `x-auth-token`，不认 Bearer。"""
@@ -188,6 +247,7 @@ def main():
     if st != 200:
         sys.exit('上传失败 %s %s' % (st, r))
     print('上传 -> %s' % r.get('key'))
+    upload_to_cos(dest, key_name)
 
     notes = open(args.notes, encoding='utf-8').read()
     # 说明写太长没人读：App 的更新 sheet 只有一屏，超过 ~200 字就要滚动。
