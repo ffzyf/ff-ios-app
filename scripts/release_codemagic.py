@@ -45,6 +45,11 @@ RT = os.environ.get('RELEASE_TOKEN', '').strip()
 # 所以发版要顺手把包同步到桶里，否则新版本只能走 KV 直出（慢 3–4 倍）。
 COS_BUCKET = os.environ.get('TENCENT_COS_BUCKET', 'ff-assets-1315861330').strip()
 COS_REGION = os.environ.get('TENCENT_COS_REGION', 'ap-hongkong').strip()
+# 桶里按类型分目录（2026-11-17 用户要求）：安装包绝不和网站的图片平铺在根目录。
+# 以后接第二个站，图片各占 `<站点>/images/`，安装包共用 `ipa/`。
+COS_IPA_PREFIX = os.environ.get('TENCENT_COS_IPA_PREFIX', 'ipa/').strip()
+# 与 release-store.js 的 MAX_KEEP_FILES 必须一致（那边管 KV，这边管 COS）。
+KEEP_IPA_VERSIONS = int(os.environ.get('KEEP_IPA_VERSIONS', '3'))
 
 
 def tencent_env():
@@ -67,12 +72,54 @@ def tencent_env():
     return sid, skey
 
 
+def quota_guard_blocks_cos():
+    """COS 存储额度是否已经用到该停的程度。
+
+    读的是 `ops/tencent_quota.py` 写的快照，不在这里现查腾讯云 —— 发版脚本
+    已经在等一次 5 分钟的构建，不能再挂一次 30 秒的账单接口，更不能因为
+    接口抖动就判成「不许传」。
+
+    规则：
+      - 没跑过巡检（文件不存在）→ 放行，并在上传时提示去跑一次；
+      - 快照超过 24 小时 → 放行（陈旧数据不该卡住发版）；
+      - 明确 `canUploadToCos: false` → 拦住。
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', '..', 'ops', 'quota-state.json')
+    path = os.path.normpath(path)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding='utf-8') as fh:
+            state = json.load(fh)
+    except Exception:
+        return False
+    if state.get('canUploadToCos') is not False:
+        return False
+    checked = state.get('checkedAt') or ''
+    try:
+        from datetime import datetime, timezone, timedelta
+        stamp = datetime.fromisoformat(checked)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone(timedelta(hours=8)))
+        age = datetime.now(timezone(timedelta(hours=8))) - stamp
+        if age.total_seconds() > 86400:
+            return False
+    except Exception:
+        return False
+    return True
+
+
 def upload_to_cos(path, key_name):
-    """把 ipa 同步到对象存储，供 CDN 回源。
+    """把 ipa 同步到 `ipa/` 目录，供 CDN 回源；顺手删掉超出保留数的旧包。
 
     失败只警告不中断：KV 里已经有包，下载接口探测到 CDN 404 会自动回退 KV
     直出（慢一点但能装）。发版失败比下载慢更糟，所以这里不 raise。
     """
+    if quota_guard_blocks_cos():
+        print('提示：COS 存储额度已到停用线（见 ops/quota-state.json），'
+              '本次跳过同步，下载走 KV 直出')
+        return
     sid, skey = tencent_env()
     if not sid or not skey:
         print('提示：没找到腾讯云密钥，跳过 COS 同步（下载会走 KV，慢 3–4 倍）')
@@ -88,17 +135,103 @@ def upload_to_cos(path, key_name):
             CosConfig(Region=COS_REGION, SecretId=sid, SecretKey=skey,
                       Scheme='https', Timeout=300)
         )
+        cos_key = COS_IPA_PREFIX + key_name
         with open(path, 'rb') as fh:
             client.put_object(
-                Bucket=COS_BUCKET, Body=fh, Key=key_name,
+                Bucket=COS_BUCKET, Body=fh, Key=cos_key,
                 ContentType='application/octet-stream',
                 # 文件名带版本号，内容不会再变；CDN 那条 30 天规则也认这个头
                 CacheControl='public, max-age=31536000, immutable',
                 EnableMD5=False,
             )
-        print('COS 同步 -> %s/%s' % (COS_BUCKET, key_name))
+        print('COS 同步 -> %s/%s' % (COS_BUCKET, cos_key))
     except Exception as error:
         print('警告：COS 同步失败（%s），本次下载会回退 KV 直出' % str(error)[:200])
+        return
+
+    prune_cos_ipa(client, key_name)
+
+
+def prune_cos_ipa(client, keep_name):
+    """只留最近 KEEP_IPA_VERSIONS 个安装包，其余连 CDN 缓存一起删掉。
+
+    KV 那边（release-store.js 的 pruneFiles）只管 KV 里的字节；COS 没有谁会
+    自动清，不删就是「每发一版多 5MB，十年后桶里堆两百个包」。这里按
+    LastModified 倒序保留前 N 个，`keep_name` 强制保住（刚传的可能因为
+    时钟抖动排在后面）。
+
+    删除后必须 PurgeUrlsCache：CDN 上还留着 30 天的副本，不刷新等于没删。
+    """
+    try:
+        resp = client.list_objects(Bucket=COS_BUCKET, Prefix=COS_IPA_PREFIX, MaxKeys=1000)
+        items = resp.get('Contents') or []
+    except Exception as error:
+        print('警告：列 COS 安装包失败（%s），本次跳过清理' % str(error)[:160])
+        return
+
+    def mtime(obj):
+        raw = obj.get('LastModified') or ''
+        # COS 返回 '2026-11-17T13:43:51.000Z'，字典序即时间序
+        return raw
+
+    ordered = sorted(items, key=mtime, reverse=True)
+    keep = [keep_name]
+    for obj in ordered:
+        name = (obj.get('Key') or '').split('/')[-1]
+        if name and name not in keep and len(keep) < KEEP_IPA_VERSIONS:
+            keep.append(name)
+
+    doomed = []
+    for obj in ordered:
+        key = obj.get('Key') or ''
+        name = key.split('/')[-1]
+        if name and name not in keep:
+            doomed.append(key)
+    if not doomed:
+        print('COS 安装包：%d 个，在保留数 %d 之内，无需清理' % (len(items), KEEP_IPA_VERSIONS))
+        return
+
+    removed = []
+    for key in doomed:
+        try:
+            client.delete_object(Bucket=COS_BUCKET, Key=key)
+            removed.append(key)
+        except Exception as error:
+            print('警告：删除 %s 失败（%s）' % (key, str(error)[:120]))
+    if removed:
+        print('COS 清理：删掉 %d 个旧包（%s）' % (len(removed), ', '.join(removed)))
+        purge_cdn([key for key in removed])
+
+
+def purge_cdn(keys):
+    """把删掉的安装包从腾讯云 CDN 缓存里刷掉。
+
+    CDN 对 `*.ipa` 配了 30 天缓存，只删源站不刷 CDN，用户还能继续下到
+    已经删掉的包 —— 等于清理没生效。失败只警告（缓存 30 天后自然过期）。
+    """
+    base = os.environ.get('IPA_CDN_BASE', 'https://cdn.skyzyf335.top').rstrip('/')
+    urls = [base + '/' + key for key in keys]
+    sid, skey = tencent_env()
+    if not sid or not skey:
+        return
+    try:
+        from tencentcloud.common import credential
+        from tencentcloud.cdn.v20180606 import cdn_client, models
+        from tencentcloud.common.profile.client_profile import ClientProfile
+        from tencentcloud.common.profile.http_profile import HttpProfile
+
+        cred = credential.Credential(sid, skey)
+        hp = HttpProfile(); hp.endpoint = 'cdn.tencentcloudapi.com'
+        cp = ClientProfile(); cp.httpProfile = hp
+        client = cdn_client.CdnClient(cred, '', cp)
+
+        req = models.PurgeUrlsCacheRequest()
+        # 腾讯云一次最多 500 条 URL，这里永远是 1~2 条
+        req.from_json_string(json.dumps({'Urls': urls}))
+        client.PurgeUrlsCache(req)
+        print('CDN 刷新：%s' % ', '.join(urls))
+    except Exception as error:
+        print('警告：CDN 刷新失败（%s），旧包最多再存活 30 天' % str(error)[:160])
 
 
 def cm_api(path, method='GET', body=None, timeout=180):

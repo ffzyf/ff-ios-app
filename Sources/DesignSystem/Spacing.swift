@@ -70,6 +70,13 @@ enum Motion {
     /// 玻璃出现（比消失慢，消失要利落）
     static let glassIn = Animation.easeOut(duration: 0.3)
     static let glassOut = Animation.easeIn(duration: 0.22)
+    /// 公告 / 更新弹层的图标入场（5.3.0）。
+    ///
+    /// 为什么不是 `glassIn` 的 easeOut：那一条是"整块玻璃淡入"，而这里是**一个小元素
+    /// 从 0.86 长到 1**，需要回弹一点点才像材料落位，线性缓出会显得"贴上去的"。
+    /// 参数照 Apple 的 sheet 档（damping 0.86 / response 0.34）——
+    /// 阻尼略低于 1.0 留一丝过冲，但不弹跳，因为这不是手势带出来的动能。
+    static let notice = Animation.spring(response: 0.34, dampingFraction: 0.86)
     /// 状态卡左缘光晕呼吸（2.4s 循环，只在 A 态存在）
     static let glow = Animation.easeInOut(duration: 2.4).repeatForever(autoreverses: true)
     /// 骨架 shimmer（1.4s 循环）

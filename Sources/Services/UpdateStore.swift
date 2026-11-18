@@ -245,6 +245,12 @@ final class UpdateStore: ObservableObject {
         }
     }
 
+    /// 本机版本名（`"5.1.3"`），更新层里做「旧版本 → 新版本」对比用。
+    ///
+    /// 与 `currentVersionText` 的区别：那个是给监控页看的一行字（含 build），
+    /// 这个是给版本对比用的**纯版本名**。读不到返回 nil，调用处就退回"只显示新版本"。
+    var installedVersionName: String? { localVersion }
+
     /// 本机版本（"3.8.0 (14)"），监控页那一行用
     var currentVersionText: String {
         let info = Bundle.main.infoDictionary ?? [:]

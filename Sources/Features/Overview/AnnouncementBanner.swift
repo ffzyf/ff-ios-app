@@ -23,18 +23,18 @@ struct AnnouncementBanner: View {
     /// 当前配置的 revision（关闭记忆挂在它上面）
     let revision: Int
 
-    /// 「这条公告点过 ×」的落盘键，值 = 点掉时的 revision
-    private static let dismissedKey = "announcement.dismissed"
-
     /// 进页面时读一次落盘值。本次会话内点 × 后由 `close()` 同步更新，
     /// 不用 observes 外部 store —— 关闭是纯本地行为，不该惊动别的页面。
+    ///
+    /// 读的是 `AnnouncementMemory` 的键：5.3.0 起弹窗通道记的是同一笔账，
+    /// 在这里再写一遍字符串，两处键名迟早漂移（然后就出现"关了横幅又被弹窗拦"）。
     @State private var dismissedRevision: Int
 
     init(announcement: RemoteAnnouncement, revision: Int) {
         self.announcement = announcement
         self.revision = revision
         _dismissedRevision = State(
-            initialValue: UserDefaults.standard.integer(forKey: Self.dismissedKey)
+            initialValue: UserDefaults.standard.integer(forKey: AnnouncementMemory.key)
         )
     }
 
@@ -121,7 +121,7 @@ struct AnnouncementBanner: View {
     /// 关闭：落盘当前 revision + 本地状态同步。新 revision 发布后自动重新出现。
     private func close() {
         Haptics.light()
-        UserDefaults.standard.set(revision, forKey: Self.dismissedKey)
+        AnnouncementMemory.markRead(revision)
         dismissedRevision = revision
     }
 

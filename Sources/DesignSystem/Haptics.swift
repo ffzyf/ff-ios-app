@@ -25,6 +25,19 @@ enum Haptics {
         #endif
     }
 
+    /// 中等（"这里有事，看一眼"）。5.3.0 起用于公告弹窗出现的瞬间。
+    ///
+    /// 为什么不复用 `.light`：公告是**打断**，light 是"按下去了"的反馈，
+    /// 两者语义不同。但也不能升到 `.success/.error` 那种通知级 —— 公告不是结果。
+    /// 只给一次，用户划走就不再响，符合"反馈只在该出现的时刻出现"。
+    static func medium() {
+        #if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred()
+        #endif
+    }
+
     /// 成功（刷新完成、复制完成）。
     static func success() {
         #if canImport(UIKit)

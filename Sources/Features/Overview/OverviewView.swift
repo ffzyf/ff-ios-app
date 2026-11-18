@@ -56,6 +56,16 @@ struct OverviewView: View {
     /// 不需要整页刷新。页面不发请求 —— 拉取由 `FFWangApp` 的 task 统一驱动（§7.3 同一条纪律）。
     @ObservedObject private var config = RemoteConfigStore.shared
 
+    /// 走弹窗形态的公告（5.3.0）。非 nil 时 `.sheet(item:)` 起层。
+    ///
+    /// 为什么用可选的 item 而不是 `isPresented` + 另存一份公告：闭包里拿到的是
+    /// **非可选**的公告，层内不用再判空，也就没有"空弹层"这种中间态（同 `UpdateSheet`）。
+    @State private var sheetAnnouncement: AnnouncementSheetItem?
+
+    /// 本次启动是否已经尝试过弹公告。`task(id:)` 在 tab 切回时可能重跑，
+    /// 没有这个闸的话，用户不关、切个 tab 回来就再弹一次。
+    @State private var didOfferAnnouncement = false
+
     init(selectedTab: Binding<AppTab>, scrollPosition: Binding<ScrollPosition>) {
         self._selectedTab = selectedTab
         self.scrollPosition = scrollPosition
@@ -118,6 +128,31 @@ struct OverviewView: View {
         .sheet(isPresented: $showsSettings) {
             SettingsView()
         }
+        // 公告弹窗（5.3.0）。与上面那个 sheet 分开挂：两个层各自独立，
+        // 不会出现"设置页关掉把公告也带走了"这种耦合。
+        .sheet(item: $sheetAnnouncement) { item in
+            AnnouncementSheet(announcement: item.announcement, revision: item.revision)
+        }
+        // 什么时候弹：配置到了、这条公告选了 sheet 形态、本 revision 还没读过。
+        //
+        // 延迟 0.45s 才起层：开屏瞬间盖一层弹窗，用户会以为"这 App 打开就是广告"，
+        // 连首页长什么样都没看见就先被打断。等一下让页面先落位，
+        // 弹窗就更像"首页上方浮起来的东西"，而不是"这个 App 的门"。
+        .task(id: config.latest?.revision) {
+            guard didOfferAnnouncement == false else { return }
+            guard let announcement = config.latest?.values?.announcement,
+                  announcement.presentation == .sheet else { return }
+            let revision = config.latest?.revision ?? 0
+            guard AnnouncementMemory.hasRead(revision) == false else { return }
+
+            didOfferAnnouncement = true
+            try? await Task.sleep(for: .milliseconds(450))
+            guard Task.isCancelled == false else { return }
+            sheetAnnouncement = AnnouncementSheetItem(
+                announcement: announcement,
+                revision: revision
+            )
+        }
         // 天光页（3.11.0）：全屏呈现，环境值（layoutMetrics / reduceMotion）由模态继承
         .fullScreenCover(isPresented: $showsSkyRoom) {
             // 同上：把简报快照带进去，朗读才有"宜/忌"可念
@@ -129,9 +164,13 @@ struct OverviewView: View {
 
     /// 远程配置下发的公告（3.9.0）。announcement 缺失 / 已被本 revision 关闭时整条不渲染
     /// —— 首页版式回到与 3.8.x 逐行一致，横幅是"叠加项"而不是"占位项"。
+    ///
+    /// 5.3.0 起多一个条件：`style == .sheet` 的公告**不进横幅位**。
+    /// 同一条内容既挂横幅又弹窗，等于在用户关闭横幅之后又被拦一次 —— 那不叫强调，叫骚扰。
     @ViewBuilder
     private var announcementSlot: some View {
         if let announcement = config.latest?.values?.announcement,
+           announcement.presentation == .banner,
            announcement.title.isEmpty == false || announcement.body.isEmpty == false {
             AnnouncementBanner(
                 announcement: announcement,

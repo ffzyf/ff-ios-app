@@ -57,10 +57,58 @@ struct RemoteConfigValues: Codable, Hashable {
 struct RemoteAnnouncement: Codable, Hashable {
     /// 一行加粗标题
     let title: String
-    /// 正文（App 侧最多 2 行，超出截断）
+    /// 正文（横幅最多 2 行；弹窗里完整显示、可滚动）
     let body: String
-    /// 可选的外部链接（整条横幅可点）
+    /// 可选的外部链接（横幅整条可点；弹窗里成为主按钮）
     let url: String?
+    /// 呈现方式：`"banner"`（缺省）/ `"sheet"`。见 `presentation`。
+    let style: String?
+    /// 弹窗主按钮文案。nil = 有 url 时用「去看看」，没 url 时用「知道了」。
+    let actionTitle: String?
+    /// 弹窗图标（SF Symbol 名）。nil = 按 `style` 给默认图标。
+    let icon: String?
+
+    /// 呈现方式。**未知值一律退回 banner**：
+    /// 服务端以后加了新形态（比如全屏），旧版本 App 也不能因此把公告整条吞掉 ——
+    /// 退成横幅至少还能看到，退成"什么都不显示"就是静默失败。
+    var presentation: AnnouncementStyle {
+        AnnouncementStyle(rawValue: style?.lowercased() ?? "") ?? .banner
+    }
+
+    /// 有没有可点的链接。`url` 存在但拼不成 URL 时按"没有链接"处理（同横幅）。
+    var hasLink: Bool {
+        guard let raw = url, raw.isEmpty == false else { return false }
+        return URL(string: raw) != nil
+    }
+
+    /// 弹窗主按钮文案。优先级：自定义 > 有链接就「去看看」> 「知道了」。
+    var primaryActionTitle: String {
+        if let custom = actionTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           custom.isEmpty == false {
+            return custom
+        }
+        return hasLink ? "去看看" : "知道了"
+    }
+
+    /// 弹窗图标。自定义优先；否则按有没有链接给一个 ——
+    /// 有链接是"带你去某处"，没链接是"通知"，两种意图不该用同一个图标。
+    var symbolName: String {
+        if let custom = icon?.trimmingCharacters(in: .whitespacesAndNewlines),
+           custom.isEmpty == false {
+            return custom
+        }
+        return hasLink ? "arrow.up.right.circle.fill" : "megaphone.fill"
+    }
+}
+
+/// 公告的呈现方式。
+///
+/// 为什么要有两种：**大部分公告不值得打断用户**。版本号变了、活动上线这类信息，
+/// 顶部横幅扫一眼就够了；只有"必须现在知道"的（服务中断、数据迁移）才配弹窗。
+/// 把选择权交给服务端，比在客户端按正文长度猜要可靠。
+enum AnnouncementStyle: String {
+    case banner
+    case sheet
 }
 
 /// `GET /api/app/config` 的完整载荷（信封 + 内容合一：字段与后端响应逐字一致）。

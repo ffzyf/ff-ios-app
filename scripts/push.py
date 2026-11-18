@@ -5,10 +5,22 @@ import base64, json, os, re, subprocess, sys, time, urllib.request, urllib.error
 REPO = 'ffzyf/ff-ios-app'
 ROOT = '/workspace/ios-app'
 UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-TOKEN = re.search(
-    r'://[^:]+:([^@]+)@',
-    subprocess.check_output(['git', '-C', '/workspace/blog', 'config', '--get', 'remote.origin.url']).decode()
-).group(1)
+TOKEN = os.environ.get('GH_TOKEN', '').strip()
+if not TOKEN:
+    _token_file = os.path.expanduser('~/.secrets/gh_token')
+    if os.path.exists(_token_file):
+        TOKEN = open(_token_file, encoding='utf-8').read().strip()
+if not TOKEN:
+    # 老路径：从同机另一个仓库的 remote URL 里取内嵌凭据（早期就是这么跑的）。
+    # 保留它只是兜底 —— 一旦那个仓库改成裸 https 地址，这里就会拿到 None，
+    # 所以上面两条才是主路。
+    _url = subprocess.check_output(
+        ['git', '-C', '/workspace/blog', 'config', '--get', 'remote.origin.url']
+    ).decode()
+    _m = re.search(r'://[^:]+:([^@]+)@', _url)
+    TOKEN = _m.group(1) if _m else ''
+if not TOKEN:
+    sys.exit('push: 没有 GitHub 令牌（设 GH_TOKEN，或写 ~/.secrets/gh_token）')
 # 三个前缀永不入仓：
 #   .github/  —— 令牌无 workflow scope，推了必 403；
 #   _release/ —— 3.14.0 事故根源：本地校验的临时解包（_release/verify/Payload/SkyApp.app）
@@ -16,6 +28,12 @@ TOKEN = re.search(
 #                把这个只有 Info.plist 没有二进制的空壳打成了 ipa；
 #   build/    —— 本地若有编译中间产物同样不许入仓。
 SKIP_PREFIXES = ('.github/', '_release/', 'build/')
+# 精确跳过：本地打好的产物包。它不是源码，3.7MB 进仓只会让以后每次 clone 都变慢，
+# 而且 CI 的 `find -name '*.app'` 有可能先撞上它里面的内容（同 `_release/` 那次事故）。
+SKIP_EXACT = ('build-artifact.zip',)
+# 形态跳过：Python 字节码缓存。每次跑一次脚本就换一批指纹，不挡的话
+# 每次推送都会多出几个"改了但其实没改"的二进制文件。
+SKIP_CONTAINS = ('__pycache__/',)
 
 
 def api(path, method='GET', body=None):
@@ -54,6 +72,10 @@ for root, dirs, files in os.walk(ROOT):
         full = os.path.join(root, f)
         rel = os.path.relpath(full, ROOT)
         if rel.startswith(SKIP_PREFIXES):
+            continue
+        if rel in SKIP_EXACT:
+            continue
+        if any(part in rel for part in SKIP_CONTAINS):
             continue
         local[rel] = full
 
