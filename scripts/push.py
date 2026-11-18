@@ -118,14 +118,34 @@ print('更新 %d，删除 %d' % (changed_count, len(deleted)))
 for p in deleted:
     print('  -', p)
 
-DEFAULT_MSG = ('chore: CI 改成按需触发 + 本地预检，版本号 build 4\n\n'
-'此前每次 push 都自动起两台 macos runner，推一次约烧 250 计费分钟，额度因此被用光。\n'
-'· scripts/preflight.py：本地毫秒级拦住括号不配对、Theme.X/API.X 等失效引用\n'
-'· scripts/bump.sh：构建号 +1，project.yml 主 App 与 Widget 两处一起改\n'
-'· scripts/build-local.sh：用本机 Xcode 出 IPA，完全不占 GitHub 额度\n'
-'· build 3 -> build 4')
-# 用法：`python3 scripts/push.py "你的提交说明"`。不传就用上面的默认说明。
-msg = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MSG
+def _default_message():
+    """默认提交说明从 project.yml + 本次 notes 现算。
+
+    以前这里是一段写死的历史文案（"build 3 -> build 4"），推了 60 多个版本之后
+    它还在说同一句话 —— 提交历史因此变成噪音，回看时根本不知道哪个 commit 改了什么。
+    改成现算：版本号、构建号一定对得上，说明取 notes 的第一段。
+    """
+    try:
+        yml = open(os.path.join(ROOT, 'project.yml'), encoding='utf-8').read()
+        ver = re.search(r'MARKETING_VERSION:\s*"([^"]+)"', yml).group(1)
+        build = re.search(r'CURRENT_PROJECT_VERSION:\s*"([^"]+)"', yml).group(1)
+    except Exception:
+        ver, build = '?', '?'
+
+    summary = ''
+    notes_path = os.path.join(ROOT, 'notes-%s.txt' % ver)
+    if os.path.exists(notes_path):
+        text = open(notes_path, encoding='utf-8').read().strip()
+        first = text.split('\n\n')[0].strip().replace('\n', ' ')
+        if first:
+            summary = '\n\n' + (first[:200] + '…' if len(first) > 200 else first)
+
+    changed = ' '.join(sorted(local))[:400]
+    return 'feat(release): %s (build %s)%s\n\n本次改动：%s' % (ver, build, summary, changed)
+
+
+# 用法：`python3 scripts/push.py "你的提交说明"`。不传就按 project.yml 现算。
+msg = sys.argv[1] if len(sys.argv) > 1 else _default_message()
 st, tree = api('/repos/%s/git/trees' % REPO, 'POST', {'base_tree': base_tree, 'tree': entries})
 if st not in (200, 201):
     sys.exit('tree 失败 %s %s' % (st, tree))
