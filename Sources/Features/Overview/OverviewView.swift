@@ -56,15 +56,34 @@ struct OverviewView: View {
     /// 不需要整页刷新。页面不发请求 —— 拉取由 `FFWangApp` 的 task 统一驱动（§7.3 同一条纪律）。
     @ObservedObject private var config = RemoteConfigStore.shared
 
-    /// 走弹窗形态的公告（5.3.0）。非 nil 时 `.sheet(item:)` 起层。
+    /// 走**普通**弹窗形态的公告（5.3.0）。非 nil 时 `.sheet(item:)` 起层。
     ///
     /// 为什么用可选的 item 而不是 `isPresented` + 另存一份公告：闭包里拿到的是
     /// **非可选**的公告，层内不用再判空，也就没有"空弹层"这种中间态（同 `UpdateSheet`）。
     @State private var sheetAnnouncement: AnnouncementSheetItem?
 
-    /// 本次启动是否已经尝试过弹公告。`task(id:)` 在 tab 切回时可能重跑，
-    /// 没有这个闸的话，用户不关、切个 tab 回来就再弹一次。
-    @State private var didOfferAnnouncement = false
+    /// 走**紧急**整屏形态的公告（5.4.1）。非 nil 时 `.fullScreenCover(item:)` 起层。
+    ///
+    /// 为什么要和 `sheetAnnouncement` 分成两个状态、两个 modifier：同一个 binding 同时挂在
+    /// `.sheet` 和 `.fullScreenCover` 上时，SwiftUI 只有一个模态能在场，谁先响应谁赢 ——
+    /// 那是一个"点了发布、有时全屏有时半屏"的竞态。两个状态 + task 里按 `isEmergency`
+    /// **二选一**赋值，模态归属在代码里就是确定的。
+    @State private var emergencyAnnouncement: AnnouncementSheetItem?
+
+    /// 本进程内**已经起层展示过**的 revision（不是"尝试过"）。
+    ///
+    /// 只用来防"同一次启动里重复起层"：`task(id:)` 在 tab 切回、`.sheet` 关掉后都可能重跑，
+    /// 没有这道闸，用户不关、切个 tab 回来就再弹一次。
+    ///
+    /// 类型是 `Int?` 而不是 `Bool`：布尔只能表达"这个进程弹过了"，
+    /// 于是"先弹了 revision 7 的普通公告、一小时后拉到 revision 8 的紧急公告"会被永久挡在门外
+    /// （5.4.0 的真机 bug：服务中断通知被一个进程级标志吃掉，杀进程才恢复）。
+    /// 记住**具体弹过哪个 revision**，新 revision 就是一次新的机会。
+    ///
+    /// 与 `AnnouncementMemory` 的分工：后者**跨启动落盘**，回答"用户是不是点过按钮了"；
+    /// 这里只活在本次进程，回答"这个 revision 是不是已经在本进程起过层了"。两者不可合并 ——
+    /// 落盘那份要能跨启动生效又不能因为一次取消的 sleep 被写脏。
+    @State private var lastOfferedRevision: Int?
 
     init(selectedTab: Binding<AppTab>, scrollPosition: Binding<ScrollPosition>) {
         self._selectedTab = selectedTab
@@ -128,30 +147,61 @@ struct OverviewView: View {
         .sheet(isPresented: $showsSettings) {
             SettingsView()
         }
-        // 公告弹窗（5.3.0）。与上面那个 sheet 分开挂：两个层各自独立，
-        // 不会出现"设置页关掉把公告也带走了"这种耦合。
+        // 公告弹层（5.3.0，5.4.0 起分两级，5.4.1 起两种模态各挂各的）。
+        //
+        // 5.4.0 曾把分叉放在 `.sheet` 的**闭包里**（同一个 item，换内容视图），理由是
+        // "两个 modifier 争同一个 item"。那个理由对普通弹窗成立，对紧急公告不成立：
+        // `.presentationDetents([.large])` 在 iPhone 上顶部留缝、在 iPad 上是居中卡片 ——
+        // 紧急公告要的是"压住首页"，半屏卡片做不到。它必须换模态，而不只是换内容。
+        //
+        // 所以现在是两个独立的 item、两个独立模态：普通 → `.sheet`（半屏起步、可下滑关），
+        // 紧急 → `.fullScreenCover`（整屏、无下滑手势）。task 里按 `isEmergency` 二选一赋值，
+        // 两条路径互斥，不会出现同一个 binding 被两个模态抢。
         .sheet(item: $sheetAnnouncement) { item in
             AnnouncementSheet(announcement: item.announcement, revision: item.revision)
         }
-        // 什么时候弹：配置到了、这条公告选了 sheet 形态、本 revision 还没读过。
+        .fullScreenCover(item: $emergencyAnnouncement) { item in
+            AnnouncementEmergencySheet(announcement: item.announcement, revision: item.revision)
+        }
+        // 什么时候弹：配置到了、这条公告的呈现形态是弹层、本 revision 还没读过。
         //
         // 延迟 0.45s 才起层：开屏瞬间盖一层弹窗，用户会以为"这 App 打开就是广告"，
         // 连首页长什么样都没看见就先被打断。等一下让页面先落位，
         // 弹窗就更像"首页上方浮起来的东西"，而不是"这个 App 的门"。
+        //
+        // **紧急公告也走这个延迟**（`presentation` 对紧急恒为 `.sheet`，所以这里不用特判）：
+        // 提前 450ms 弹出来并不会让"紧急"更紧急，只会让开屏更像一次意外；
+        // 而"紧急"的全部表达力在那一层弹窗内部（整屏 / 只能点按钮 / 不跟主题），不在弹得多快。
+        //
+        // 三道闸门，各管一件事（5.4.1 修过一次把紧急公告饿死的 bug，别再把它们合成一个布尔）：
+        // ① `presentation == .sheet`：横幅形态不进弹层（同一条内容不能两条通道都出）。
+        // ② `AnnouncementMemory.hasRead`：跨启动落盘，"用户点过按钮了就不再弹"，
+        //    普通 / 紧急一视同仁 —— 紧急公告也不该在用户已经确认之后再拦一次。
+        // ③ `lastOfferedRevision`：**只防本进程内重复起层**，且**只对普通公告生效**。
+        //    紧急公告不看它：它是"必须看到"，宁可因为 revision 变化在本进程里再起一次层，
+        //    也不能让一个进程级标志吞掉服务中断通知。
         .task(id: config.latest?.revision) {
-            guard didOfferAnnouncement == false else { return }
             guard let announcement = config.latest?.values?.announcement,
                   announcement.presentation == .sheet else { return }
             let revision = config.latest?.revision ?? 0
             guard AnnouncementMemory.hasRead(revision) == false else { return }
+            if announcement.isEmergency == false {
+                guard lastOfferedRevision != revision else { return }
+            }
 
-            didOfferAnnouncement = true
             try? await Task.sleep(for: .milliseconds(450))
+            // 记"展示过"必须在 sleep **之后**：这 450ms 里 task 随时可能被取消
+            // （切走这一页、revision 又变了）。在 sleep 之前置位的话，一次被取消的等待
+            // 就会被记成"已经弹过了"，本次启动再也没有机会弹它 —— 5.4.0 的第二个 bug。
             guard Task.isCancelled == false else { return }
-            sheetAnnouncement = AnnouncementSheetItem(
-                announcement: announcement,
-                revision: revision
-            )
+
+            let item = AnnouncementSheetItem(announcement: announcement, revision: revision)
+            lastOfferedRevision = revision
+            if announcement.isEmergency {
+                emergencyAnnouncement = item
+            } else {
+                sheetAnnouncement = item
+            }
         }
         // 天光页（3.11.0）：全屏呈现，环境值（layoutMetrics / reduceMotion）由模态继承
         .fullScreenCover(isPresented: $showsSkyRoom) {
@@ -167,9 +217,18 @@ struct OverviewView: View {
     ///
     /// 5.3.0 起多一个条件：`style == .sheet` 的公告**不进横幅位**。
     /// 同一条内容既挂横幅又弹窗，等于在用户关闭横幅之后又被拦一次 —— 那不叫强调，叫骚扰。
+    ///
+    /// 5.4.0 起第二个条件：**紧急公告永不进横幅位**（`isEmergency == false`）。
+    /// 理由与上面同源、但更强：紧急公告的语义是"必须看到"，而横幅一按 × 就记账已读
+    /// （`AnnouncementBanner.close`）—— 同一条公告既出横幅又出弹窗，用户点掉横幅之后
+    /// 弹窗还在，两条通道的说法互相抵消，用户只会觉得这个 App 在耍赖。
+    /// 注意这里判的是 `isEmergency` 而不是 `presentation`：`presentation` 对紧急公告
+    /// 恒为 `.sheet`，两个条件在今天的实现下等价；但 `isEmergency` 读的是**意图**，
+    /// 万一将来给紧急公告加第三种呈现，这条闸门不需要跟着改。
     @ViewBuilder
     private var announcementSlot: some View {
         if let announcement = config.latest?.values?.announcement,
+           announcement.isEmergency == false,
            announcement.presentation == .banner,
            announcement.title.isEmpty == false || announcement.body.isEmpty == false {
             AnnouncementBanner(

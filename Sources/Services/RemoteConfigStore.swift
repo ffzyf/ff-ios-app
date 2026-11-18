@@ -54,6 +54,8 @@ struct RemoteConfigValues: Codable, Hashable {
 /// `title` / `body` 必填（服务端管理页负责给全），`url` 可选 —— 有 url 时整条横幅可点。
 /// 刻意**不做**手写 init(from:)：合成解码对可选字段用 `decodeIfPresent`，
 /// title / body 缺一个就让整体解码失败 → 上层 `try?` 收成 nil，正好是想要的语义。
+/// 5.4.0 新增的 `level` / `color` 同样是 `let ... : String?`，因此**不需要**补 `CodingKeys`
+/// 也不需要改解码路径：老配置（没有这两个键）解出来就是 nil，行为与改版前逐像素一致。
 struct RemoteAnnouncement: Codable, Hashable {
     /// 一行加粗标题
     let title: String
@@ -68,11 +70,42 @@ struct RemoteAnnouncement: Codable, Hashable {
     /// 弹窗图标（SF Symbol 名）。nil = 按 `style` 给默认图标。
     let icon: String?
 
+    /// 公告级别：`"notice"`（普通，缺省）/ `"emergency"`（紧急）。见 `isEmergency`。
+    ///
+    /// 为什么是 `String?` 而不是枚举：这是**服务端下发的字段**，枚举解码遇到没见过的值会让
+    /// 整份 `RemoteAnnouncement` 解码失败 → 上层 `try?` 收成 nil → 公告静默消失。
+    /// 用字符串 + 派生属性，未知值最坏也只是退回"普通公告"，内容还能看到。
+    let level: String?
+    /// 紧急公告的主色（hex，如 `"#E5484D"`）。解析交给 `AnnouncementPalette`，
+    /// 模型层不认识颜色：hex 写错不该让公告解不出来，只该让颜色回落到默认红。
+    /// 「太亮」也不归模型层管 —— 亮度闸门与压暗在 `AnnouncementPalette` 里统一做，
+    /// 这里只负责原样转发服务端写的字符串。
+    let color: String?
+
+    /// 是不是紧急公告。
+    ///
+    /// **只有逐字等于 `"emergency"` 才算**（大小写不敏感），其余一切 —— nil、空串、
+    /// 以后新增的 `"maintenance"` 之类 —— 全部当普通公告。这个方向的降级必须是"宁轻勿重"：
+    /// 把普通公告误判成紧急，用户会撞上一屏关不掉的红屏（只能点按钮才能脱身）；
+    /// 反过来的误判只是少了一点强调，用户仍然看得见内容。
+    var isEmergency: Bool {
+        level?.lowercased() == "emergency"
+    }
+
     /// 呈现方式。**未知值一律退回 banner**：
     /// 服务端以后加了新形态（比如全屏），旧版本 App 也不能因此把公告整条吞掉 ——
     /// 退成横幅至少还能看到，退成"什么都不显示"就是静默失败。
+    ///
+    /// 紧急公告例外：**恒为 `.sheet`**，与 `style` 无关。横幅是可以被 × 掉的
+    /// （`AnnouncementBanner` 一按就落盘已读），而紧急公告的语义是"必须看到"——
+    /// 让它进横幅位等于把"必须"降级成"随便"。
+    ///
+    /// 注意这里的 `.sheet` 是**枚举值**（"走弹层"），不是 UIKit 的 sheet 模态：
+    /// 紧急公告实际用 `.fullScreenCover` 呈现（整屏、无下滑手势），普通公告才是 `.sheet`。
+    /// 这个枚举表达的是"要不要挡在用户面前"，具体用哪种模态由 `OverviewView` 决定。
     var presentation: AnnouncementStyle {
-        AnnouncementStyle(rawValue: style?.lowercased() ?? "") ?? .banner
+        if isEmergency { return .sheet }
+        return AnnouncementStyle(rawValue: style?.lowercased() ?? "") ?? .banner
     }
 
     /// 有没有可点的链接。`url` 存在但拼不成 URL 时按"没有链接"处理（同横幅）。
@@ -90,13 +123,15 @@ struct RemoteAnnouncement: Codable, Hashable {
         return hasLink ? "去看看" : "知道了"
     }
 
-    /// 弹窗图标。自定义优先；否则按有没有链接给一个 ——
-    /// 有链接是"带你去某处"，没链接是"通知"，两种意图不该用同一个图标。
+    /// 弹窗图标。自定义优先；否则：紧急公告用警示三角（它表达的是"危险 / 必须处理"），
+    /// 普通公告按有没有链接给一个 —— 有链接是"带你去某处"，没链接是"通知"，
+    /// 两种意图不该用同一个图标。
     var symbolName: String {
         if let custom = icon?.trimmingCharacters(in: .whitespacesAndNewlines),
            custom.isEmpty == false {
             return custom
         }
+        if isEmergency { return "exclamationmark.triangle.fill" }
         return hasLink ? "arrow.up.right.circle.fill" : "megaphone.fill"
     }
 }

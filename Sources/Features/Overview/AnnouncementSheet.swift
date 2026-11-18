@@ -68,28 +68,49 @@ struct AnnouncementSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 20) {
-                    symbol
-                    copy
+            // 这里量的是**内容区**，不是内容：GeometryReader 被 VStack 按"footer 之外剩下的
+            // 高度"撑开，所以 `proxy.size.height` 就是这块区域真正可用的像素高度 ——
+            // 居中需要的基准线只有这一条，文案高度一个都不用猜（猜了 Dynamic Type 一改就错）。
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 20) {
+                        symbol
+                        copy
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, Spacing.page + 4)
+                    // 顶部 28 的职责变了：短文案居中时它只是块内留白，但长正文回落成
+                    // 顶部对齐之后，它就是"绕开 drag indicator"的那一段（再小会被指示条压住）。
+                    .padding(.top, 28)
+                    // 12 → 4：内容已经居中，这段缓冲不再负责"把空白留在按钮上方"这个活。
+                    // 与 footer 的 12 相加仍是 16，短文案与滚动到底的长文案收尾间距一致。
+                    .padding(.bottom, 4)
+                    // 这一行是"居中"本身：内容比可用高度矮 → 撑到满高并垂直居中；
+                    // 内容比可用高度高 → minHeight 不再生效，回落成顶部对齐，滚动交给 ScrollView。
+                    //
+                    // 为什么不用上下两个 Spacer 硬撑：Spacer 分配富余空间的前提是**容器有确定高度**，
+                    // 而 ScrollView 里恰恰没有 —— 想让它工作就得先把容器定死成一屏高，
+                    // 于是长正文被塞进这一屏里溢出（首行被推下去 / 最后几行被裁、也滚不动）。
+                    // minHeight 只在"不足一屏"时补空间，超了一律不介入 —— 两种长度各走各的路。
+                    .frame(minHeight: proxy.size.height, alignment: .center)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, Spacing.page + 4)
-                .padding(.top, 28)
-                .padding(.bottom, 12)
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollIndicators(.hidden)
-            // 正文短的时候不要把整块内容顶到中间再留一大片空白：
-            // 从顶部排下来，按钮区自然贴底，读起来是"一张通知"而不是"一个居中的弹窗"。
-            .scrollBounceBehavior(.basedOnSize)
 
             footer
         }
         .background(PageBackground(glow: false))
         // 半屏起步、可上拉：短公告停在半屏，长公告一拉就到底，不用在客户端量内容高度
         // （量出来也会因为 Dynamic Type 变化而算错）。
-        .presentationDetents([.fraction(0.56), .large])
+        //
+        // 0.56 → 0.46：用户截图里"图标 + 标题 + 两行正文"只占上面一半、按钮贴底，
+        // 中间空出约 250pt —— 那截空白不是内容要的，是档位给多了。0.46 把它收掉；
+        // 长正文照旧上拉到 `.large`，由系统给高度（GeometryReader 那时拿到的是全高）。
+        .presentationDetents([.fraction(0.46), .large])
         .presentationDragIndicator(.visible)
+        // 只降高度、不动半径：32 在 0.46 的档位（iPhone 上约 380~400pt）里只吃掉约 8% 的高度，
+        // 与 `.large` 下的比例差一倍，但两者都远没到"圆角吃掉半屏"的程度 —— 读起来仍是卡片，不是药丸。
         .presentationCornerRadius(Radius.sheet)
         .onAppear {
             Haptics.medium()
@@ -188,7 +209,10 @@ struct AnnouncementSheet: View {
         }
         .padding(.horizontal, Spacing.page)
         .padding(.top, 12)
-        .padding(.bottom, Spacing.page)
+        // 20 → 16：这是"按钮压到 sheet 底缘"的距离，不是页面边距，所以不并进 `Spacing.page`。
+        // 档位从 0.56 收到 0.46 之后，底部安全区已经把按钮托起来了，20 会显得悬空一截；
+        // 16 贴底、但不顶到 home indicator（那会和"上滑回桌面"抢手势）。
+        .padding(.bottom, 16)
     }
 
     // MARK: - 动作
