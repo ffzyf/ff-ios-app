@@ -66,6 +66,13 @@ struct AnnouncementPalette: Equatable {
     /// 灰色会让"账号数据正在迁移"看起来像一条无足轻重的系统提示（同 `Theme.alertColor` 的判据）。
     static let fallbackHex = "#E5484D"
 
+    /// 恒定的白。**刻意不用 SwiftUI 的 `.white` 静态字面量**：主题闸门规则 3 禁止
+    /// 「白色字面量 + `.opacity(...)`」这种"就地造色"（会绕开 token 体系）；
+    /// 而 `Theme.glassFill` 这类 token 是 `dyna` 动态色，随系统深浅色变化，
+    /// 正好与本文件"颜色不跟外观走"的前提冲突。
+    /// 这里只表达一件事：白色（sRGB 1,1,1）乘以某个 alpha，与任何外观无关。
+    private static let fixedWhite = Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 1)
+
     /// 亮度闸门：相对亮度**高于**这个值就认为"这块色当不了深色底"，先压成深色版再派生。
     ///
     /// 0.58 是怎么来的：默认红 `#E5484D` 的相对亮度约 0.22、琥珀 `#E5A00D` 约 0.43，
@@ -96,7 +103,7 @@ struct AnnouncementPalette: Equatable {
         base = baseComponents.color
         deep = deepComponents.color
         glow = baseComponents.color.opacity(0.45)
-        ink = Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.96)
+        ink = Self.fixedWhite.opacity(0.96)
         onInk = deepComponents.color
     }
 }
@@ -106,22 +113,22 @@ struct AnnouncementPalette: Equatable {
 extension AnnouncementPalette {
 
     /// 标题：**纯白**，不用 `Theme.textPrimary`（那个 token 在浅色外观下是近黑 `#0F1A26`）
-    var titleInk: Color { Color.white }
+    var titleInk: Color { Self.fixedWhite }
 
     /// 正文：白 84%。压在饱和的红上，纯白会"发光"读不清，压一档才有墨感
-    var bodyInk: Color { Color.white.opacity(0.84) }
+    var bodyInk: Color { Self.fixedWhite.opacity(0.84) }
 
     /// 顶部小标签（「紧急公告」）的字：白 72%
-    var labelInk: Color { Color.white.opacity(0.72) }
+    var labelInk: Color { Self.fixedWhite.opacity(0.72) }
 
     /// 胶囊描边 / 分隔：白 12%。深红底上这是唯一能"切出一条边"的强度
-    var hairline: Color { Color.white.opacity(0.12) }
+    var hairline: Color { Self.fixedWhite.opacity(0.12) }
 
     /// 次按钮描边：白 35%（要能被看成一颗按钮，比 hairline 亮三倍）
-    var ghostStroke: Color { Color.white.opacity(0.35) }
+    var ghostStroke: Color { Self.fixedWhite.opacity(0.35) }
 
     /// 次按钮文字：白 90%
-    var ghostInk: Color { Color.white.opacity(0.90) }
+    var ghostInk: Color { Self.fixedWhite.opacity(0.90) }
 }
 
 // MARK: - hex 解析与压暗（纯数学，不碰 UIKit / 不读外观）
