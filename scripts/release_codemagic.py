@@ -38,8 +38,29 @@ BRANCH = os.environ.get('RELEASE_BRANCH', 'main')
 BASE = 'https://app.skyzyf335.top'
 UA = 'ff-release/2.0'
 
-CM = os.environ.get('CODEMAGIC_API_TOKEN', '').strip()
-RT = os.environ.get('RELEASE_TOKEN', '').strip()
+def _secret(name):
+    """环境变量优先，其次 `~/.secrets/release.env`。
+
+    两个口令每次发版都要，反复 export 是纯粹的摩擦；密钥文件权限 600、不在
+    仓库里，和 `~/.secrets/tencent.env` 是同一套做法。环境变量仍然优先，
+    CI 里不需要那个文件。
+    """
+    value = os.environ.get(name, '').strip()
+    if value:
+        return value
+    path = os.path.expanduser('~/.secrets/release.env')
+    try:
+        for line in open(path, encoding='utf-8'):
+            line = line.strip()
+            if line.startswith(name + '='):
+                return line.split('=', 1)[1].strip()
+    except OSError:
+        pass
+    return ''
+
+
+CM = _secret('CODEMAGIC_API_TOKEN')
+RT = _secret('RELEASE_TOKEN')
 
 # 腾讯云 COS（CDN 回源）。2026-11-17 起下载接口会 302 到 cdn.skyzyf335.top，
 # 所以发版要顺手把包同步到桶里，否则新版本只能走 KV 直出（慢 3–4 倍）。
@@ -235,15 +256,29 @@ def purge_cdn(keys):
 
 
 def cm_api(path, method='GET', body=None, timeout=180):
-    """Codemagic REST。注意它只认 `x-auth-token`，不认 Bearer。"""
+    """Codemagic REST。注意它只认 `x-auth-token`，不认 Bearer。
+
+    重试是必须的：这个沙箱到 codemagic 的 TLS 连接时不时被中途掐断
+    （`SSLZeroReturnError: TLS/SSL connection has been closed`），一次就放弃
+    会让「触发构建」白白失败，而这一步失败时还没有任何构建被创建，
+    重试不会产生重复的构建。
+    """
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request('https://api.codemagic.io' + path, data=data, method=method)
-    req.add_header('x-auth-token', CM)
-    if data is not None:
-        req.add_header('Content-Type', 'application/json')
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read()
-        return json.loads(raw.decode()) if raw.strip().startswith(b'{') else {}
+    last = None
+    for attempt in range(3):
+        req = urllib.request.Request('https://api.codemagic.io' + path, data=data, method=method)
+        req.add_header('x-auth-token', CM)
+        if data is not None:
+            req.add_header('Content-Type', 'application/json')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+                return json.loads(raw.decode()) if raw.strip().startswith(b'{') else {}
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+            last = error
+            print('  Codemagic 连接失败（%s），第 %d 次重试' % (str(error)[:80], attempt + 1))
+            time.sleep(4 + attempt * 4)
+    raise last
 
 
 def site_api(path, data=None, headers=None, method='POST', timeout=180):
