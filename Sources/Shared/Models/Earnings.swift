@@ -278,6 +278,36 @@ struct EarningsEntry: Codable, Identifiable, Sendable {
     var isDeleted: Bool { deletedAt != nil }
 }
 
+/// 平台公告（5.5.2）：`GET /api/app/earnings` 里新增的 `notices` 数组的一项。
+///
+/// 来源是收益站「公告」模块（`state.notices`，目前记的是「光遇追光计划第 N 期」这类
+/// 平台通知）。App 侧**不在界面上展示**，只做一件事：随 AI 对话上传，
+/// 让手机端的大肥鱼能回答「追光计划这期结了没」这类问题 —— 与网页端 AI 同一份数据。
+struct EarningsNotice: Codable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let content: String
+    let date: String
+
+    private enum CodingKeys: String, CodingKey { case id, title, content, date }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 全字段兜底：公告是人在网页里手打的，缺字段不该让整个账本解析失败
+        id = (try? c.decode(String.self, forKey: .id)) ?? ""
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        content = (try? c.decode(String.self, forKey: .content)) ?? ""
+        date = (try? c.decode(String.self, forKey: .date)) ?? ""
+    }
+
+    init(id: String, title: String, content: String, date: String) {
+        self.id = id
+        self.title = title
+        self.content = content
+        self.date = date
+    }
+}
+
 /// `GET /api/app/earnings` 的响应信封。
 struct EarningsResponse: Codable, Sendable {
     let ok: Bool
@@ -288,9 +318,11 @@ struct EarningsResponse: Codable, Sendable {
     let platforms: [EarningsPlatform]
     /// 金额单位（线上恒为 'fen' 分）。所有展示处靠它决定「÷100 还是原样」，不要硬编码假设
     let amountUnit: String
+    /// 平台公告（最近 10 条，服务端已按日期倒序裁剪）。旧服务端没有这个键 → 空数组
+    let notices: [EarningsNotice]
 
     private enum CodingKeys: String, CodingKey {
-        case ok, apiVersion, serverTime, summary, activities, platforms, amountUnit
+        case ok, apiVersion, serverTime, summary, activities, platforms, amountUnit, notices
     }
 
     init(from decoder: Decoder) throws {
@@ -304,9 +336,10 @@ struct EarningsResponse: Codable, Sendable {
         activities = (try? c.decode([EarningsActivity].self, forKey: .activities)) ?? []
         platforms = (try? c.decode([EarningsPlatform].self, forKey: .platforms)) ?? []
         amountUnit = (try? c.decode(String.self, forKey: .amountUnit)) ?? "fen"
+        notices = (try? c.decode([EarningsNotice].self, forKey: .notices)) ?? []
     }
 
-    init(ok: Bool, apiVersion: Int?, serverTime: String?, summary: EarningsSummary, activities: [EarningsActivity], platforms: [EarningsPlatform], amountUnit: String) {
+    init(ok: Bool, apiVersion: Int?, serverTime: String?, summary: EarningsSummary, activities: [EarningsActivity], platforms: [EarningsPlatform], amountUnit: String, notices: [EarningsNotice] = []) {
         self.ok = ok
         self.apiVersion = apiVersion
         self.serverTime = serverTime
@@ -314,6 +347,7 @@ struct EarningsResponse: Codable, Sendable {
         self.activities = activities
         self.platforms = platforms
         self.amountUnit = amountUnit
+        self.notices = notices
     }
 }
 

@@ -68,36 +68,59 @@ struct ArticleDetailView: View {
         }
     }
 
+    /// 正文滚动区。
+    ///
+    /// **5.5.2 修「打开文章会自己变大」**：症状是标题左边被切掉一个字、正文左右两头都被屏幕吃掉，
+    /// 看起来像整页被放大了一档 —— 但字号其实一个 pt 都没变（量过：仍是 17pt / 34pt）。
+    /// 真凶是**列宽**：`pageColumn` 的实现是 `.frame(maxWidth: 640)` + `.frame(maxWidth: .infinity, alignment: .center)`，
+    /// 后一个 `frame` 是「把这块放到可用宽度中间」；只要有一条子视图报出比屏幕更宽的理想宽度
+    /// （图片块、横向滚动的代码块、任何带 `fixedSize(horizontal:)` 的视图），`VStack` 就会长到那个宽度，
+    /// 再被居中 —— 于是左右各溢出几十 pt，整列文字按更宽的行宽折行，肉眼看就是「变大了」。
+    ///
+    /// 所以这里不再依赖 `maxWidth`，改成**量出来再写死**：`GeometryReader` 拿到容器宽度（= 屏幕），
+    /// 减掉左右页边距后作为 `VStack` 的确定宽度。定宽是一个"确定的 proposal"，
+    /// 文字一定会按它折行；万一还有子视图不听话，溢出的也只是它自己那一块，推不动整列。
     private func articleScroll(_ detail: ArticleDetail) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.blockGap) {
-                offsetMarker
-                ArticleHeaderView(detail: detail)
-                BlockListView(blocks: detail.blocks)
-                if detail.blocksTruncated && detail.omittedBlocks > 0 {
-                    Text("内容太长，后面 \(detail.omittedBlocks) 段省略了。")
-                        .font(Typography.captionXS)
-                        .foregroundStyle(Theme.textTertiary)
+        GeometryReader { proxy in
+            // 宽度的两个来源取较小值：
+            // · `proxy.size.width` 是这个容器现在真实的宽度；
+            // · `metrics.canvasPageWidth` 是**根视图量到的屏幕宽度**（导航条用的就是它，
+            //   而导航条的返回/分享按钮位置一直是准的 —— 它可以当作"没有被撑宽的基准"）。
+            // 万一这里的 GeometryReader 被某个子视图撑宽了，第二个值会把列宽拉回屏幕宽度。
+            let screenWidth = min(proxy.size.width, metrics.canvasPageWidth)
+            // 640 是含页边距的列宽上限（§3.8：17pt 下约 35 个汉字一行），文字实际宽度 = 列宽 − 40
+            let column = max(0, min(screenWidth, Layout.readingMaxWidth) - Spacing.page * 2)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.blockGap) {
+                    offsetMarker
+                    ArticleHeaderView(detail: detail)
+                    BlockListView(blocks: detail.blocks)
+                    if detail.blocksTruncated && detail.omittedBlocks > 0 {
+                        Text("内容太长，后面 \(detail.omittedBlocks) 段省略了。")
+                            .font(Typography.captionXS)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    signature
                 }
-                signature
+                .frame(width: column, alignment: .leading)
+                .padding(.horizontal, Spacing.page)
+                // 顶部给玻璃导航条让位（内容仍会从条下滚过，这正是材质渐变的意义）
+                .padding(.top, 56)
+                // 详情页没有浮动 Tab 栏，底部留白比列表页小一档
+                .padding(.bottom, 64)
+                // 宽屏（iPad / Stage Manager）居中，窄屏时 column + 40 恰好等于屏宽，这一步是空操作
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Spacing.page)
-            // 顶部给玻璃导航条让位（内容仍会从条下滚过，这正是材质渐变的意义）
-            .padding(.top, 56)
-            // 详情页没有浮动 Tab 栏，底部留白比列表页小一档
-            .padding(.bottom, 64)
-            // 正文列宽 640（§3.8：17pt 下约 35 个汉字一行）。加在 padding **之后**，
-            // 于是 640 里含掉左右各 20 的页边距 → 文字正好 600，与文档给的数字一致。
-            .pageColumn(Layout.readingMaxWidth)
-        }
-        .scrollIndicators(.hidden)
-        // 用字符串版 `coordinateSpace(name:)`：iOS 17 起有 `coordinateSpace(.named(...))` 新写法，
-        // 但它与 `NamedCoordinateSpace` 的组合签名在两个 SDK 里改过，这边取「确定能编译」的那个
-        //（旧 API 只是 deprecated，行为与新版完全一致）。
-        .coordinateSpace(name: Self.scrollSpace)
-        .onPreferenceChange(ArticleScrollOffsetKey.self) { value in
-            scrollOffset = value
+            // 滚动容器本身上下也钉死宽度：哪怕外层给了一个比屏幕更宽的 proposal，也不会横向跑偏
+            .frame(width: screenWidth)
+            .scrollIndicators(.hidden)
+            // 用字符串版 `coordinateSpace(name:)`：iOS 17 起有 `coordinateSpace(.named(...))` 新写法，
+            // 但它与 `NamedCoordinateSpace` 的组合签名在两个 SDK 里改过，这边取「确定能编译」的那个
+            //（旧 API 只是 deprecated，行为与新版完全一致）。
+            .coordinateSpace(name: Self.scrollSpace)
+            .onPreferenceChange(ArticleScrollOffsetKey.self) { value in
+                scrollOffset = value
+            }
         }
     }
 

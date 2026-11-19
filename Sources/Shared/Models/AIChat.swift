@@ -871,6 +871,16 @@ struct AIChatRequest: Encodable, Sendable {
     /// 收益快照（见 `AIChatEarnings`）。nil = 没登录 / 还没拉到账本
     let earnings: AIChatEarnings?
 
+    /// 账本明细（5.5.2，见 `AIChatLedger`）。nil = 没登录 / 还没拉到账本
+    ///
+    /// 与 `earnings` 分开两个键，是因为它们回答的是不同的问题：
+    /// `earnings` 是「一共多少钱」（一句话说得完），`ledger` 是「哪几个活动哪几笔还没发」
+    /// （需要逐条列）。合成一个键会让服务端每次都得从总额里反推明细。
+    let ledger: AIChatLedger?
+
+    /// 平台公告（5.5.2，见 `AIChatNotice`）。nil = 收益站一条公告都没有
+    let notices: [AIChatNotice]?
+
     /// 5.1.2 · R4a 联网搜索开关。**可选，默认 nil**。
     ///
     /// 关（默认）= nil = `encodeIfPresent` 不写这一键，请求体与 3.31.0
@@ -885,12 +895,16 @@ struct AIChatRequest: Encodable, Sendable {
          text: String,
          weather: AIChatWeather? = nil,
          earnings: AIChatEarnings? = nil,
+         ledger: AIChatLedger? = nil,
+         notices: [AIChatNotice]? = nil,
          webSearch: Bool? = nil) {
         self.convId = convId
         self.model = model
         self.text = text
         self.weather = weather
         self.earnings = earnings
+        self.ledger = ledger
+        self.notices = notices
         self.webSearch = webSearch
     }
 
@@ -905,6 +919,8 @@ struct AIChatRequest: Encodable, Sendable {
         case text
         case weather
         case earnings
+        case ledger
+        case notices
         case webSearch
     }
 
@@ -915,6 +931,10 @@ struct AIChatRequest: Encodable, Sendable {
         try container.encode(text, forKey: .text)
         try container.encodeIfPresent(weather, forKey: .weather)
         try container.encodeIfPresent(earnings, forKey: .earnings)
+        // 5.5.2：账本明细与公告。没数据时键不出现 → 服务端走「这次没拿到」分支，
+        // 而不是读到空数组就以为「账本是空的」。
+        try container.encodeIfPresent(ledger, forKey: .ledger)
+        try container.encodeIfPresent(notices, forKey: .notices)
         // 关闭联网时 webSearch == nil → 键不出现 → 与旧版 payload 逐字相同
         try container.encodeIfPresent(webSearch, forKey: .webSearch)
     }
@@ -1074,6 +1094,87 @@ struct AIChatEarningsPlatform: Encodable, Sendable {
     init(name: String, amount: Int) {
         self.name = name
         self.amount = amount
+    }
+}
+
+/// 收益账本**明细**（5.5.2）：随聊天上传，让 AI 能回答「哪几个活动还没结」「这期追光计划记了多少」。
+///
+/// 和 `AIChatEarnings` 的分工：
+/// · `AIChatEarnings` 是**汇总**（总额 / 三态 / 平台占比），一句话就能说完；
+/// · 这里是**逐条**（每个活动 + 最多几笔流水），回答"哪一笔"必须靠它。
+///
+/// 金额仍然是**分**，换算留在服务端 —— 和 `AIChatEarnings` 同一条规则，客户端一次都不换。
+/// 条数上限（12 个活动 × 6 笔）由这里截，理由是 prompt 预算 6000 字：
+/// 账本再大也不该把天气和公告挤出去。
+struct AIChatLedger: Encodable, Sendable {
+
+    let activities: [AIChatLedgerActivity]
+
+    init(activities: [AIChatLedgerActivity]) {
+        self.activities = activities
+    }
+}
+
+/// 账本里的一个活动。
+struct AIChatLedgerActivity: Encodable, Sendable {
+
+    /// 平台（"抖音" / "网易光遇追光计划"）
+    let platform: String
+    /// 活动名（"追光计划第 21 期"）
+    let name: String
+    /// 未到账金额合计（分）
+    let pending: Int
+    /// 已到账金额合计（分）
+    let paid: Int
+    /// 是否已结清（`closedAt` 有值）
+    let settled: Bool
+    /// 有效流水笔数（可能大于 `entries.count`，后者被截断过）
+    let entryCount: Int
+    /// 前几笔流水
+    let entries: [AIChatLedgerEntry]
+
+    init(platform: String, name: String, pending: Int, paid: Int, settled: Bool, entryCount: Int, entries: [AIChatLedgerEntry]) {
+        self.platform = platform
+        self.name = name
+        self.pending = pending
+        self.paid = paid
+        self.settled = settled
+        self.entryCount = entryCount
+        self.entries = entries
+    }
+}
+
+/// 账本里的一笔流水。
+struct AIChatLedgerEntry: Encodable, Sendable {
+
+    /// 类型 / 标题（"视频"、"广告分成"）
+    let type: String
+    /// 金额（分）
+    let amount: Int
+    /// 是否已到账
+    let paid: Bool
+
+    init(type: String, amount: Int, paid: Bool) {
+        self.type = type
+        self.amount = amount
+        self.paid = paid
+    }
+}
+
+/// 一条平台公告（5.5.2）：来自收益站「公告」模块，目前记的是「光遇追光计划第 N 期」这类通知。
+struct AIChatNotice: Encodable, Sendable {
+
+    /// 标题，可能为空串（网页端的公告允许只填正文）
+    let title: String
+    /// 正文（服务端保证 ≤ 400 字）
+    let content: String
+    /// 日期 'YYYY-MM-DD'
+    let date: String
+
+    init(title: String, content: String, date: String) {
+        self.title = title
+        self.content = content
+        self.date = date
     }
 }
 

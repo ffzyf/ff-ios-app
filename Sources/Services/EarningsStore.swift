@@ -21,6 +21,8 @@ final class EarningsStore: ObservableObject {
     @Published private(set) var summary: EarningsSummary?
     @Published private(set) var activities: [EarningsActivity] = []
     @Published private(set) var platforms: [EarningsPlatform] = []
+    /// 平台公告（5.5.2，与 `activities` 同一次响应）。只喂 AI 上下文，不上界面。
+    @Published private(set) var notices: [EarningsNotice] = []
     @Published private(set) var lastUpdated: Date?
     /// 这份数是本地缓存（这次请求没成功）
     @Published private(set) var isStale: Bool = false
@@ -327,6 +329,8 @@ final class EarningsStore: ObservableObject {
         summary = response.summary
         activities = response.activities
         platforms = response.platforms
+        // 公告跟着同一次响应走：AI 那边随时可能来读，不能等用户点进公告模块
+        notices = response.notices
         lastUpdated = Date()
         isStale = stale
         errorText = nil
@@ -336,6 +340,7 @@ final class EarningsStore: ObservableObject {
         summary = nil
         activities = []
         platforms = []
+        notices = []
         lastUpdated = nil
         isStale = false
         errorText = nil

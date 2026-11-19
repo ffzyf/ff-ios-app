@@ -483,6 +483,11 @@ final class AIChatStore: ObservableObject {
         abortReason = .none
         lastByteAt = Date()
 
+        // 5.5.2：账本与公告是 AI 的上下文，不能等用户先进过收益页。
+        // 放在气泡上屏**之后**：这一步可能多一次网络往返（首次对话 300ms 上下），
+        // 先让用户看见自己那句话，比让屏幕空着等更不像卡住。
+        await ensureEarningsContext()
+
         // Task 继承当前 actor（本类是 @MainActor），所以闭包里的写入仍在主线程。
         // **不在这里把 streamTask 置 nil**：那个赋值会在 `await` 之后执行，
         // 有可能把"用户刚发起的新一轮"的引用擦掉，于是 `stop()` 取消了错的任务。
@@ -496,9 +501,22 @@ final class AIChatStore: ObservableObject {
         await task.value
     }
 
+    /// 确保本轮对话能带上账本与公告（5.5.2）。
+    ///
+    /// 为什么要在这里补一次：AI 页与收益页是两个入口，用户完全可能一进 App 就点 AI，
+    /// 此时 `EarningsStore` 还是空的 —— 明明云端有账，AI 却只能说「这次没拿到收益」。
+    ///
+    /// 只在「没有数据 + 已登录」时补：有数据（哪怕来自本地快照）就不重复请求，
+    /// 没登录就别打一次注定 401 的接口。失败静默 —— 这轮对话照常发，
+    /// 只是 prompt 里少那一段，模型会说没拿到，而不是编一个数。
+    @MainActor
+    private func ensureEarningsContext() async {
+        guard EarningsStore.shared.summary == nil, EarningsAuth.shared.isLoggedIn else { return }
+        await EarningsStore.shared.load()
+    }
+
     /// 一轮流的全部收尾（成功 / 失败 / 超时 / 中止都从这里出去）
-    private func streamOnce(token: Int, userText: String) async {
-        // 拿到**自己这一代**的看门狗句柄，而不是收尾时去读字段 `watchdogTask`。
+    private func streamOnce(token: Int, userText: String) async {        // 拿到**自己这一代**的看门狗句柄，而不是收尾时去读字段 `watchdogTask`。
         //
         // 为什么：字段是共享的。`stop()` / 切会话取消这一轮之后，`bytes.lines` 的抛出
         // 要等到下一个 await 才回到这里 —— 如果用户手快（停 → 立刻再发），下一轮
@@ -553,6 +571,10 @@ final class AIChatStore: ObservableObject {
                                                           text: userText,
                                                           weather: Self.weatherSnapshot(),
                                                           earnings: Self.earningsSnapshot(),
+                                                          // 5.5.2：账本明细 + 平台公告。
+                                                          // 与网页端 AI 同一份数据，两端回答口径一致。
+                                                          ledger: Self.ledgerSnapshot(),
+                                                          notices: Self.noticesSnapshot(),
                                                           // 关闭时传 nil → `encodeIfPresent` 不写这一键
                                                           // → 请求体与 3.31.0 逐字一致（AC4-2）
                                                           webSearch: searchEnabled ? true : nil))
@@ -709,8 +731,59 @@ final class AIChatStore: ObservableObject {
                               updatedAt: Self.isoText(EarningsStore.shared.lastUpdated))
     }
 
-    /// `Date` → ISO8601 字符串。服务端只把它当"这份数据是什么时候的"参考，不参与任何计算。
+    /// 把账本**明细**做成随请求上传的快照（5.5.2）。
     ///
+    /// 与 `earningsSnapshot` 的分工见 `AIChatLedger` 的类型注释：一个是总额，一个是逐条。
+    /// 网页端 AI 之所以能回答「追光计划第 21 期结了没」，靠的就是这份明细 ——
+    /// 这里补齐之后，手机端的回答口径才和网页端一致。
+    ///
+    /// 三个截断（都是为了 6000 字 prompt 预算，不是为了省流量）：
+    /// · 活动最多 12 个，按**待发金额降序** —— 用户问的永远是「钱最多的那几笔」；
+    /// · 每个活动最多 6 笔流水，未到账的排前面；
+    /// · `entryCount` 单独带真实笔数，模型因此可以说「共 8 笔，先看前 6 笔」。
+    @MainActor
+    private static func ledgerSnapshot() -> AIChatLedger? {
+        let activities = EarningsStore.shared.activities
+        guard !activities.isEmpty else { return nil }
+
+        let mapped: [AIChatLedgerActivity] = activities.map { activity in
+            let live = activity.liveEntries
+            let pending = live.filter { !$0.paid }.reduce(0) { $0 + $1.centsValue }
+            let paid = live.filter { $0.paid }.reduce(0) { $0 + $1.centsValue }
+            // 未到账在前、同状态里新的在前：这两条决定了模型引用明细时的顺序是否"像人话"
+            let ordered = live.sorted { lhs, rhs in
+                if lhs.paid != rhs.paid { return !lhs.paid }
+                return lhs.time > rhs.time
+            }
+            let entries = ordered.prefix(6).map {
+                AIChatLedgerEntry(type: $0.type, amount: $0.centsValue, paid: $0.paid)
+            }
+            return AIChatLedgerActivity(platform: activity.platform,
+                                        name: activity.name,
+                                        pending: pending,
+                                        paid: paid,
+                                        settled: activity.isClosed,
+                                        entryCount: live.count,
+                                        entries: Array(entries))
+        }
+
+        let top = mapped.sorted { $0.pending > $1.pending }.prefix(12)
+        return AIChatLedger(activities: Array(top))
+    }
+
+    /// 把收益站的平台公告做成随请求上传的快照（5.5.2）。
+    ///
+    /// 空数组也返回 nil：服务端据此区分「这次没拿到公告」和「一条公告都没有」——
+    /// 后者可以照实说「公告栏是空的」，前者只能说不清楚。
+    @MainActor
+    private static func noticesSnapshot() -> [AIChatNotice]? {
+        let list = EarningsStore.shared.notices.prefix(6).map {
+            AIChatNotice(title: $0.title, content: $0.content, date: $0.date)
+        }
+        return list.isEmpty ? nil : Array(list)
+    }
+
+    /// `Date` → ISO8601 字符串。服务端只把它当"这份数据是什么时候的"参考，不参与任何计算。    ///
     /// 为什么每次新建 formatter 而不存一个 static：`ISO8601DateFormatter` 不是线程安全的，
     /// 而这条路一轮对话只走一次 —— 省下的那点分配开销，换不来一份共享的可变状态。
     private static func isoText(_ date: Date?) -> String? {
