@@ -511,7 +511,11 @@ final class AIChatStore: ObservableObject {
     /// 只是 prompt 里少那一段，模型会说没拿到，而不是编一个数。
     @MainActor
     private func ensureEarningsContext() async {
-        guard EarningsStore.shared.summary == nil, EarningsAuth.shared.isLoggedIn else { return }
+        guard EarningsAuth.shared.isLoggedIn else { return }
+        // 公告为空时也补一次：账本可能来自 5.5.1 之前写下的本地快照（那时响应里没有
+        // `notices` 这个键），只判 `summary == nil` 会永远拿不到公告。
+        // `load()` 自身有 120 秒新鲜窗，命中缓存时只是把同一份值再 emit 一次，不打网络。
+        guard EarningsStore.shared.summary == nil || EarningsStore.shared.notices.isEmpty else { return }
         await EarningsStore.shared.load()
     }
 
