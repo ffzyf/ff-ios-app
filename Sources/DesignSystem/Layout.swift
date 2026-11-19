@@ -25,7 +25,9 @@ enum CardTier {
         case .hero: return 240
         case .medium: return 168
         case .tile: return 96
-        case .rail: return 188
+        // 168（5.5.1，原 188）：rail 卡封面改用 AI 原生比例 1216:704 后封面高 87 → 67，
+        // 188 会在 meta 之上留 30+pt 空白。168 让卡里四层（封面 67 / 标题两行 / 间距 / meta）刚好贴满。
+        case .rail: return 168
         }
     }
 
@@ -44,8 +46,10 @@ enum CardTier {
         // 168 不动：它是 `minHeight`，宽档会被 `Spacer` 拉到 172 与 hero 齐平，本身不该变大
         case .medium: return 168
         case .tile: return 120
-        // 宽档不再使用：iPad 上「继续读」改 3 列网格，横滑 rail 只服务窄档
-        case .rail: return 188
+        // 宽档实际不用它：iPad 上「继续读」渲染的是 `ArticleRowCard`（344×116 三列网格），
+        // 横滑 rail 只服务窄档。5.5.1 跟窄档一起从 188 改成 168 —— 留 188 会让 `cardHeight(.rail)`
+        // 在同一张卡上给出两个值（将来谁接了这个调用点就踩坑），不如两档同值。
+        case .rail: return 168
         }
     }
 
