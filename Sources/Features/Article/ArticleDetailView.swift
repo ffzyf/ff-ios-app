@@ -93,8 +93,8 @@ struct ArticleDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.blockGap) {
                     offsetMarker
-                    ArticleHeaderView(detail: detail)
-                    BlockListView(blocks: detail.blocks)
+                    ArticleHeaderView(detail: detail, contentWidth: column)
+                    BlockListView(blocks: dedupedBlocks(detail.blocks, title: detail.title))
                     if detail.blocksTruncated && detail.omittedBlocks > 0 {
                         Text("内容太长，后面 \(detail.omittedBlocks) 段省略了。")
                             .font(Typography.captionXS)
@@ -122,6 +122,45 @@ struct ArticleDetailView: View {
                 scrollOffset = value
             }
         }
+    }
+
+    // MARK: - 正文去重
+
+    /// 去掉正文开头那个「和文章标题一模一样」的 h1/h2。
+    ///
+    /// 博客的 Markdown 习惯是第一行写 `# 标题`，服务端把它解析成 heading 块原样下发 ——
+    /// 于是详情页会连着出现两次同样的标题（一次是 `ArticleHeaderView`，一次是正文首块）。
+    /// 网页端已经在渲染层做了同样的归一化（`normalize-heading.ts`），App 这边现在对齐。
+    ///
+    /// 只扫前几块：正文中间某个章节标题恰好叫得和文章同名，那是作者有意为之，不该删。
+    private func dedupedBlocks(_ blocks: [Block], title: String) -> [Block] {
+        let key = Self.normalizedHeading(title)
+        guard !key.isEmpty else { return blocks }
+
+        for (index, block) in blocks.prefix(3).enumerated() {
+            switch block {
+            case .heading(let level, let text):
+                guard level <= 2 else { return blocks }
+                guard Self.normalizedHeading(text) == key else { return blocks }
+                var copy = blocks
+                copy.remove(at: index)
+                return copy
+            case .divider, .unknown:
+                continue
+            default:
+                return blocks
+            }
+        }
+        return blocks
+    }
+
+    /// 标题归一化：抹掉空白与常见标点、统一小写。
+    ///
+    /// 这样「更新 | iOS App 5.2.0 & 网站上线」与「更新｜iOS App 5.2.0 & 网站上线 2026-11-18」
+    /// 这类"同一句话、标点写法不同"的重复才认得出。与网页端 `normalize-heading` 同一套判据。
+    private static func normalizedHeading(_ text: String) -> String {
+        let dropped = Set(" \t\n\r\u{3000}|｜·•—–-~、，,。.：:；;！!？?\"'“”‘’（）()【】[]《》〈〉<>…/\\")
+        return String(text.lowercased().filter { !dropped.contains($0) })
     }
 
     // MARK: - 导航条

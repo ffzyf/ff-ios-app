@@ -10,6 +10,15 @@ import SwiftUI
 struct ArticleHeaderView: View {
     let detail: ArticleDetail
 
+    /// 正文列宽（**不含**左右页边距）。5.5.3 新增。
+    ///
+    /// 为什么封面和标题要单独拿宽度：外层虽然已经 `.frame(width: column)`，
+    /// 但那个宽度只是"提议"—— `aspectRatio` 在高度提案为 nil 时、以及 `Text` 在
+    /// 某些换行路径下，都可能报出比提议更大的理想宽度，然后**向右溢出**（leading 对齐不会往左跑）。
+    /// 传进来的这个数会被写成确定的 `frame(width:)`，封面的高度也由它算出来，
+    /// 于是哪怕外部提案再离谱，这两块也不会超出这一列。
+    var contentWidth: CGFloat? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             cover
@@ -24,21 +33,30 @@ struct ArticleHeaderView: View {
     // MARK: - 区块
 
     private var cover: some View {
-        CoverArt(seed: detail.coverSeed, title: detail.title, coverURL: detail.cover?.imageURL, watermarkSize: 64)
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        let art = CoverArt(seed: detail.coverSeed, title: detail.title, coverURL: detail.cover?.imageURL, watermarkSize: 64)
+        return Group {
+            if let width = contentWidth {
+                // 宽高都写死：比例仍是 16:10，但不再依赖 `aspectRatio` 去推高度
+                art.frame(width: width, height: width * 10.0 / 16.0)
+            } else {
+                art.aspectRatio(16.0 / 10.0, contentMode: .fit)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     private var title: some View {
         Text(displayTitle)
-            .font(Typography.display)
+            .font(titleFont)
+            // 长标题降一档：34pt 在 350 宽的手机列里，一行只放得下十来个字，
+            // 视觉上会压过封面（用户原话「图片跟标题又太大了」）。
+            // 短标题仍用 display，保住"大标题"的气势。
             .tracking(Typography.trackingLarge)
             .foregroundStyle(Theme.textPrimary)
-            .lineSpacing(Typography.lineSpacing(fontSize: 34, multiple: 1.25))
+            .lineSpacing(Typography.lineSpacing(fontSize: titleFontSize, multiple: 1.25))
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
     }
 
     @ViewBuilder
@@ -77,6 +95,18 @@ struct ArticleHeaderView: View {
     }
 
     // MARK: - 派生文案
+
+    /// 标题字号：短标题 34（`display`），长标题降到 28（`titleXL`）。
+    ///
+    /// 14 个字符是分界点：手机列宽 350、34pt 中文一行约 10 字，
+    /// 超过 14 字必然折到第三行，而三行 34pt 标题会把封面压成配角。
+    private var titleFontSize: CGFloat {
+        displayTitle.count > 14 ? 28 : 34
+    }
+
+    private var titleFont: Font {
+        titleFontSize > 30 ? Typography.display : Typography.titleXL
+    }
 
     private var displayTitle: String {
         let trimmed = detail.title.trimmingCharacters(in: .whitespacesAndNewlines)
