@@ -35,10 +35,22 @@ struct AppearanceSection: View {
 
     // MARK: - 配色
 
-    /// 五套配色：色板 + 名称。
+    /// 八套配色：色板 + 名称。
     ///
     /// 为什么不做成"整行单选"（跟上面深浅三档一样）：配色是**看**出来的，不是读出来的 ——
-    /// 一列文字里出现五个"暮紫/暖砂"，不如直接给五枚色点。点一下即换，选中项加一圈描边。
+    /// 一列文字里出现八个"暮紫/暖砂"，不如直接给八枚色点。点一下即换，选中项加一圈描边。
+    ///
+    /// 为什么是 4×2 网格而不是一行 `HStack`（1.0 时是 5 套一行）：
+    /// 一枚色点的最小可点宽度是 38（选中环的直径），8 枚一行要 38×8 + 6×7 = 346，
+    /// 而 iPhone 上这一组可用宽度只有 ~300–320 —— 一行的下场是色点被压扁、名字掉成省略号。
+    /// 4 列 × 2 行刚好装下 8 套且左右留白对称；「每套自带深色版本」的说明文字仍贴在网格下面。
+    private var themeColumns: [GridItem] {
+        return Array(
+            repeating: GridItem(.flexible(), spacing: 6, alignment: .top),
+            count: 4
+        )
+    }
+
     private var themePicker: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("配色")
@@ -46,7 +58,7 @@ struct AppearanceSection: View {
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.horizontal, 4)
 
-            HStack(spacing: 6) {
+            LazyVGrid(columns: themeColumns, alignment: .leading, spacing: 12) {
                 ForEach(Theme.Palette.all) { palette in
                     swatch(palette)
                 }

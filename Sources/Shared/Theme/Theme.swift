@@ -381,10 +381,10 @@ extension Theme {
     /// 一套主题配色。
     ///
     /// 只包含**品牌色 + 背景三层**。文字 / 玻璃 / 状态 / 骨架 / 封面这些中性 token
-    /// 五套主题共用 —— 换主题不该让任何一处的对比度失守，PRD 里那批实测值继续有效。
+    /// 八套主题共用 —— 换主题不该让任何一处的对比度失守，PRD 里那批实测值继续有效。
     ///
     /// 每个值都是 `(深色, 浅色)` 一对：**深色模式不是"另一套主题"**，而是同一套的第二个值。
-    /// 所以每套主题天然自带深色版本，不需要单独维护 5×2 份配色。
+    /// 所以每套主题天然自带深色版本，不需要单独维护 8×2 份配色。
     struct Palette: Identifiable {
         let id: String
         let name: String
@@ -409,8 +409,13 @@ extension Theme {
 
 extension Theme.Palette {
 
-    /// 五套主题（设置页按这个顺序排）
-    static let all: [Theme.Palette] = [.lime, .violet, .sand, .ocean, .sakura]
+    /// 八套主题（设置页按这个顺序排，`ForEach` 直接吃数组 —— 加一套不用动 UI）
+    ///
+    /// 顺序即叙述：前五套是 1.0 起的老面孔，后三套是"看腻了彩色"之后补的 ——
+    /// 极光（冷青绿）/ 余烬（砖红）/ 石墨（中性银），色相与明度都刻意和前五套错开。
+    static let all: [Theme.Palette] = [
+        .lime, .violet, .sand, .ocean, .sakura, .aurora, .ember, .graphite
+    ]
 
     /// 按 id 取主题；认不出就退回青柠（**绝不崩**，旧版本写入的 id 也能开机）
     static func with(id: String) -> Theme.Palette {
@@ -524,6 +529,74 @@ extension Theme.Palette {
         limeDeep: ("#E07A9E", "#B04068"),
         limeGlow: (("#F79BB8", 0.32), ("#D9598A", 0.15)),
         glassTint: (("#F79BB8", 0.10), ("#D9598A", 0.08))
+    )
+
+    /// 5 极光 —— 青绿：比 lime 的黄绿更冷、比 ocean 的天蓝更绿，背景走墨青而不是蓝黑
+    ///
+    /// 对比度自查（WCAG 相对亮度公式算的，两个档都过 4.5:1）：
+    /// 深 `#2FD6B5` 面 + `#04140F` 字 = **10.26:1**；浅 `#0F7F72` 面 + `#FFFFFF` 字 = **4.88:1**。
+    /// 为什么浅档面不是初稿的 `#12897A`：那个值配白字只有 4.30:1、配暗字 4.39:1 —— 两种字色都不够，
+    /// 只能把面压深一格到 `#0F7F72`（色相不变，只降明度），白字才站得住。
+    static let aurora = Theme.Palette(
+        id: "aurora", name: "极光",
+        bgBase: ("#07110F", "#ECF5F2"),
+        bgRaise: ("#0C1A17", "#F6FBF9"),
+        // 压暗规则与另外七套一致：浅档 L* 95.8 → 91.6（−4.4%），深档各通道 ×0.85（#07110F → #060E0D）
+        bgDeep: ("#060E0D", "#E0E9E6"),
+        bgElevated: ("#10201C", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#10201C", 0.28)),
+        lime: ("#2FD6B5", "#0F7F72"),
+        limeInk: ("#2FD6B5", "#0A5C52"),
+        onLime: ("#04140F", "#FFFFFF"),
+        limeBright: ("#8CF0DA", "#5FD6C0"),
+        limeDeep: ("#1FB39A", "#0B6B60"),
+        limeGlow: (("#2FD6B5", 0.34), ("#0F7F72", 0.16)),
+        glassTint: (("#2FD6B5", 0.09), ("#0F7F72", 0.08))
+    )
+
+    /// 6 余烬 —— 砖红落日：比 sand 的琥珀更红更沉，背景带暖褐，是唯一"红底"的一套
+    ///
+    /// 对比度自查：深 `#F0714B` 面 + `#1A0803` 字 = **6.64:1**；浅 `#C2472A` 面 + `#FFFFFF` 字 = **4.97:1**。
+    /// 深档用暗字而不是白字：橙红面上白字会糊成一片（#F0714B 配白 ≈ 2.6:1），
+    /// 这和 sakura 是同一个道理 —— 面够亮就必须配暗字。
+    static let ember = Theme.Palette(
+        id: "ember", name: "余烬",
+        bgBase: ("#140C08", "#F8EFE9"),
+        bgRaise: ("#1F140E", "#FDF7F3"),
+        // 压暗规则：浅档 L* 95.0 → 90.8（−4.4%），深档各通道 ×0.85（#140C08 → #110A07）
+        bgDeep: ("#110A07", "#ECE3DD"),
+        bgElevated: ("#261813", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#261813", 0.28)),
+        lime: ("#F0714B", "#C2472A"),
+        limeInk: ("#F0714B", "#8F2F17"),
+        onLime: ("#1A0803", "#FFFFFF"),
+        limeBright: ("#FFA98A", "#E88462"),
+        limeDeep: ("#C2472A", "#9A3520"),
+        limeGlow: (("#F0714B", 0.33), ("#C2472A", 0.15)),
+        glassTint: (("#F0714B", 0.10), ("#C2472A", 0.08))
+    )
+
+    /// 7 石墨 —— 中性冷银：最克制的一套，给"彩色都看腻了"的人一个不带情绪的选择
+    ///
+    /// 对比度自查：深 `#A8B6C6` 面 + `#0B0C0E` 字 = **9.48:1**；浅 `#5C6B7A` 面 + `#FFFFFF` 字 = **5.47:1**。
+    /// 为什么背景必须是中性近黑（`#0B0C0E`，三通道差值 ≤3）而不是"深一点的蓝"：
+    /// 这套的全部卖点就是"无色偏"，底色一旦偏蓝/偏紫，它立刻退化成又一个 ocean / violet。
+    /// 品牌色也刻意做成低饱和钢蓝 —— 在这套里它读起来是"银/灰"，不是"蓝"。
+    static let graphite = Theme.Palette(
+        id: "graphite", name: "石墨",
+        bgBase: ("#0B0C0E", "#EEF0F2"),
+        bgRaise: ("#14161A", "#F8F9FA"),
+        // 压暗规则：浅档 L* 94.7 → 90.5（−4.4%），深档各通道 ×0.85（#0B0C0E → #090A0C），三通道等量降 → 不偏色
+        bgDeep: ("#090A0C", "#E2E4E6"),
+        bgElevated: ("#1A1D22", "#FFFFFF"),
+        scrim: (("#000000", 0.45), ("#1A1D22", 0.28)),
+        lime: ("#A8B6C6", "#5C6B7A"),
+        limeInk: ("#A8B6C6", "#3E4A56"),
+        onLime: ("#0B0C0E", "#FFFFFF"),
+        limeBright: ("#CBD6E2", "#8D9AA8"),
+        limeDeep: ("#7C8A99", "#4A5764"),
+        limeGlow: (("#A8B6C6", 0.30), ("#5C6B7A", 0.15)),
+        glassTint: (("#A8B6C6", 0.08), ("#5C6B7A", 0.08))
     )
 }
 
