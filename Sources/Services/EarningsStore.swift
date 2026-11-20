@@ -440,7 +440,7 @@ extension EarningsStore {
 
     /// 拉瓜分结果（服务端算好的整数分）。`force=true` 压缩新鲜窗。
     func fetchZGResult(period: Int, force: Bool = false) async {
-        await zgLoad(
+        await zgLoad<ZGResult>(
             name: "result", period: period, maxAge: force ? 0 : 120,
             url: API.zgResult(period: period)
         ) { [weak self] value, stale in
@@ -457,7 +457,7 @@ extension EarningsStore {
 
     /// 拉话题告警。
     func fetchZGTopics(period: Int) async {
-        await zgLoad(name: "topics", period: period, url: API.zgTopics(period: period)) { [weak self] value, _ in
+        await zgLoad<ZGTopicsData>(name: "topics", period: period, url: API.zgTopics(period: period)) { [weak self] value, _ in
             guard let self else { return }
             if let value { self.zgTopics = value }
         }
@@ -465,7 +465,7 @@ extension EarningsStore {
 
     /// 拉合并建议。
     func fetchZGMerge(period: Int) async {
-        await zgLoad(name: "merge", period: period, url: API.zgMerge(period: period)) { [weak self] value, _ in
+        await zgLoad<ZGMergeData>(name: "merge", period: period, url: API.zgMerge(period: period)) { [weak self] value, _ in
             guard let self else { return }
             if let value { self.zgMerge = value }
         }
@@ -473,7 +473,7 @@ extension EarningsStore {
 
     /// 拉规则口径。
     func fetchZGRules(period: Int) async {
-        await zgLoad(name: "rules", period: period, url: API.zgRules(period: period)) { [weak self] value, _ in
+        await zgLoad<ZGRules>(name: "rules", period: period, url: API.zgRules(period: period)) { [weak self] value, _ in
             guard let self else { return }
             if let value { self.zgRules = value }
         }
@@ -481,7 +481,7 @@ extension EarningsStore {
 
     /// 拉清洗报告。
     func fetchZGCleanReport(period: Int) async {
-        await zgLoad(name: "clean", period: period, url: API.zgCleanReport(period: period)) { [weak self] value, _ in
+        await zgLoad<ZGCleanReport>(name: "clean", period: period, url: API.zgCleanReport(period: period)) { [weak self] value, _ in
             guard let self else { return }
             if let value { self.zgClean = value }
         }
