@@ -32,6 +32,17 @@ final class EarningsStore: ObservableObject {
     /// 可直接上屏的一句话；nil = 没问题
     @Published private(set) var errorText: String?
 
+    // MARK: - 追光计划瓜分（T11，只读渲染服务端结果）
+    /// 服务端最近一次瓜分结果（金额整数分，端侧零计算）
+    @Published private(set) var zgResult: ZGResult?
+    @Published private(set) var zgTopics: ZGTopicsData?
+    @Published private(set) var zgMerge: ZGMergeData?
+    @Published private(set) var zgRules: ZGRules?
+    @Published private(set) var zgClean: ZGCleanReport?
+    /// 这些数来自本地缓存（这次没拉到新的）—— UI 据此显示「离线数据，可能不是最新」
+    @Published private(set) var zgIsStale: Bool = false
+    @Published private(set) var zgIsLoading: Bool = false
+
     private let client: APIClient
     private let auth: EarningsAuth
 
@@ -344,6 +355,13 @@ final class EarningsStore: ObservableObject {
         lastUpdated = nil
         isStale = false
         errorText = nil
+        // 瓜分结果与收益同属一个账号，登出一起清（不留上一个账号的账）
+        zgResult = nil
+        zgTopics = nil
+        zgMerge = nil
+        zgRules = nil
+        zgClean = nil
+        zgIsStale = false
     }
 
     /// 会话失效：清凭证 → 清内存 → 清缓存（三件一起做，少一件都会留下上一个账号的痕迹）
@@ -351,5 +369,224 @@ final class EarningsStore: ObservableObject {
         auth.invalidate()
         clear()
         await SnapshotCache.shared.removeAll(withPrefix: Self.snapshotPrefix)
+    }
+}
+
+// MARK: - 追光计划瓜分计算（T11，ZG-032/033）
+//
+// 三条硬约束与既有 `load()` 完全一致：
+// 1. 凭证只从 `auth.cookieHeader` 取（同一个真相源）；
+// 2. 缓存 + 离线降级统一走 `CachedLoader` —— 先给旧值、再发请求、失败保留旧值并置 `zgIsStale`；
+// 3. **端侧零计算**：金额是服务端 `zg-calc.js` 算好的整数分，本层只解码、只缓存、不碰公式。
+extension EarningsStore {
+
+    /// 瓜分模块的缓存键。带 `snapshotPrefix`，登出时会被 `handleExpired()` 一并清掉。
+    private static func zgKey(_ name: String, period: Int) -> String {
+        return "\(snapshotPrefix)zg.\(name).\(period)"
+    }
+
+    /// 构造只读 GET 请求：注入 Cookie + JSON Accept。
+    private func zgGetRequest(_ url: URL?, cookie: String) throws -> URLRequest {
+        guard let url else { throw APIError.server(code: 0, message: "地址拼错了。") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        return request
+    }
+
+    /// 解码信封：HTTP 200 但 `ok:false` 也算业务失败（服务端 fail() 的约定）。
+    private func zgUnwrap<T: Codable & Sendable>(_ envelope: ZGEnvelope<T>) throws -> T {
+        guard envelope.ok, let data = envelope.data else {
+            throw APIError.server(code: envelope.status ?? 200, message: envelope.error ?? "数据暂时读不到。")
+        }
+        return data
+    }
+
+    /// 通用只读拉取（缓存优先 + 联网刷新 + 离线降级）。
+    private func zgLoad<T: Codable & Sendable>(
+        name: String,
+        period: Int,
+        maxAge: TimeInterval = 120,
+        url: URL?,
+        emit: @escaping (T?, Bool) -> Void
+    ) async {
+        emit(nil, false)
+        guard let cookie = auth.cookieHeader else {
+            // 未登录不带凭证硬打接口：直接给"离线"空态，不发必然 401 的请求
+            emit(nil, true)
+            return
+        }
+        guard !zgIsLoading else { return }
+        zgIsLoading = true
+        defer { zgIsLoading = false }
+
+        let client = self.client
+        await CachedLoader.shared.load(
+            key: Self.zgKey(name, period: period),
+            maxAge: maxAge,
+            fetch: {
+                let request = try self.zgGetRequest(url, cookie: cookie)
+                let envelope = try await client.send(request, as: ZGEnvelope<T>.self)
+                return try self.zgUnwrap(envelope)
+            },
+            emit: { loaded in
+                emit(loaded.value, loaded.isStale)
+            }
+        )
+    }
+
+    /// 拉瓜分结果（服务端算好的整数分）。`force=true` 压缩新鲜窗。
+    func fetchZGResult(period: Int, force: Bool = false) async {
+        await zgLoad(
+            name: "result", period: period, maxAge: force ? 0 : 120,
+            url: API.zgResult(period: period)
+        ) { [weak self] value, stale in
+            guard let self else { return }
+            // 离线降级：本次没拉到就保留上一次的值，绝不清空已上屏的结果
+            if let value {
+                self.zgResult = value
+                self.zgIsStale = stale
+            } else if self.zgResult == nil {
+                self.zgIsStale = true
+            }
+        }
+    }
+
+    /// 拉话题告警。
+    func fetchZGTopics(period: Int) async {
+        await zgLoad(name: "topics", period: period, url: API.zgTopics(period: period)) { [weak self] value, _ in
+            guard let self else { return }
+            if let value { self.zgTopics = value }
+        }
+    }
+
+    /// 拉合并建议。
+    func fetchZGMerge(period: Int) async {
+        await zgLoad(name: "merge", period: period, url: API.zgMerge(period: period)) { [weak self] value, _ in
+            guard let self else { return }
+            if let value { self.zgMerge = value }
+        }
+    }
+
+    /// 拉规则口径。
+    func fetchZGRules(period: Int) async {
+        await zgLoad(name: "rules", period: period, url: API.zgRules(period: period)) { [weak self] value, _ in
+            guard let self else { return }
+            if let value { self.zgRules = value }
+        }
+    }
+
+    /// 拉清洗报告。
+    func fetchZGCleanReport(period: Int) async {
+        await zgLoad(name: "clean", period: period, url: API.zgCleanReport(period: period)) { [weak self] value, _ in
+            guard let self else { return }
+            if let value { self.zgClean = value }
+        }
+    }
+
+    /// 一次把瓜分页所需的五份只读数据都拉齐。
+    ///
+    /// 串行而非并行：`zgLoad` 用 `zgIsLoading` 做单飞门闩（防同一接口并发刷新），
+    /// 并行调用会互相把对方的请求挡掉。五个接口都是小 JSON，串行的延迟可接受。
+    func loadZGAll(period: Int) async {
+        await fetchZGResult(period: period)
+        await fetchZGTopics(period: period)
+        await fetchZGMerge(period: period)
+        await fetchZGRules(period: period)
+        await fetchZGCleanReport(period: period)
+    }
+
+    /// 构造写请求（POST + JSON body + Cookie）。admins 由服务端判定，端侧不自行判断权限。
+    private func zgPostRequest(_ url: URL?, cookie: String, body: [String: Any]) throws -> URLRequest {
+        guard let url else { throw APIError.server(code: 0, message: "地址拼错了。") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        return request
+    }
+
+    /// 手动忽略 / 取消忽略一条话题告警（写服务端，成功后再刷新）。
+    @discardableResult
+    func setZGTopicIgnore(period: Int, workId: String, ignore: Bool) async throws -> Bool {
+        guard let cookie = auth.cookieHeader else {
+            throw APIError.server(code: 401, message: "登录已过期，重新登录一下。")
+        }
+        let request = try zgPostRequest(
+            API.zgTopicIgnore(), cookie: cookie,
+            body: ["period": period, "workId": workId, "ignore": ignore]
+        )
+        let raw = try await client.send(request)
+        guard raw.isSuccess else {
+            throw APIError.server(code: raw.statusCode, message: APIErrorEnvelope.anyMessage(from: raw.data))
+        }
+        let env = try? APIJSON.decoder.decode(ZGEnvelope<ZGIgnoreResponse>.self, from: raw.data)
+        if let ids = env?.data?.ignoredIds {
+            var current = zgTopics?.ignoredIds ?? [:]
+            current[workId] = ignore
+            _ = ids // 以服务端回包为准刷新时由 fetch 覆盖；这里保留本地即时反馈
+            zgTopics = ZGTopicsData(
+                warnings: zgTopics?.warnings ?? [],
+                ignoredIds: current,
+                effectiveIds: zgTopics?.effectiveIds ?? [],
+                distributionRecords: zgTopics?.distributionRecords
+            )
+        }
+        return true
+    }
+
+    /// 确认 / 取消确认一对合并关系（写服务端）。
+    @discardableResult
+    func confirmZGMerge(period: Int, douyin: String, kuaishou: String, confirm: Bool) async throws -> Bool {
+        guard let cookie = auth.cookieHeader else {
+            throw APIError.server(code: 401, message: "登录已过期，重新登录一下。")
+        }
+        let pair: [String: Any] = [
+            "douyin": douyin, "kuaishou": kuaishou, "confirm": confirm
+        ]
+        let request = try zgPostRequest(
+            API.zgMergeConfirm(), cookie: cookie,
+            body: ["period": period, "pairs": [pair]]
+        )
+        let raw = try await client.send(request)
+        guard raw.isSuccess else {
+            throw APIError.server(code: raw.statusCode, message: APIErrorEnvelope.anyMessage(from: raw.data))
+        }
+        return true
+    }
+
+    /// 触发服务端计算（manual/auto）。金额由服务端产出，端侧不参与。
+    /// 成功后刷新 result，UI 只读 `zgResult`。
+    @discardableResult
+    func submitZGCalc(period: Int, mode: String, inputs: [String: Any]) async throws -> Bool {
+        guard let cookie = auth.cookieHeader else {
+            throw APIError.server(code: 401, message: "登录已过期，重新登录一下。")
+        }
+        var body: [String: Any] = ["period": period, "mode": mode, "inputs": inputs]
+        for (key, value) in inputs { body[key] = value } // 兼容服务端把部分字段放在顶层读取
+        let request = try zgPostRequest(API.zgCalc(), cookie: cookie, body: body)
+        let raw = try await client.send(request)
+        guard raw.isSuccess else {
+            throw APIError.server(code: raw.statusCode, message: APIErrorEnvelope.anyMessage(from: raw.data))
+        }
+        await fetchZGResult(period: period, force: true)
+        return true
+    }
+}
+
+// 让 ZGTopicsData 支持就地重建（忽略勾选后即时反馈用）。
+extension ZGTopicsData {
+    init(warnings: [ZGTopicWarning], ignoredIds: [String: Bool], effectiveIds: [String], distributionRecords: [ZGJSONValue]?) {
+        self.warnings = warnings
+        self.ignoredIds = ignoredIds
+        self.effectiveIds = effectiveIds
+        self.distributionRecords = distributionRecords
     }
 }
