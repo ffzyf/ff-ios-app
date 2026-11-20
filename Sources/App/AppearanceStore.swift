@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 外观偏好的唯一状态源（PRD §3.6：跟随系统 / 始终浅色 / 始终深色）。
 ///
@@ -62,6 +63,24 @@ final class AppearanceStore: ObservableObject {
         themeId = id
         Theme.active = Theme.Palette.with(id: id)
         defaults.set(id, forKey: Self.themeStorageKey)
+
+        // 桌面图标联动是"附带动作"：换肤已经落盘，图标失败只记日志，绝不影响主题切换。
+        // 8 套配色全部走备用图标（包括 lime —— 主图标是单色白 FF，不是彩色青柠），
+        // 所以任何主题都不传 nil，行为一致；系统每次会弹确认框，这是用户明确接受的代价。
+        let iconName = "icon-\(Theme.Palette.with(id: id).id)"
+        // setAlternateIconName 必须主线程；从设置页点选已是主线程，这里再兜一层保险。
+        DispatchQueue.main.async {
+            // 模拟器 / 不支持备用图标的环境静默降级，不崩、不弹错误。
+            guard UIApplication.shared.supportsAlternateIcons else {
+                print("[AppearanceStore] alternate icons unsupported; skip icon switch")
+                return
+            }
+            UIApplication.shared.setAlternateIconName(iconName) { error in
+                if let error {
+                    print("[AppearanceStore] setAlternateIconName(\(iconName)) failed: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     /// 默认 `UserDefaults.standard`；测试或预览可注入独立 suite
@@ -76,5 +95,9 @@ final class AppearanceStore: ObservableObject {
         self.themeId = Theme.Palette.with(id: savedTheme).id
         // 启动即生效：不等设置页被打开，首帧就是用户上次选的那套
         Theme.active = Theme.Palette.with(id: savedTheme)
+
+        // 刻意不在这里调 setAlternateIconName：iOS 会记住用户上次选中的备用图标，
+        // 冷启动后桌面图标自动保持。这里再设一次会导致每次启动都弹系统确认框，
+        // 体验很差。图标只在用户主动点选主题时（selectTheme）才切换。
     }
 }
