@@ -44,6 +44,8 @@ struct EarningsView: View {
     @State private var isSubmitting: Bool = false
     /// 「记一笔」表单
     @State private var showsRecord: Bool = false
+    /// 追光计划瓜分计算（T11）：工程无 NavigationStack，用 sheet 模态进入，不动底栏 Tab
+    @State private var showsZGShare: Bool = false
     /// 平台详情弹页的呈现开关（`PlatformDetailSheet`）。
     ///
     /// 与上一版的区别：以前这个开关控制"占比卡里内联展开一张平台明细表"，
@@ -138,6 +140,10 @@ struct EarningsView: View {
         }
         .sheet(isPresented: $showsRecord) {
             EarningsRecordSheet()
+        }
+        .sheet(isPresented: $showsZGShare) {
+            ZGShareView()
+                .presentationDetents([.large])
         }
     }
 
@@ -238,6 +244,22 @@ struct EarningsView: View {
                     .foregroundStyle(Theme.textPrimary)
                 Spacer(minLength: 0)
                 if auth.isLoggedIn {
+                    // 追光计划瓜分计算入口（T11）：与刷新并排，模态进入不占底栏 Tab
+                    Button {
+                        Haptics.light()
+                        showsZGShare = true
+                    } label: {
+                        Image(systemName: "chart.pie")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(width: 32, height: 32)
+                            .background {
+                                Circle().fill(Theme.glassFill)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("瓜分计算")
+
                     Button {
                         Haptics.light()
                         Task { await store.load(force: true) }
