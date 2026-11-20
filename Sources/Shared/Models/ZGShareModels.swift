@@ -34,6 +34,19 @@ struct ZGEnvelope<T: Codable & Sendable>: Codable, Sendable {
         rev = try? c.decode(Int.self, forKey: .rev)
     }
 
+    /// 显式实现编码，避免泛型 Codable 依赖编译器合成在某些工具链上的边界问题。
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(ok, forKey: .ok)
+        try c.encodeIfPresent(apiVersion, forKey: .apiVersion)
+        try c.encodeIfPresent(serverTime, forKey: .serverTime)
+        try c.encodeIfPresent(data, forKey: .data)
+        try c.encodeIfPresent(error, forKey: .error)
+        try c.encodeIfPresent(status, forKey: .status)
+        try c.encodeIfPresent(t, forKey: .t)
+        try c.encodeIfPresent(rev, forKey: .rev)
+    }
+
     /// 金额单位说明：结果 data 里自带 `amountUnit`，端侧只用它做展示格式化。
     init(ok: Bool, data: T?, error: String? = nil) {
         self.ok = ok
