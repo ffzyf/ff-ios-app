@@ -10,6 +10,69 @@
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<!--
+	  主题 → 桌面图标联动（用户可以接受 iOS 每次切换弹的系统确认框）。
+	  CFBundlePrimaryIcon 保留 CFBundleIconName = AppIcon，主图标仍走
+	  Assets.xcassets/AppIcon.appiconset（三态单色白 FF），不参与换色。
+	  八个备用图标是 Resources/AlternateIcons/*.png，注册名 = 文件名（不含 .png），
+	  必须与 scripts/gen_alternate_icons.py 的输出以及 AppearanceStore 里的
+	  "icon-<themeId>" 命名逐字一致；改任何一边都会静默变成"点了没反应"。
+	-->
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconName</key>
+			<string>AppIcon</string>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon</string>
+			</array>
+		</dict>
+		<key>CFBundleAlternateIcons</key>
+		<dict>
+			<key>icon-lime</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-lime</string></array>
+			</dict>
+			<key>icon-violet</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-violet</string></array>
+			</dict>
+			<key>icon-sand</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-sand</string></array>
+			</dict>
+			<key>icon-ocean</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-ocean</string></array>
+			</dict>
+			<key>icon-sakura</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-sakura</string></array>
+			</dict>
+			<key>icon-aurora</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-aurora</string></array>
+			</dict>
+			<key>icon-ember</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-ember</string></array>
+			</dict>
+			<key>icon-graphite</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-graphite</string></array>
+			</dict>
+		</dict>
+	</dict>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
