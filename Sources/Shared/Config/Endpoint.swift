@@ -121,6 +121,20 @@ enum Endpoint {
     ///   —— 所以 App 不本地拼接，直接重拉一次总览。
     static let earningsActivityPath = "/api/app/earnings/activity"
 
+    // MARK: - 追光计划瓜分计算（`/api/zg/*`，T11）
+    //
+    // 与收益工作台同站（`rockBase`）：服务端 Functions 同在工程 `site/functions/api/zg/`，
+    // 读接口公开只读，写接口（忽略话题 / 确认合并 / 计算）由服务端 admin 校验。
+    static let zgBase = rockBase
+    static let zgResultPath = "/api/zg/result"
+    static let zgTopicsPath = "/api/zg/topics"
+    static let zgMergePath = "/api/zg/merge"
+    static let zgRulesPath = "/api/zg/rules"
+    static let zgCleanReportPath = "/api/zg/clean-report"
+    static let zgCalcPath = "/api/zg/calc"
+    static let zgTopicIgnorePath = "/api/zg/topics/ignore"
+    static let zgMergeConfirmPath = "/api/zg/merge/confirm"
+
     // MARK: - AI 聊天（`/api/ai/*`）
     //
     // 六个端点全部归**简报站**（`briefBase` = `app.skyzyf335.top`）：AI 那一套与简报同一个
