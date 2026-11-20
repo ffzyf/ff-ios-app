@@ -265,7 +265,9 @@ struct ZGShareView: View {
 
             if let result = store.zgResult {
                 if result.isEstimate {
-                    Label(result.message.isEmpty ? "预估值，非实际到账" : result.message,
+                    // message 是可选值（auto 预估才有），先解包给默认值再用
+                    let message = result.message ?? ""
+                    Label(message.isEmpty ? "预估值，非实际到账" : message,
                           systemImage: "info.circle")
                         .font(Typography.footnote)
                         .foregroundStyle(Theme.statusWarn)
