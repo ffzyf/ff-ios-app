@@ -16,9 +16,19 @@ private enum ZGDisplay {
         return "¥" + (formatter.string(from: value) ?? "0.00")
     }
 
+    /// 三档区间的一行标签。用 Identifiable 结构体而非元组 —— Swift 的 key path 不能指向元组元素，
+    /// ForEach 用元组数组 + `id: \.key` 会编译失败，故用具名类型。
+    struct Level: Identifiable {
+        let key: String
+        let label: String
+        var id: String { key }
+    }
+
     /// 三档区间的短标签（低/中/高）。
-    static let levelNames: [(key: String, label: String)] = [
-        ("low", "偏多人 · 偏少"), ("mid", "中性估计"), ("high", "偏少人 · 偏多")
+    static let levelNames: [Level] = [
+        Level(key: "low", label: "偏多人 · 偏少"),
+        Level(key: "mid", label: "中性估计"),
+        Level(key: "high", label: "偏少人 · 偏多")
     ]
 }
 
@@ -371,18 +381,13 @@ struct ZGShareView: View {
         VStack(alignment: .leading, spacing: Spacing.cardGap) {
             SectionHeader(title: "预估区间")
             if let range = store.zgResult?.range {
-                ForEach(ZGDisplay.levelNames, id: \.key) { level in
-                    let point: ZGRangePoint? = switch level.key {
-                    case "low": range.low
-                    case "mid": range.mid
-                    default: range.high
-                    }
+                ForEach(ZGDisplay.levelNames) { level in
                     HStack {
                         Text(level.label)
                             .font(Typography.body)
                             .foregroundStyle(Theme.textPrimary)
                         Spacer(minLength: 0)
-                        Text(point.map { ZGDisplay.yuan($0.cappedCents) } ?? "—")
+                        Text(rangeText(range, key: level.key))
                             .font(Typography.callout)
                             .foregroundStyle(Theme.textPrimary)
                             .monospacedDigit()
@@ -402,6 +407,20 @@ struct ZGShareView: View {
         .background {
             RoundedRectangle(cornerRadius: Radius.card).fill(Theme.surfaceTint1)
         }
+    }
+
+    /// 按档位 key 取服务端结果里的金额文本。普通 switch 语句，避免 ViewBuilder 里的 switch 表达式。
+    private func rangeText(_ range: ZGRange, key: String) -> String {
+        let point: ZGRangePoint?
+        if key == "low" {
+            point = range.low
+        } else if key == "mid" {
+            point = range.mid
+        } else {
+            point = range.high
+        }
+        guard let point else { return "—" }
+        return ZGDisplay.yuan(point.cappedCents)
     }
 
     // MARK: - 话题告警
@@ -546,31 +565,39 @@ struct ZGShareView: View {
         }
     }
 
+    /// 规则口径的一行：用 Identifiable 结构体，避免元组 keypath（Swift 的 key path 不能指向元组元素）。
+    private struct RuleLine: Identifiable {
+        let label: String
+        let path: [String]
+        var id: String { label }
+    }
+
     /// 从通用 JSON 里读几条关键口径展示（valid_metric / threshold / cap 等）。
     /// 只看、不解释、不参与计算。
+    /// 用 `if let` 而非 `guard ... return`：result builder（@ViewBuilder）不允许 guard 控制流。
     @ViewBuilder
     private func ruleLines(_ value: ZGJSONValue?) -> some View {
-        guard let value else {
-            emptyHint("规则为空")
-            return
-        }
-        let candidates: [(String, [String])] = [
-            ("档位累加·有效口径", ["awards", "tier_cumulative", "valid_metric"]),
-            ("档位累加·门槛", ["awards", "tier_cumulative", "valid_threshold"]),
-            ("档位累加·上限", ["awards", "tier_cumulative", "cap"]),
-            ("新星成长·门槛", ["awards", "rising_star", "valid_threshold"]),
-            ("新星成长·上限", ["awards", "rising_star", "cap"]),
-            ("全勤天数", ["awards", "active", "full_attendance", "days"])
-        ]
-        ForEach(candidates, id: \.0) { label, path in
-            if let v = value.member(path) {
-                HStack {
-                    Text(label).font(Typography.footnote).foregroundStyle(Theme.textSecondary)
-                    Spacer(minLength: 0)
-                    Text(v.displayText).font(Typography.callout).foregroundStyle(Theme.textPrimary)
+        if let value {
+            let candidates: [RuleLine] = [
+                RuleLine(label: "档位累加·有效口径", path: ["awards", "tier_cumulative", "valid_metric"]),
+                RuleLine(label: "档位累加·门槛", path: ["awards", "tier_cumulative", "valid_threshold"]),
+                RuleLine(label: "档位累加·上限", path: ["awards", "tier_cumulative", "cap"]),
+                RuleLine(label: "新星成长·门槛", path: ["awards", "rising_star", "valid_threshold"]),
+                RuleLine(label: "新星成长·上限", path: ["awards", "rising_star", "cap"]),
+                RuleLine(label: "全勤天数", path: ["awards", "active", "full_attendance", "days"])
+            ]
+            ForEach(candidates) { candidate in
+                if let v = value.member(candidate.path) {
+                    HStack {
+                        Text(candidate.label).font(Typography.footnote).foregroundStyle(Theme.textSecondary)
+                        Spacer(minLength: 0)
+                        Text(v.displayText).font(Typography.callout).foregroundStyle(Theme.textPrimary)
+                    }
+                    .frame(minHeight: 56)
                 }
-                .frame(minHeight: 56)
             }
+        } else {
+            emptyHint("规则为空")
         }
     }
 
