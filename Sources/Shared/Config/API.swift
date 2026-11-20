@@ -283,6 +283,51 @@ enum API {
         return Endpoint.url(base: Endpoint.rockBase, path: Endpoint.earningsActivityPath)
     }
 
+    // MARK: - 追光计划瓜分计算（T11，ZG-032/033）
+    //
+    // 端侧只拼地址、只渲染服务端结果：金额全部由服务端 `zg-calc.js` 算出（整数分），
+    // 这里不写任何 ÷100 之外的换算。所有读接口带 `period`，计算接口另带 `mode`。
+    private static func zg(_ path: String, period: Int, mode: String? = nil) -> URL? {
+        var query = [URLQueryItem(name: "period", value: String(period))]
+        if let mode = mode {
+            query.append(URLQueryItem(name: "mode", value: mode))
+        }
+        return Endpoint.url(base: Endpoint.zgBase, path: path, query: query)
+    }
+
+    /// 服务端最近一次瓜分结果（GET，只读）。
+    static func zgResult(period: Int) -> URL? {
+        return zg(Endpoint.zgResultPath, period: period)
+    }
+    /// 话题告警（GET，只读）。
+    static func zgTopics(period: Int) -> URL? {
+        return zg(Endpoint.zgTopicsPath, period: period)
+    }
+    /// 合并建议（GET，只读）。
+    static func zgMerge(period: Int) -> URL? {
+        return zg(Endpoint.zgMergePath, period: period)
+    }
+    /// 规则口径（GET，只读）。
+    static func zgRules(period: Int) -> URL? {
+        return zg(Endpoint.zgRulesPath, period: period)
+    }
+    /// 清洗报告（GET，只读）。
+    static func zgCleanReport(period: Int) -> URL? {
+        return zg(Endpoint.zgCleanReportPath, period: period)
+    }
+    /// 触发计算（POST，admin；body 带 period/mode/inputs，鉴权由服务端判定）。
+    static func zgCalc() -> URL? {
+        return Endpoint.url(base: Endpoint.zgBase, path: Endpoint.zgCalcPath)
+    }
+    /// 忽略 / 取消忽略话题告警（POST，admin）。
+    static func zgTopicIgnore() -> URL? {
+        return Endpoint.url(base: Endpoint.zgBase, path: Endpoint.zgTopicIgnorePath)
+    }
+    /// 确认 / 取消确认合并关系（POST，admin）。
+    static func zgMergeConfirm() -> URL? {
+        return Endpoint.url(base: Endpoint.zgBase, path: Endpoint.zgMergeConfirmPath)
+    }
+
     // MARK: - 收益站鉴权（与问卷站同一套路径，但域名不同）
 
     /// 收益站登录。**路径与问卷站完全一致**（`/api/auth/login`），只有域名不同
