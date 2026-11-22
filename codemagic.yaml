@@ -79,12 +79,16 @@ workflows:
       - name: 注入保活 dylib（weak，缺 CydiaSubstrate 不致崩）
         script: |
           set -euo pipefail
-          # M2 镜像不保证带 insert_dylib：先试 brew，失败再退回源码编译（只装这一个工具）。
-          if ! command -v insert_dylib >/dev/null 2>&1; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install insert_dylib \
-              || { git clone --depth 1 https://github.com/Tyilo/insert_dylib /tmp/idylib \
-                   && make -C /tmp/idylib && export PATH=/tmp/idylib:$PATH; }
-          fi
+          # 用仓库自带的 insert_dylib 源码本地编译（零网络依赖，不碰 brew）。
+          # 为什么改成源码编译：
+          #   - `brew install insert_dylib` 无此 formula（Homebrew: "No available formula"）；
+          #   - 兜底 git clone 的 Tyilo/insert_dylib 是 Xcode 工程、没有 Makefile，
+          #     `make` 报 "No targets specified and no makefile found"，上次 Step 8 就死在这；
+          #   - 源码已固化在 vendor/tools/insert_dylib/main.c，M2 自带 Xcode 命令行工具
+          #     （<mach-o/*> 等 Apple SDK 头文件齐全），clang 一行即可编译，不再依赖网络。
+          clang vendor/tools/insert_dylib/main.c -o /tmp/insert_dylib
+          chmod +x /tmp/insert_dylib
+          export PATH=/tmp:$PATH
           APP="$(find build -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1)"
           [ -n "$APP" ] || { echo "没找到 .app，编译大概率失败了"; exit 1; }
           echo "注入目标 APP=$APP"

@@ -17,6 +17,11 @@
 #
 # vendor/dylibs/libGShoutaiDylib.dylib 的 SHA256（换 dylib 时务必同步更新这里与 preflight）：
 #   4637c38d752398c593ebdfc0579b26e56afc0dffb0426b6c7611d933e9b80e36
+#
+# vendor/tools/insert_dylib/main.c 源码本体的 SHA256（不含其头部注释；即从第一个 #include
+# 起至文件末尾；换源码时务必同步更新这里与 main.c 头部注释）：
+#   cb8feb87e65ed2344d4b7a4b1006298ba07a4007521d1f0eff3841825362273c
+#   （2026-11-22：main.c 补入 <sys/param.h>/<stdarg.h> 两个裸 clang 编译必需头文件后更新）
 set -euo pipefail
 
 # 所有路径相对项目根：从任意目录调用都能正常工作。
@@ -34,8 +39,15 @@ DST="$APP/Frameworks/libGShoutaiDylib.dylib"
 [ -f "$BIN" ] || { echo "找不到主二进制: $BIN（PRODUCT_NAME 是否从 SkyApp 改过？）"; exit 1; }
 [ -f "$SRC" ] || { echo "找不到源 dylib: $SRC（vendor 目录没同步到 CI？）"; exit 1; }
 for tool in install_name_tool codesign otool insert_dylib; do
-  command -v "$tool" >/dev/null 2>&1 \
-    || { echo "缺少工具 $tool —— 本脚本只能在 macOS + Xcode 命令行工具下运行"; exit 1; }
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "缺少工具 $tool —— 本脚本只能在 macOS + Xcode 命令行工具下运行" >&2
+    if [ "$tool" = "insert_dylib" ]; then
+      # 该工具已源码固化：正常由 codemagic.yaml 的「注入保活 dylib」步骤本地 clang 编译。
+      echo "若 CI 上：请确认 codemagic.yaml 里 clang vendor/tools/insert_dylib/main.c -o /tmp/insert_dylib" >&2
+      echo '          与 export PATH=/tmp:$PATH 这两步已执行（brew 无 formula、上游无 Makefile）' >&2
+    fi
+    exit 1
+  fi
 done
 
 # 1. 先建 Frameworks，否则 codesign / 打包阶段会报"缺少 Framework(s) 目录"。
@@ -47,7 +59,9 @@ install_name_tool -id "$LOAD" "$DST"
 # 4. 先给 dylib 做 ad-hoc 签名，避免后续整包重签时报"框架未签名"。
 codesign -f -s - "$DST" 2>/dev/null || true
 # 5. weak 注入主二进制：--weak 是关键，缺 CydiaSubstrate 时 dyld 跳过而非崩溃。
-insert_dylib --inplace --strip-codesign --weak --all-yes "$LOAD" "$BIN"
+#    注意 flag 是 --strip-codesig（无 n）：insert_dylib 的 getopt_long 只认这个名字，
+#    若在其末尾多加一个 n，会被 usage() 拒绝并以退出码 1 失败（已于 2026-11-22 修正）。
+insert_dylib --inplace --strip-codesig --weak --all-yes "$LOAD" "$BIN"
 # 6. 断言注入结果：用 bash 内建的 glob 匹配而不是 `grep -q`，因为 grep -q 命中即退、
 #    会让管道写端收到 SIGPIPE，在 set -o pipefail 下被误判成失败（发出没注入的包）。
 LOADS="$(otool -L "$BIN")"

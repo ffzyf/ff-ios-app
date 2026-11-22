@@ -9,7 +9,7 @@
   1. 括号配对        —— Swift 里少一个 `}` 会让整个文件的报错指到几百行外
   2. 跨文件符号引用  —— Theme.X / API.X / Typography.X / Radius.X 用到不存在的成员
   3. 每个 .swift 都有合理的文件尾（截断了会很安静地编译失败）
-  4. 保活注入资产    —— dylib 与注入脚本少一个，CI 就会出一个「不带保活」的包却一路绿灯
+  4. 保活注入资产    —— dylib / 注入脚本 / insert_dylib 源码少一个，CI 就会出一个不带保活的包却一路绿灯
 
 **不做**类型检查：那需要真实的 Swift toolchain + UIKit，留给 CI。
 """
@@ -20,14 +20,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "Sources"
 
-# 保活插件固化进构建产物所需的两个静态资产。
-# dylib 放 vendor/ 而不是 Sources/Resources：xcodegen 不碰它；也不在 push.py 的
+# 保活插件固化进构建产物所需的三个静态资产。
+# dylib 与 insert_dylib 源码放 vendor/ 而不是 Sources/Resources：xcodegen 不碰它；也不在 push.py 的
 # 跳过列表（.github/ / _release/ / build/）里，能同步到 main 让 CI 读到。
+# insert_dylib 源码加入闸门的原因：CI 已改为用它本地 clang 编译（brew 无 formula、上游无 Makefile），
+#   少了 main.c 注入步骤会直接挂，不能让它一路绿灯出一个「不带保活」的包。
 # 这里只做存在性闸门 —— 真正的注入与 install name 校验在 macOS 侧由
 # scripts/inject_dylib.sh 完成（Linux 沙箱没有 otool / insert_dylib）。
 INJECTION_ASSETS = (
     "vendor/dylibs/libGShoutaiDylib.dylib",
     "scripts/inject_dylib.sh",
+    "vendor/tools/insert_dylib/main.c",
 )
 
 # 会被 `X.y(...)` 方式引用的命名空间 → 定义所在文件
@@ -144,7 +147,7 @@ def main() -> int:
             for missing in sorted(used - members):
                 errors.append(f"{f.relative_to(ROOT)}: `{ns}.{missing}` 在 {NAMESPACES[ns]} 里没有定义")
 
-    # 4. 保活注入资产（dylib + 注入脚本）
+    # 4. 保活注入资产（dylib + 注入脚本 + insert_dylib 源码）
     for rel in INJECTION_ASSETS:
         if not (ROOT / rel).is_file():
             errors.append(f"缺少保活注入资产 {rel} —— CI 会出一个不带保活的包")
