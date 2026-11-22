@@ -71,6 +71,25 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      # 保活 dylib 注入：用户之前每次签名都要手动注入，这里固化为构建链的一环，
+      # 下载的包自带插件、签名时无需再手动录入。
+      # 必须 weak：插件依赖的 CydiaSubstrate 是越狱框架，非越狱设备上不存在，
+      # 强注入会让 dyld 直接崩、App 打不开；weak 注入时 dyld 跳过它，App 正常启动（ Bark 兜底）。
+      # 位置在编译之后、打包之前：注入改的是 .app 里的 Mach-O，必须在 .app 成型后、封 ipa 前做。
+      - name: 注入保活 dylib（weak，缺 CydiaSubstrate 不致崩）
+        script: |
+          set -euo pipefail
+          # M2 镜像不保证带 insert_dylib：先试 brew，失败再退回源码编译（只装这一个工具）。
+          if ! command -v insert_dylib >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install insert_dylib \
+              || { git clone --depth 1 https://github.com/Tyilo/insert_dylib /tmp/idylib \
+                   && make -C /tmp/idylib && export PATH=/tmp/idylib:$PATH; }
+          fi
+          APP="$(find build -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1)"
+          [ -n "$APP" ] || { echo "没找到 .app，编译大概率失败了"; exit 1; }
+          echo "注入目标 APP=$APP"
+          bash scripts/inject_dylib.sh "$APP"
+
       - name: 打包 IPA
         script: |
           set -uo pipefail

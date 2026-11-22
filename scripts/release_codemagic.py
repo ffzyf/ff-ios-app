@@ -358,9 +358,15 @@ def download(build, dest):
 
 
 def verify(dest, version, build_no):
-    """用包里的 Info.plist 再核一次版本 —— 脚本以为发 29、包里其实是 28 是真实发生过的。"""
+    """用包里的 Info.plist 再核一次版本 —— 脚本以为发 29、包里其实是 28 是真实发生过的。
+
+    顺手核对保活 dylib 是否真的注入进了 IPA：以前它靠签名时手动塞，
+    codemagic 这条自动链路一旦漏注入，版本号还是对的、包也能装，
+    用户却拿不到保活。这里加一条硬断言，把「发了没注入的包还以为成功」挡在发布前。
+    """
     with zipfile.ZipFile(dest) as z:
-        names = [n for n in z.namelist() if n.endswith('.app/Info.plist')]
+        all_names = z.namelist()
+        names = [n for n in all_names if n.endswith('.app/Info.plist')]
         if not names:
             sys.exit('包里没有 Info.plist，这不是一个合法 ipa')
         info = plistlib.loads(z.read(names[0]))
@@ -368,6 +374,12 @@ def verify(dest, version, build_no):
     got_b = int(info.get('CFBundleVersion'))
     if got_v != version or got_b != build_no:
         sys.exit('版本对不上：local=%s(%s) 包内=%s(%s)' % (version, build_no, got_v, got_b))
+
+    # 保活插件必须随包落地：注入脚本把它放在 .app/Frameworks/ 下，
+    # 用后缀匹配而不写死 Payload 前缀（IPA 里 .app 外层目录名不参与校验）。
+    if not any(n.endswith('/Frameworks/libGShoutaiDylib.dylib') for n in all_names):
+        sys.exit('包里没有 Frameworks/libGShoutaiDylib.dylib —— '
+                 '注入步骤没跑或失败了，拒绝发布一个不带保活的包')
     return info
 
 
