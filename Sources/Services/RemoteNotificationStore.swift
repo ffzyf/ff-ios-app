@@ -108,7 +108,7 @@ final class RemoteNotificationStore: ObservableObject {
         // 顺序不能换：先载记录 → 打基线（把历史全部记成已投递）→ 才进入正常投递循环。
         // 反过来的话，冷启动首拉会把 7 天历史队列一次性全弹出来。
         delivered = loadDelivered()
-        seedBaselineIfNeeded(items)
+        seedBaselineIfNeeded(items: items)
         await deliver(items: items)
 
         lastSuccessAt = Date()
