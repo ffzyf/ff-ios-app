@@ -353,6 +353,10 @@ final class AlertStore: ObservableObject {
     // 以下四段（`notifyNewOnes` / `deliver` / `loadNotified` / `saveNotified`）
     // 与 3.19.0 逐字一致，5.1.2 一行未改 —— R2 前台通道按 `id` 独立去重，
     // 后端 Bark 用另一套 KV `alert_push_sent:<id>`，两条链互不引用、互不叠加。
+    //
+    // 5.6.2 只补一句说明，不改下面的任何逻辑：前台能不能看到，统一由挂在上层的
+    // `NotificationCenterDelegate`（`FFWangApp.init()` 里 install）决定。这里依旧只负责
+    // "投递什么、何时申请权限"，不要在此重复设置 delegate，也不要动 Bark 兜底顺序。
 
     /// 对"没见过"的预警逐条发本地通知。
     ///

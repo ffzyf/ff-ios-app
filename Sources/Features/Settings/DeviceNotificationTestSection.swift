@@ -112,7 +112,9 @@ struct DeviceNotificationTestSection: View {
         do {
             try await center.add(request)
             messageIsError = false
-            inlineMessage = "测试通知已发送，请查看通知中心"
+            // 5.6.2：代理挂好后前台也会直接弹横幅+响铃（见 NotificationCenterDelegate），
+            // 文案跟着改，避免用户还在等"通知中心里那一条"而以为没生效。
+            inlineMessage = "测试通知已发送：前台会弹出横幅并响铃，也可在通知中心查看"
             Haptics.success()
         } catch {
             messageIsError = true

@@ -40,6 +40,12 @@ struct FFWangApp: App {
     init() {
         // 协议缓存必须在第一个请求之前配好：靠服务端 ETag 白拿 304，App 侧不手写 If-None-Match。
         ImageCache.configure()
+        // 本地通知的「前台可见」代理（5.6.2 BugFix）：
+        // 不引 UIApplicationDelegateAdaptor —— 本项目是纯 SwiftUI 生命周期（见文件头注释），
+        // 一个全局单例代理足以覆盖「设置页测试通知」与「AlertStore 天气预警」两条链路，
+        // 且不必碰 Info.plist / scene 配置。必须在任何通知投递之前挂好：
+        // App.init() 先于 RootView 的 .task 与用户点击执行，不会漏掉任何一条通知。
+        NotificationCenterDelegate.install()
         _model = StateObject(wrappedValue: AppModel())
         _appearance = StateObject(wrappedValue: AppearanceStore.shared)
         _rock = StateObject(wrappedValue: RockStore())
