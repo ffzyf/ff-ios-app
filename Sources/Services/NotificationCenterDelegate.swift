@@ -63,16 +63,27 @@ final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelega
 
     /// 用户点了通知的响应。
     ///
-    /// 只做一件事：立刻调用 completionHandler，让系统完成收尾（收起横幅、记录打开等）。
-    /// **刻意不做路由跳转**：测试通知是纯验证消息；天气预警的 `skyapp://sky?focus=alerts`
-    /// 是 Bark 链路自带的可选深链，由 `RootView.onOpenURL` 统一处理。
-    /// 在这里再解析一次 `userInfo` / 构造 URL，等于把导航职责拆到两处，既增加时序复杂度，
-    /// 也可能和正在进行的 fullScreenCover 转场打架（见 RootView 的深链守卫注释）。
+    /// **先**调 completionHandler 让系统立刻收尾（收起横幅、记录打开等），
+    /// **再**异步把 `userInfo["url"]` 交给 `NotificationRouteDispatcher` 分发。
+    ///
+    /// 为什么不在代理方法里直接 open：
+    /// · 系统从非主线程回调，这里刻意不标 `@MainActor`；用 `Task { @MainActor in ... }`
+    ///   显式 hop，不要把整个代理类标成主线程隔离（见文件头「并发」段）；
+    /// · 分发器**只校验 scheme 并 open**，不解析 host、不碰 Tab 选择 ——
+    ///   `skyapp://` 经 `UIApplication.shared.open` 回到 `RootView.onOpenURL` 这个单点路由，
+    ///   导航职责不分叉（见 RootView 的深链守卫注释），测试通知 / 预警通知没有 url 时
+    ///   `userInfo` 里取不到东西，这里自然什么都不做，既有行为零回归。
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         completionHandler()
+
+        guard let raw = response.notification.request.content.userInfo["url"] as? String,
+              let url = URL(string: raw) else { return }
+        Task { @MainActor in
+            await NotificationRouteDispatcher.dispatch(url: url)
+        }
     }
 }

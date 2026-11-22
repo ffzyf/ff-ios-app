@@ -21,31 +21,42 @@ struct RemoteConfigValues: Codable, Hashable {
     /// 换域名只改云端配置，不用发版 —— 热更通道的核心用途之一。nil = 用硬编码地址。
     let installGuideURL: String?
 
+    /// 远程通知队列（设计 §2.1，最新在前）。**只在这里多一个字段，不新增解码路径**：
+    /// 老配置没有 `notification` 键时解成 nil，公告 / 强更 / 引导页行为逐像素不变。
+    /// `RemoteNotificationStore` 虽然复用本类型解码，但**不订阅**本 Store 的 1h 闸门（见其类注释）。
+    let notification: [RemoteNotification]?
+
     /// 手写 `init(from:)` 之后编译器不再自动合成 `CodingKeys`，必须显式声明。
     private enum CodingKeys: String, CodingKey {
         case announcement
         case minBuild
         case installGuideURL
+        case notification
     }
 
     /// 全字段默认值的构造器：给测试与「空配置」兜底用。
+    /// 新增参数带默认值 —— 既有调用点（目前只有解码路径）不必改。
     init(
         announcement: RemoteAnnouncement? = nil,
         minBuild: Int? = nil,
-        installGuideURL: String? = nil
+        installGuideURL: String? = nil,
+        notification: [RemoteNotification]? = nil
     ) {
         self.announcement = announcement
         self.minBuild = minBuild
         self.installGuideURL = installGuideURL
+        self.notification = notification
     }
 
     /// 逐个 `try?`：任何一个字段解不开都只是「这个字段没有」，不影响整份配置。
     /// `announcement` 整体解码失败（缺 title / body）也收成 nil —— 半截公告比没有公告更糟。
+    /// `notification` 逐条用 `RemoteNotification` 的 `try?` 纪律，坏条目由 Store 的 `isValid` 跳过。
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         announcement = try? container.decode(RemoteAnnouncement.self, forKey: .announcement)
         minBuild = try? container.decode(Int.self, forKey: .minBuild)
         installGuideURL = try? container.decode(String.self, forKey: .installGuideURL)
+        notification = try? container.decode([RemoteNotification].self, forKey: .notification)
     }
 }
 
@@ -263,7 +274,12 @@ final class RemoteConfigStore: ObservableObject {
 // MARK: - 响应信封
 
 /// `GET /api/app/config` 的响应信封（与 `AppVersionEnvelope` 同一套写法）。
-private struct RemoteConfigEnvelope: Decodable {
+///
+/// 从 `private` 放开为 internal：通知 Store 需要**复用同一份解码定义**去拉取同一个端点
+/// （设计 §3.3.1）。这是"网络协议层复用、闸门层解耦"的关键 —— 两个消费者各自拉，
+/// 但响应结构只有一份，将来字段增删不会漏改其中一处。
+/// 服务端 POST 响应新增的 `values` / `notificationTrimmed` 属于未知键，Codable 默认忽略，零影响。
+struct RemoteConfigEnvelope: Decodable {
 
     /// 业务成功标志
     let ok: Bool

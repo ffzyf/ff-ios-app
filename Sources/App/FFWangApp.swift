@@ -135,12 +135,22 @@ struct FFWangApp: App {
                 guard scenePhase == .active else {
                     AlertStore.shared.stopPolling()
                     MinutelyStore.shared.stopPolling()
+                    // 远程通知的轮询 Task 也是独立生命周期，必须显式停 ——
+                    // 不靠 .task(id:) 的取消（见上方 AlertStore 那段同样的注释）。
+                    RemoteNotificationStore.shared.stopPolling()
                     return
                 }
                 await AlertStore.shared.refresh(force: false)
                 await MinutelyStore.shared.refresh(force: false)
+                // 远程通知：与上面两条链路共用同一个 scenePhase 信号，但闸门各自独立
+                // （60s vs 预警 10min；它不订阅 RemoteConfigStore 的 1h 闸门）。
+                // force=true：回前台 / 冷启动立刻拉一次，不等内部 60s 闸门。
+                await RemoteNotificationStore.shared.refreshAndDeliver(force: true)
                 AlertStore.shared.startPolling()
                 MinutelyStore.shared.startPolling()
+                RemoteNotificationStore.shared.startPolling()
+                // 通知点击时 open 可能早于 scene 就绪而失败；回前台补一次（R5 兜底）。
+                await RemoteNotificationStore.shared.flushPendingRoute()
             }
             // 远程配置（3.9.0）：挂在云控更新**之前**的第四个同 id task ——
             // 配置（minBuild / installGuideURL）是更新判定的输入，先到先备好。
