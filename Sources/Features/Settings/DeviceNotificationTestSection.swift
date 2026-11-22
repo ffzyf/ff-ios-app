@@ -122,13 +122,13 @@ struct DeviceNotificationTestSection: View {
         await refreshAuthorizationStatus()
     }
 
-    /// iOS 15+ 额外申请 `.timeSensitive` / `.communication`；低版本退回基础权限。
+    /// iOS 15+ 额外申请 `.timeSensitive`；`.communication` 需额外 entitlement 且弹通知非必需，故不申请。低版本退回基础权限。
     @MainActor
     private func requestAuthorization(center: UNUserNotificationCenter) async -> Bool {
         do {
             if #available(iOS 15.0, *) {
                 return try await center.requestAuthorization(
-                    options: [.alert, .sound, .badge, .timeSensitive, .communication]
+                    options: [.alert, .sound, .badge, .timeSensitive]
                 )
             }
             return try await center.requestAuthorization(options: [.alert, .sound, .badge])
