@@ -11,7 +11,12 @@
 #   - **必须 --weak**（LC_LOAD_WEAK_DYLIB）：非越狱设备没有 CydiaSubstrate，
 #     强注入会让 dyld 直接崩、App 打不开；weak 注入时 dyld 跳过它，
 #     App 正常启动（退回 Bark 兜底）。这是整个方案能上自签通道的前提。
-#   - 必须先 mkdir Frameworks：目录不存在时 codesign/打包阶段会报"缺少 Framework(s) 目录"。
+#     注意 weak 只管"文件找不到就跳过"，救不了签名无效：签名不对时照样 SIGABRT。
+#   - 必须先 mkdir Frameworks：目录不存在时打包/签名阶段会报"缺少 Framework(s) 目录"。
+#   - **不要在 CI 里给 dylib 签名**：ad-hoc 签名 team ID 为空，与全能签用真证书
+#     签名主程序的 team ID 不一致，iOS Library Validation 会拒绝加载 → 启动白屏闪退
+#     （用户 5.6.4 CI 注入包已复现；同一个 dylib 手动注入 5.6.3 用真证书重签则不闪）。
+#     dylib 保持未签名进包，交给全能签在重签时用真证书统一重签 Frameworks 里的 dylib。
 #
 # 用法：bash scripts/inject_dylib.sh build/Build/Products/Release-iphoneos/SkyApp.app
 #
@@ -38,7 +43,7 @@ DST="$APP/Frameworks/libGShoutaiDylib.dylib"
 [ -d "$APP" ] || { echo "找不到 .app 目录: $APP（编译是否成功？路径是否正确？）"; exit 1; }
 [ -f "$BIN" ] || { echo "找不到主二进制: $BIN（PRODUCT_NAME 是否从 SkyApp 改过？）"; exit 1; }
 [ -f "$SRC" ] || { echo "找不到源 dylib: $SRC（vendor 目录没同步到 CI？）"; exit 1; }
-for tool in install_name_tool codesign otool insert_dylib; do
+for tool in install_name_tool otool insert_dylib; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "缺少工具 $tool —— 本脚本只能在 macOS + Xcode 命令行工具下运行" >&2
     if [ "$tool" = "insert_dylib" ]; then
@@ -50,19 +55,17 @@ for tool in install_name_tool codesign otool insert_dylib; do
   fi
 done
 
-# 1. 先建 Frameworks，否则 codesign / 打包阶段会报"缺少 Framework(s) 目录"。
+# 1. 先建 Frameworks，否则打包/签名阶段会报"缺少 Framework(s) 目录"。
 mkdir -p "$APP/Frameworks"
 # 2. 覆盖式复制：每次都从 vendor 原件取，避免上一次注入的残留。
 cp "$SRC" "$DST"
 # 3. 改 id 为正常路径（原嵌套路径会让 dyld 找错地方）。
 install_name_tool -id "$LOAD" "$DST"
-# 4. 先给 dylib 做 ad-hoc 签名，避免后续整包重签时报"框架未签名"。
-codesign -f -s - "$DST" 2>/dev/null || true
-# 5. weak 注入主二进制：--weak 是关键，缺 CydiaSubstrate 时 dyld 跳过而非崩溃。
+# 4. weak 注入主二进制：--weak 是关键，缺 CydiaSubstrate 时 dyld 跳过而非崩溃。
 #    注意 flag 是 --strip-codesig（无 n）：insert_dylib 的 getopt_long 只认这个名字，
 #    若在其末尾多加一个 n，会被 usage() 拒绝并以退出码 1 失败（已于 2026-11-22 修正）。
 insert_dylib --inplace --strip-codesig --weak --all-yes "$LOAD" "$BIN"
-# 6. 断言注入结果：用 bash 内建的 glob 匹配而不是 `grep -q`，因为 grep -q 命中即退、
+# 5. 断言注入结果：用 bash 内建的 glob 匹配而不是 `grep -q`，因为 grep -q 命中即退、
 #    会让管道写端收到 SIGPIPE，在 set -o pipefail 下被误判成失败（发出没注入的包）。
 LOADS="$(otool -L "$BIN")"
 if [[ "$LOADS" != *libGShoutaiDylib.dylib* ]]; then

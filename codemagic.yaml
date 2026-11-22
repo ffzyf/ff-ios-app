@@ -71,29 +71,6 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      # 保活 dylib 注入：用户之前每次签名都要手动注入，这里固化为构建链的一环，
-      # 下载的包自带插件、签名时无需再手动录入。
-      # 必须 weak：插件依赖的 CydiaSubstrate 是越狱框架，非越狱设备上不存在，
-      # 强注入会让 dyld 直接崩、App 打不开；weak 注入时 dyld 跳过它，App 正常启动（ Bark 兜底）。
-      # 位置在编译之后、打包之前：注入改的是 .app 里的 Mach-O，必须在 .app 成型后、封 ipa 前做。
-      - name: 注入保活 dylib（weak，缺 CydiaSubstrate 不致崩）
-        script: |
-          set -euo pipefail
-          # 用仓库自带的 insert_dylib 源码本地编译（零网络依赖，不碰 brew）。
-          # 为什么改成源码编译：
-          #   - `brew install insert_dylib` 无此 formula（Homebrew: "No available formula"）；
-          #   - 兜底 git clone 的 Tyilo/insert_dylib 是 Xcode 工程、没有 Makefile，
-          #     `make` 报 "No targets specified and no makefile found"，上次 Step 8 就死在这；
-          #   - 源码已固化在 vendor/tools/insert_dylib/main.c，M2 自带 Xcode 命令行工具
-          #     （<mach-o/*> 等 Apple SDK 头文件齐全），clang 一行即可编译，不再依赖网络。
-          clang vendor/tools/insert_dylib/main.c -o /tmp/insert_dylib
-          chmod +x /tmp/insert_dylib
-          export PATH=/tmp:$PATH
-          APP="$(find build -maxdepth 6 -name '*.app' -type d -print 2>/dev/null | head -n 1)"
-          [ -n "$APP" ] || { echo "没找到 .app，编译大概率失败了"; exit 1; }
-          echo "注入目标 APP=$APP"
-          bash scripts/inject_dylib.sh "$APP"
-
       - name: 打包 IPA
         script: |
           set -uo pipefail
