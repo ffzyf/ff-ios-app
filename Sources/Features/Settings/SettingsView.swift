@@ -31,6 +31,8 @@ struct SettingsView: View {
                     group("天气") { WeatherLocationSection() }
                     // 5.1.2 · R2：天气预警 Bark 推送（后端定时检测 + 差异推送，AC2-3）
                     group("天气预警推送") { AlertPushSettingsSection() }
+                    // 本地通知能力验证：只测本机弹通知，不接远程推送、不触碰 Bark 链路
+                    group("设备通知") { DeviceNotificationTestSection() }
                     // 5.1.2 · R5 / Q3 兼顾：只有一行静态指引，不是入口
                     group("小组件") { widgetDebugHintRow }
                     // 批次 4：红石实时活动开关（桌面小组件不需要开关，随时可用）
