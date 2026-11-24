@@ -35,6 +35,14 @@ enum Spacing {
 
     /// 网格单位
     static let gridUnit: CGFloat = 8
+
+    // MARK: - HIG 迭代（T01）新增
+
+    /// 触控目标最小边长（HIG ≥44×44）。供 `tapTarget()` 的透明命中区使用，
+    /// 视觉尺寸完全不变（例如 IconGlassButton 仍是 36pt）。
+    static let tapMinSide: CGFloat = 44
+    /// 沉浸页底部给 Home Indicator 的留白（沉浸页忽略安全区时的兜底）
+    static let homeIndicatorReserve: CGFloat = 8
 }
 
 /// 圆角（PRD §4.3，含同心圆角规则：子元素圆角 = 父圆角 − 内间距）
@@ -81,4 +89,6 @@ enum Motion {
     static let glow = Animation.easeInOut(duration: 2.4).repeatForever(autoreverses: true)
     /// 骨架 shimmer（1.4s 循环）
     static let shimmer = Animation.linear(duration: 1.4).repeatForever(autoreverses: false)
+    /// 沉浸页 chrome 显隐偏好（HIG 迭代 T01，供后续浮层动画复用）
+    static let immersiveChrome = Animation.easeInOut(duration: 0.25)
 }
