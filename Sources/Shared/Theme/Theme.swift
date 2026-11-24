@@ -897,3 +897,9 @@ extension Theme {
         }
     }
 }
+
+// MARK: - HIG 迭代（T03）语义色出口
+//
+// 系统语义色（background / label / separator / systemFill / tint …）统一在
+// Sources/Shared/Theme/SemanticColors.swift 的 `Theme.Semantic` 命名空间里定义，
+// 只供新增元素使用。本文件既有品牌 token 的数值一个都没有改动。
