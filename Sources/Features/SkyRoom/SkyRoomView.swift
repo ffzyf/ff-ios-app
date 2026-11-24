@@ -212,6 +212,10 @@ struct SkyRoomView: View {
         .onDisappear {
             stopAmbient()
         }
+        // HIG 迭代（T04）：全屏沉浸页自动隐藏 Home Indicator 的偏好 + 底部手势延后。
+        // 仅 iPhone（compact）生效，iPad 不 defer 多任务手势；退出 / 回前台自动复位。
+        // 挂在整页 body 链尾，一处覆盖 RootView 与 OverviewView 两个 fullScreenCover 入口。
+        .immersiveChrome()
     }
 
     // MARK: - 页面装配
