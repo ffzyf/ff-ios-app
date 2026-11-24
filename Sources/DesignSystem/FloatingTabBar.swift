@@ -112,7 +112,10 @@ struct FloatingTabBar: View {
             VStack(spacing: 3) {
                 knob(icon: tab.icon, badge: tab.badge, selected: isSelected)
                 Text(tab.title)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                    // HIG 迭代（T02）：默认 11pt 逐点不变（caption2），随 Dynamic Type 放大；
+                    // 选中 / 未选中的字重差异原样保留（.semibold / .medium）。
+                    .font(Typography.captionXS.weight(isSelected ? .semibold : .medium))
+                    .guardedDynamicType()
                     // 未选中标签从 `textTertiary` 提到 `textSecondary`（设计文档 §8「Liquid Glass 更新」）。
                     //
                     // 这不是随手调色，理由是 iOS 27 的 Liquid Glass 新增了「玻璃着色」滑块
@@ -132,6 +135,8 @@ struct FloatingTabBar: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
+        // HIG 命中区双保险：槽位本已 ≥69.8×66，叠加透明 44 命中区不改变布局
+        .tapTarget()
         // ⌘1–⌘5 切页（设计文档 §7.1）。iPad 外接键盘才有意义，iPhone 上无键盘时是死代码、
         // 不占布局、不改变任何像素。
         //
@@ -235,6 +240,8 @@ struct FloatingTabBar: View {
             } else {
                 Text(badge)
                     .font(.system(size: 10, weight: .bold, design: .rounded))
+                    // 徽标是固定 pt 的读数，限制 Dynamic Type 上限，防大字号撑破胶囊
+                    .guardedDynamicType()
                     .foregroundStyle(Theme.badgeRedInk)
                 .monospacedDigit()
                 .padding(.horizontal, 5)
