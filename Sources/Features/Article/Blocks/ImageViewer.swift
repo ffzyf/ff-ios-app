@@ -39,5 +39,8 @@ struct ImageViewer: View {
         .onTapGesture {
             dismiss()
         }
+        // HIG 迭代（T04）：全屏看图同属沉浸页，底部手势延后 + 浮层自动隐藏；
+        // iPhone-only，仅链尾叠加，点按关闭与 dismiss 逻辑一个字未动。
+        .immersiveChrome()
     }
 }
