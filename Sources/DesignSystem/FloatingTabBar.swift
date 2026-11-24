@@ -132,11 +132,14 @@ struct FloatingTabBar: View {
                     .minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
+            // HIG 命中区：必须加在 Button 的 label 内部（与 GlassButtonStyles 两处一致），
+            // 让透明 overlay 成为 label 的子视图，点击沿响应链冒泡到 Button 的 action。
+            // 若放在 Button 外层，overlay 会变成 Button 的兄弟视图、在 Z 轴上盖住 Button
+            // 并截获 hit-test，Button 永远收不到点击 —— 这是 5.6.7 底部栏失灵的根因。
+            .tapTarget()
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        // HIG 命中区双保险：槽位本已 ≥69.8×66，叠加透明 44 命中区不改变布局
-        .tapTarget()
         // ⌘1–⌘5 切页（设计文档 §7.1）。iPad 外接键盘才有意义，iPhone 上无键盘时是死代码、
         // 不占布局、不改变任何像素。
         //
