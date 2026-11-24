@@ -67,7 +67,10 @@ struct WideTabStrip: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(isSelected ? Theme.onLime : Theme.textTertiary)
                 Text(tab.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    // HIG 迭代（T02）：默认 13pt 逐点不变（footnote），随 Dynamic Type 放大；
+                    // 原 semibold 字重保留（选中/未选中在宽档本来就是同一字重）。
+                    .font(Typography.footnote.weight(.semibold))
+                    .guardedDynamicType()
                     // 未选中用 `textSecondary`（与底部栏同一条理由：压在玻璃上的小字不能太淡）
                     .foregroundStyle(isSelected ? Theme.onLime : Theme.textSecondary)
                     .lineLimit(1)
