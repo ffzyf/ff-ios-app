@@ -3,33 +3,38 @@ import SwiftUI
 /// 字号阶（PRD §4.2 逐条落成）。全部走系统字体 SF Pro，中文自动 fallback 苹方。
 ///
 /// 刻意不引入自定义字体：中文下自定义字体字重不全，会破坏层级。
-/// 也刻意用固定 pt 而不是 `.largeTitle` 这类语义字号：本项目视觉规范精确到 pt，
-/// 交给系统字号会导致不同设备上排版漂移。
+/// HIG 迭代（T02）：12 个文本 token 改为**语义 Font** —— 默认（large）档字号逐点等于
+/// 原来的固定 pt（34/28/22/20/17/17/16/15/13/13/12/11），视觉零回归；
+/// 用户放大系统字体时正文、标签自动跟随。数字读数 / 机器码 / 徽标 / 眉题 / 水印
+/// 继续用固定 pt，固定高度处由 `.guardedDynamicType` 护栏（见 DynamicTypeGuard）。
 enum Typography {
-    /// 34pt Bold / 1.15 —— 页面大标题、首页日期
-    static let display = Font.system(size: 34, weight: .bold)
-    /// 28pt Bold / 1.25 —— 文章详情标题
-    static let titleXL = Font.system(size: 28, weight: .bold)
-    /// 22pt Semibold / 1.3 —— 分区标题
-    static let titleL = Font.system(size: 22, weight: .semibold)
-    /// 20pt Semibold / 1.3 —— 卡片主字（状态卡）
-    static let titleM = Font.system(size: 20, weight: .semibold)
-    /// 17pt Semibold / 1.4 —— 文章卡标题、块内 h3
-    static let titleS = Font.system(size: 17, weight: .semibold)
-    /// 17pt Regular / 1.75 —— 正文
-    static let body = Font.system(size: 17, weight: .regular)
-    /// 16pt Regular / 1.8 —— 引用块
-    static let bodySmall = Font.system(size: 16, weight: .regular)
-    /// 15pt Regular / 1.5 —— 摘要、次级正文
-    static let callout = Font.system(size: 15, weight: .regular)
-    /// 13pt Regular / 1.45 —— 元信息、图注
-    static let footnote = Font.system(size: 13, weight: .regular)
+    // 映射表用的是语义档在 Dynamic Type 默认（large）档的 pt 值，逐项与上面的规范对齐：
+    // largeTitle 34 / title 28 / title2 22 / title3 20 / headline 17 / body 17 /
+    // callout 16 / subheadline 15 / footnote 13 / caption 12 / caption2 11。
+    /// 34pt Bold / 1.15 —— 页面大标题、首页日期（largeTitle）
+    static var display = Font.largeTitle.weight(.bold)
+    /// 28pt Bold / 1.25 —— 文章详情标题（title）
+    static var titleXL = Font.title.weight(.bold)
+    /// 22pt Semibold / 1.3 —— 分区标题（title2）
+    static var titleL = Font.title2.weight(.semibold)
+    /// 20pt Semibold / 1.3 —— 卡片主字（状态卡，title3）
+    static var titleM = Font.title3.weight(.semibold)
+    /// 17pt Semibold / 1.4 —— 文章卡标题、块内 h3（headline 自带 semibold）
+    static var titleS = Font.headline
+    /// 17pt Regular / 1.75 —— 正文（body）
+    static var body = Font.body
+    /// 16pt Regular / 1.8 —— 引用块（callout 语义档就是 16pt）
+    static var bodySmall = Font.callout
+    /// 15pt Regular / 1.5 —— 摘要、次级正文（subheadline）
+    static var callout = Font.subheadline
+    /// 13pt Regular / 1.45 —— 元信息、图注（footnote）
+    static var footnote = Font.footnote
     /// 13pt Medium —— 按钮文字
-    static let footnoteMedium = Font.system(size: 13, weight: .medium)
-    /// 12pt Medium —— 徽标文字
-    static let caption = Font.system(size: 12, weight: .medium)
-    /// 11pt Medium —— Caps 分区标签、时间戳
-    static let captionXS = Font.system(size: 11, weight: .medium)
+    static var footnoteMedium = Font.footnote.weight(.medium)
+    /// 12pt Medium —— 徽标文字（caption）
+    static var caption = Font.caption.weight(.medium)
+    /// 11pt Medium —— Caps 分区标签、时间戳（caption2）
+    static var captionXS = Font.caption2.weight(.medium)
 
     // MARK: - 数字锚点 / 眉题（设计报告 §5 第 2–4 项）
 
