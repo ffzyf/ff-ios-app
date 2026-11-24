@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 固定高度的数字读数 / 徽标 / 图标标签不能无限放大（会溢出或互相重叠），
 /// 但正文必须跟随系统字号。本 modifier 用 `.dynamicTypeSize(_ range:)` 给某一处
-/// 视图**限定上下限**：默认上限 `accessibilityLarge`，超出后系统停在该档，
+/// 视图**限定上下限**：默认上限 `.accessibility3`，超出后系统停在该档，
 /// 不会破版；不影响同级其它视图的字号。
 struct DynamicTypeGuard: ViewModifier {
     let limits: ClosedRange<DynamicTypeSize>
@@ -16,11 +16,11 @@ struct DynamicTypeGuard: ViewModifier {
 }
 
 extension View {
-    /// 限制本视图响应 Dynamic Type 的范围，默认 `.xSmall...accessibilityLarge`。
+    /// 限制本视图响应 Dynamic Type 的范围，默认 `.xSmall...DynamicTypeSize.accessibility3`。
     ///
     /// 只加在固定尺寸处（徽标、Tab 标签、倒计时读数）；正文用语义 Font 自然跟随即可。
     func guardedDynamicType(
-        _ limits: ClosedRange<DynamicTypeSize> = .xSmall...accessibilityLarge
+        _ limits: ClosedRange<DynamicTypeSize> = .xSmall...DynamicTypeSize.accessibility3
     ) -> some View {
         modifier(DynamicTypeGuard(limits: limits))
     }
