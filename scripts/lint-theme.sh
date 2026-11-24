@@ -3,7 +3,7 @@
 # 主题闸门（批次 1，PRD §3.4 硬性约束的机器版）
 #
 # 为什么用 grep 而不是 Xcode 单测 target：CI 是无签名编译，多一个 test target =
-# 多一套 signing / bundle 配置风险；而下面 4 条规则都是"文本可见"的，grep 能 100% 覆盖，零编译成本。
+# 多一套 signing / bundle 配置风险；而下面 5 条规则都是"文本可见"的，grep 能 100% 覆盖，零编译成本。
 #
 # 跑法：
 #   bash scripts/lint-theme.sh      # 全绿 → 退出码 0；任一命中 → 退出码 1
@@ -50,7 +50,7 @@ chk() {
   fi
 }
 
-echo "== 主题闸门 · 4 条规则 =="
+echo "== 主题闸门 · 5 条规则 =="
 
 # 1) 硬编码颜色：View 层不许出现 hex（改了 hex 就等于绕过 PRD 的颜色表）
 chk 'Color\(hex:' \
@@ -68,10 +68,19 @@ chk 'Color\.white\.opacity' \
 chk 'foregroundStyle\((Theme\.)?lime\)|foregroundColor\((Theme\.)?lime\)' \
     '规则4 · lime 被当作文字色，请改用 Theme.limeInk'
 
+# 5) Dynamic Type 护栏接线（HIG 迭代 T02）：Tab 栏两个组件的标签必须带动态字号上限
+#    没有这条护栏时，accessibility 大字号会把固定高度的 Tab 槽位撑破。
+for f in "$SRC/DesignSystem/FloatingTabBar.swift" "$SRC/DesignSystem/WideTabStrip.swift"; do
+  if ! grep -q 'guardedDynamicType' "$f" 2>/dev/null; then
+    printf '\n[FAIL] 规则5 · %s 缺少 .guardedDynamicType（Dynamic Type 大字号会破版）\n' "$f"
+    fail=1
+  fi
+done
+
 if [ "$fail" -ne 0 ]; then
   printf '\n主题闸门失败：请按上面的 [FAIL] 逐条修，不要用 lint:allow 绕过（除 PRD 明确例外）。\n'
   exit 1
 fi
 
-printf '\n全部通过：没有硬编码颜色、没有深浅判断、没有就地造色、lime 只做面。\n'
+printf '\n全部通过：没有硬编码颜色、没有深浅判断、没有就地造色、lime 只做面、Tab 标签有动态字号护栏。\n'
 exit 0
