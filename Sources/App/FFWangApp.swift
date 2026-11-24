@@ -56,6 +56,10 @@ struct FFWangApp: App {
 
     var body: some Scene {
         WindowGroup {
+            // HIG 迭代（L2）：最外层套 HIGChromeScope，只注入 higChrome 基准值并在
+            // scenePhase 变化时复位。窗口内所有 .task / 绑定 / sheet 逐字不动。
+            // 为让 diff 只显示新增行，下方既有作用域保持原缩进（Swift 不要求缩进对齐）。
+            HIGChromeScope {
             // 注入顺序有讲究：ThemeScope 必须在 preferredColorScheme 的子树里才拿得到"生效后"的外观；
             // LayoutMetricsScope 必须在 ThemeScope **内部** —— 它不是要靠外观，而是"越靠近 RootView
             // 越能保证量到的就是 RootView 真正拿到的容器尺寸"。反过来套（Scope 在外）也能量，
@@ -169,6 +173,7 @@ struct FFWangApp: App {
                 guard scenePhase == .active else { return }
                 await UpdateStore.shared.checkIfNeeded()
             }
+            } // HIGChromeScope（最外层，仅注入 higChrome；上面的 task 全部原样留在 content 内）
         }
     }
 }
