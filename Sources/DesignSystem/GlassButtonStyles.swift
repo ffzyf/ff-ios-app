@@ -78,6 +78,9 @@ struct CapsuleGlassButton: View {
             .padding(.vertical, 9)
             .glassSurface(level, in: Capsule())
             .contentShape(Capsule())
+            // HIG ≥44pt 命中区：必须在 contentShape 之后，否则会被 36pt 视觉形状吃掉四角；
+            // 叠加只为极短文案兜底，视觉尺寸不变
+            .tapTarget(Spacing.tapMinSide)
         }
         .buttonStyle(PressableStyle())
     }
@@ -114,6 +117,9 @@ struct IconGlassButton: View {
                 .frame(width: size, height: size)
                 .glassSurface(level, in: Circle(), interactive: true)
                 .contentShape(Circle())
+                // HIG ≥44pt 命中区：必须在 contentShape 之后，否则圆形视觉形状会吃掉透明区四角；
+                // 视觉仍是指定的 size（默认 36），不改 action
+                .tapTarget(Spacing.tapMinSide)
         }
         .buttonStyle(PressableStyle())
         // 修饰器紧贴 `Button`（`buttonStyle` 不改变"被修饰的控件"是谁），
