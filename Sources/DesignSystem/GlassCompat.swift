@@ -137,6 +137,11 @@ extension View {
     ///
     /// 签名与 V2 完全一致（30+ 个调用点零改动）：批次 1 只把里面的颜色换成 token、
     /// 把影子抽成 `GlassShadow` 修饰符。
+    ///
+    /// HIG 合规（T03）：这是全工程**唯一**的真玻璃入口。业务层禁止裸用 `.glassEffect(` /
+    /// `GlassEffectContainer`（`scripts/lint-hig.sh` 会拦截），也不得新增 `GlassLevel` 级别
+    /// （`switch` 穷尽依赖）；iOS 26 的 `#available` 分流与 iOS 18–25 的手工配方是同一份契约，
+    /// 要融合相邻玻璃请用 `GlassGroup`，不要在这里开第二个口子。
     @ViewBuilder
     func glassSurface<S: InsettableShape>(
         _ level: GlassLevel,
