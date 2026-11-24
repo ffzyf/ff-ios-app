@@ -120,6 +120,9 @@ struct RootView: View {
             // 传今日简报快照：天光页的朗读要念"宜/忌"。传值而不是环境对象 —— 理由见
             // `SkyRoomView.brief` 的注释（这一页刻意不依赖 environmentObject 注入）。
             // `focusAlerts` 只有 `skyapp://sky?focus=alerts` 深链才为 true。
+            // HIG 迭代核验（T04）：沉浸 chrome 由 SkyRoomView 自己在 body 链尾叠加
+            // （`.immersiveChrome()`），一处同时覆盖本入口与 OverviewView 的入口；
+            // 这里刻意不动 present / item 绑定 / onDismiss，业务链路零改动。
             SkyRoomView(brief: model.todayBrief, focusAlerts: skyRoomFocusAlerts)
         }
         .task {
