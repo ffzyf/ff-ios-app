@@ -51,6 +51,15 @@ struct DaylightLiveActivity: Widget {
         ActivityConfiguration(for: DaylightActivityAttributes.self) { context in
             DaylightLockScreenTinted(state: context.state)
         } dynamicIsland: { context in
+            // HIG「Live Activities」横屏受限宽度规范：compact / minimal 要能塞进 28pt 圆圈。
+            // Apple 给两条路：① 读 `isDynamicIslandLimitedInWidth` 分流；② 用短缩写或图形
+            // 表达代替完整字符串。这里选 ②：
+            // · 该环境值在 Apple 文档标注 **iOS 27.0+（preliminary）**，本项目 iOS 26 SDK
+            //   里根本不存在这个符号 —— `#available` 只解决运行期、救不了编译期符号缺失，
+            //   硬写就是一轮 20 分钟白等编译失败。故不引入。
+            // · 改用"天然就短"的设计：leading 是单个太阳符号（图形表达），trailing 是走秒数字
+            //   或 `12h32m` 短文案（见 `DaylightCompactCountdown.compactText` + 缩放）。
+            //   两者在任何宽度下都不截断，受限宽度下系统无需再裁剪。
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     DaylightIslandLeading(state: context.state)
@@ -64,6 +73,7 @@ struct DaylightLiveActivity: Widget {
                     DaylightIslandBottom(state: context.state)
                 }
             } compactLeading: {
+                // 图形表达：单个太阳地平线符号，本就 fit 28pt，无需按宽度换图。
                 Image(systemName: "sun.horizon.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
                     // 固定亮色，不读随深浅变化的 textPrimary：灵动岛永远是黑底
@@ -71,8 +81,13 @@ struct DaylightLiveActivity: Widget {
                     // 只需一个 `edge`，就地调纯函数 —— 闭包体保持单表达式，不引入 `return`
                     .foregroundStyle(daylightSky(context.state, now: Date()).edge)
             } compactTrailing: {
+                // 短缩写：与展开区同一个 `entry.deadline` 语义，长文案压成 `12h32m`。
                 DaylightCompactCountdown(state: context.state)
             } minimal: {
+                // HIG 建议 minimal 显示更新信息而非纯 logo；但 minimal 是 28pt 极限形态，
+                // 唯一要保证的是"一眼认出是哪个 App"。这里的太阳符号 + `daylightSky().edge`
+                // 动态色（6 档天色各自变化）已经是"随状态更新的信息"，再加 1–2 字符数字
+                // 会与图标争抢 28pt 内的空间、反而牺牲识别度。故保留图标 + 动态色，不塞数字。
                 Image(systemName: "sun.max.fill")
                     .font(.system(size: DaylightMetric.compactIconSize, weight: .semibold))
                     .foregroundStyle(daylightSky(context.state, now: Date()).edge)
@@ -101,10 +116,12 @@ private enum DaylightMetric {
     /// 5pt 在那里是"看得见但不抢戏"，在这里只是"看不见"
     static let lockDotDiameter: CGFloat = 6
 
-    /// 灵动岛展开区：阶段名 / 倒计时字号（展开区高度有限，比锁屏卡收一档）
-    static let islandHeaderSize: CGFloat = 13
-    /// 灵动岛展开区：日出 / 日落字号（时刻是次要信息，再收一档）
-    static let islandSunTimeSize: CGFloat = 12
+    /// 灵动岛展开区：阶段名 / 倒计时字号。
+    /// HIG「Live Activities」要求关键信息大而醒目（medium 字重以上、能在瞥一眼间读清），
+    /// 13pt 在小尺寸下偏弱；提到 15pt 与锁屏卡 `lockHeaderSize` 同档，两处层级统一。
+    static let islandHeaderSize: CGFloat = 15
+    /// 灵动岛展开区：日出 / 日落字号。同理从 12 提到 14（比阶段名收一档，仍清晰可辨）。
+    static let islandSunTimeSize: CGFloat = 14
     /// 灵动岛展开区：紧凑天空高度。约展开区内容高度的一半 —— 天空是这张卡的主角，
     /// 太矮读不出"渐变天幕 + 地平线弧"，再高字就悬在半空
     static let islandSkyHeight: CGFloat = 40
@@ -193,9 +210,13 @@ private func daylightSkyEntry(state: DaylightActivityAttributes.ContentState,
 private struct DaylightPhaseCountdown: View {
 
     let entry: SkyLightEntry
-    /// 字号（锁屏卡 15 / 展开区 13）
+    /// 字号（锁屏卡 15 / 展开区 15 / 紧凑态 12）
     let size: CGFloat
     let color: Color
+    /// 极简文案：灵动岛受限宽度（横屏 / 28pt 圆圈）下把「12小时32分钟」压成「12h32m」。
+    /// 只影响 ≥1 小时的静态文案；<1 小时的 `timerInterval` 走秒文案本来就短，不受影响。
+    /// 默认 false —— 锁屏卡 / 展开区显示原中文文案，逐字不变。
+    var compactText: Bool = false
 
     var body: some View {
         let now = entry.date
@@ -209,15 +230,29 @@ private struct DaylightPhaseCountdown: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 } else {
-                    Text(entry.countdownText ?? "")
-                        .font(.system(size: size, weight: .semibold))
+                    // 合法性守卫（deadline > now）已在上方判过，这里只换文案形态。
+                    // 短文案由 SkyPhase.countdownText 的结果就地压缩，不改算法本体：
+                    // 锁屏卡读同一份 countdownText，算法一动两处都漂。
+                    Text(compactText ? Self.abbreviate(entry.countdownText ?? "")
+                                     : (entry.countdownText ?? ""))
+                        .font(.system(size: size, weight: .semibold, design: compactText ? .monospaced : .default))
                         .foregroundStyle(color)
+                        .monospacedDigit()
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(compactText ? 0.6 : 0.7)
                 }
             }
             // deadline == nil / 已过点：整格不画（宁可空着，不画一个假数字）
         }
+    }
+
+    /// 把 `12小时32分钟` / `49分钟30秒` 压成 `12h32m` / `49m30s`，
+    /// 给紧凑态 52×36pt 的窄槽用。纯字符串变换，不碰 `SkyPhase.countdownText` 算法。
+    private static func abbreviate(_ text: String) -> String {
+        return text
+            .replacingOccurrences(of: "小时", with: "h")
+            .replacingOccurrences(of: "分钟", with: "m")
+            .replacingOccurrences(of: "秒", with: "s")
     }
 }
 
@@ -421,30 +456,28 @@ private struct DaylightIslandBottom: View {
 
 // MARK: - 紧凑态倒计时
 
-/// 灵动岛紧凑态右侧的倒计时（数到日落 —— 紧凑态空间只够放一个最重要的数）。
+/// 灵动岛紧凑态右侧的倒计时 —— 与展开区、锁屏卡**同一个语义**：距下一阶段起点
+/// （`entry.deadline`）。HIG 要求紧凑 / 展开的信息可预测地对应：过去紧凑态数「距日落」、
+/// 展开态数「距下一阶段」，用户看到两个不同的数（8:55:02 vs 36:22），这是明确的合规缺陷。
 ///
-/// **构造前必须判 `sunset > now`**：`now...sunset` 在 `sunset < now` 时是一个非法闭区间，
-/// `Text(timerInterval:)` 拿到它会直接崩 —— 而这张卡是可以在 App 早已关闭、系统独自
-/// 重绘时走到那一刻的（日落之后 schema 还在）。所以这里退化成静态文案"已日落"。
+/// 实现上直接复用 `DaylightPhaseCountdown`，不复制倒计时逻辑 —— 三处从此同一真值来源。
+/// 合法性守卫也随组件一起复用：`deadline > now` 才构造 `Text(timerInterval:)`，
+/// 非法时整格不画，绝不把非法区间交给它会崩的初始化器。
+/// 紧凑态空间只有 52×36pt，故传 `compactText: true`：≥1 小时走 `12h32m` 短文案 + 更小的
+/// `minimumScaleFactor`，<1 小时仍是走秒数字。`SkyPhase.countdownText` 算法本体未改。
 private struct DaylightCompactCountdown: View {
 
     let state: DaylightActivityAttributes.ContentState
 
     var body: some View {
         let now = Date()
+        let entry = daylightSkyEntry(state: state, now: now)
         // 紧凑态只取 `ink`（字色），但它同样是"天色"，一样要过门控 ——
         // 与卡面、底色读同一个 `daylightSky`，不各算一遍。
         let sky = daylightSky(state, now: now)
-        if state.sunset > now {
-            Text(timerInterval: now...state.sunset, countsDown: true)
-                .font(.system(size: DaylightMetric.countdownSize, weight: .semibold, design: .monospaced))
-                .foregroundStyle(sky.ink)
-                .monospacedDigit()
-        } else {
-            Text("已日落")
-                .font(.system(size: DaylightMetric.countdownSize, weight: .semibold, design: .monospaced))
-                .foregroundStyle(sky.ink)
-                .monospacedDigit()
-        }
+        DaylightPhaseCountdown(entry: entry,
+                               size: DaylightMetric.countdownSize,
+                               color: sky.ink,
+                               compactText: true)
     }
 }
