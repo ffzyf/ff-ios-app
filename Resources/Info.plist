@@ -71,6 +71,11 @@
 				<key>CFBundleIconFiles</key>
 				<array><string>icon-graphite</string></array>
 			</dict>
+			<key>icon-dusk</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array><string>icon-dusk</string></array>
+			</dict>
 		</dict>
 	</dict>
 	<key>CFBundleIdentifier</key>

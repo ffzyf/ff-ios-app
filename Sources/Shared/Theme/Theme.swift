@@ -27,7 +27,9 @@ enum Theme {
     /// 这个变量的变化，所以 `RootView` 在切换时给内容区换 `.id(themeId)` 强制重建子树。
     ///
     /// 默认 `.lime`：与 V2 逐像素一致，也是 Widget 进程里读不到 App 偏好时的兜底。
-    static var active: Palette = .lime
+    /// 默认 `.dusk`（5.7.0 redesign）：日晕金 + 深靛夜空，来自产品自身的材料。
+    /// 老用户主动选过的主题照常保留（见 AppearanceStore）；只有从未选过的走新默认。
+    static var active: Palette = .dusk
 
     // MARK: - 背景三层（同一条规则：越靠前越亮，浅色下越靠前越白）
 
@@ -409,17 +411,17 @@ extension Theme {
 
 extension Theme.Palette {
 
-    /// 八套主题（设置页按这个顺序排，`ForEach` 直接吃数组 —— 加一套不用动 UI）
+    /// 九套主题（设置页按这个顺序排，`ForEach` 直接吃数组 —— 加一套不用动 UI）
     ///
     /// 顺序即叙述：前五套是 1.0 起的老面孔，后三套是"看腻了彩色"之后补的 ——
     /// 极光（冷青绿）/ 余烬（砖红）/ 石墨（中性银），色相与明度都刻意和前五套错开。
     static let all: [Theme.Palette] = [
-        .lime, .violet, .sand, .ocean, .sakura, .aurora, .ember, .graphite
+        .dusk, .lime, .violet, .sand, .ocean, .sakura, .aurora, .ember, .graphite
     ]
 
     /// 按 id 取主题；认不出就退回青柠（**绝不崩**，旧版本写入的 id 也能开机）
     static func with(id: String) -> Theme.Palette {
-        all.first { $0.id == id } ?? .lime
+        all.first { $0.id == id } ?? .dusk
     }
 }
 
@@ -440,6 +442,27 @@ extension Theme.Palette {
         return Color(hex: lime.dark)
         #endif
     }
+
+    /// ★ 暮金 —— 5.7.0 新默认。日晕金取自太阳本身，深靛夜空是它唯一的背景。
+    ///
+    /// 对比度自查（WCAG 相对亮度）：深 `#F2C879` 面 + `#1A1206` 字 ≈ 9.6:1；
+    /// 浅 `#A8761C` 面 + `#FFFFFF` 字 ≈ 5.1:1。金面一律配深字 ——
+    /// 白字在金面上只有约 2:1，会糊，这是 sakura / ember 用过的同一条道理。
+    static let dusk = Theme.Palette(
+        id: "dusk", name: "暮金",
+        bgBase: ("#0A0E1A", "#F5F2EA"),
+        bgRaise: ("#121829", "#FAF8F2"),
+        bgDeep: ("#080B15", "#E9E3D6"),
+        bgElevated: ("#1A2235", "#FFFFFF"),
+        scrim: (("#000000", 0.50), ("#1A1206", 0.28)),
+        lime: ("#F2C879", "#A8761C"),
+        limeInk: ("#F2C879", "#8A5F14"),
+        onLime: ("#1A1206", "#FFFFFF"),
+        limeBright: ("#FFE0A3", "#D9A94F"),
+        limeDeep: ("#C99B45", "#7A5210"),
+        limeGlow: (("#F2C879", 0.38), ("#A8761C", 0.16)),
+        glassTint: (("#F2C879", 0.10), ("#A8761C", 0.08))
+    )
 
     /// 0 青柠 —— 品牌原色，V2 至今的基线（深色值逐字沿用，零像素变化）
     static let lime = Theme.Palette(

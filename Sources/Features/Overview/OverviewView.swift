@@ -320,7 +320,11 @@ struct OverviewView: View {
     private var topGroup: some View {
         VStack(alignment: .leading, spacing: Spacing.cardGap) {
             topPair
+                // 5.7.0 redesign：首屏卡片依次入场（每张 60ms 错开）。
+                // reduceMotion 时位移/缩放/stagger 全归零，卡片同时淡入。
+                .staggerIn(index: 0)
             AIOutfitCard()
+                .staggerIn(index: 1)
         }
     }
 

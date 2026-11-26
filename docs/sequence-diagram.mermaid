@@ -1,52 +1,48 @@
-%% iPad 版式重做（3.8.0）· 关键调用流
-%% 来源：docs/design/2026-10-31-ipad-layout-redo.md 附录 B
+%% SkyApp · 叠加式 HIG 合规 UI 迭代（HIG-ITER-1）· 关键调用流
+%% 架构师：高见远(Gao) · 本次覆盖版本；旧 iPad 版式图见 *.ipad-layout.mermaid.bak
 sequenceDiagram
     autonumber
     participant App as FFWangApp
-    participant Scope as LayoutMetricsScope
-    participant Geo as GeometryReader(.background)
+    participant Scope as HIGChromeScope
     participant Env as EnvironmentValues
     participant Root as RootView
-    participant Strip as WideTabStrip
-    participant Bar as FloatingTabBar
-    participant Page as 一级页(View)
-    participant M as LayoutMetrics
+    participant Cover as fullScreenCover(既有入口)
+    participant Img as ImmersiveGestureModifier
+    participant Sys as iOS 系统
+    participant DS as DesignSystem 组件
+    participant Glass as GlassCompat
 
-    App->>Scope: body
-    Scope->>Geo: .background { Color.clear }
-    Geo->>Geo: onAppear / onChange(proxy.size)
-    Geo-->>Scope: containerSize = (1194, 834)
-    Scope->>M: LayoutMetrics(containerSize, hSizeClass)
-    Scope->>Env: environment(layoutMetrics, M)
-    Env-->>Root: metrics
-
-    Note over Root: widthClass = regularWide<br/>canvasWidth = min(1194-40, 1080) = 1080<br/>pageTier = rail（1080 >= 1040）
-
-    Root->>Root: usesTopTabStrip = (widthClass != .compact) -> true
-    Root->>Strip: safeAreaInset(edge: .top) WideTabStrip
-    Strip-->>Root: 高 44，viewport 700 -> 760
-    Note over Root,Bar: 窄档（320/393）走 safeAreaInset(edge: .bottom) FloatingTabBar，几何不变
-
-    Root->>Page: page(for: tab)
-    Page->>M: railPageWidth / gridPageWidth / railMainWidth / gridColumns
-    M-->>Page: 1080 / 1080 / 680 / 3
-
-    alt pageTier == rail（红石 / 收益 / 简报 / 更多）
-        Page->>Page: HStack(top, 32) 主列.frame(maxWidth 680) + 副列.frame(width 368)
-        Page->>Page: 副列 = 内容 + Spacer(minLength 32) + 最后一组（贴底）
-    else pageTier == grid3（概览 / 文章）
-        Page->>Page: LazyVGrid(3 x GridItem(.flexible(), spacing: 24))
-    else pageTier == grid2（监控 / 攻略 / 问卷结果）
-        Page->>Page: LazyVGrid(2 x GridItem(.flexible(), spacing: 24))
-    else pageTier == single（iPhone / Slide Over / 1024 竖屏）
-        Page->>Page: pageColumn(720 / 640) —— 与 3.7.0 完全一致
+    Note over App,Scope: ① 启动与全局注入（不改任何 task/绑定）
+    App->>Scope: WindowGroup 内 HIGChromeScope { ThemeScope { … RootView … } }
+    Scope->>Env: environment(\.higChrome, 计算自 scenePhase/当前呈现态)
+    Scope->>Root: body
+    Root->>DS: FloatingTabBar / WideTabStrip（既有入口，参数不变）
+    DS->>Glass: glassSurface(.floating, in: Capsule())
+    alt iOS 26
+        Glass->>Sys: .glassEffect(nativeGlass) 系统渲染
+    else iOS 18–25
+        Glass->>Sys: HandGlass(手工配方 + token)
     end
 
-    Page->>M: cardHeight(.hero / .tile / .medium)
-    M-->>Page: 344 / 120 / 168（compact 时为 240 / 96 / 168）
+    Note over Root,Img: ② 进入沉浸页（天光页/看图）—— 纯叠加 defer
+    Root->>Cover: 既有 fullScreenCover(item: showsSkyRoom) present
+    Cover->>Img: SkyRoomView(...).immersiveChrome()
+    Img->>Env: 读 higChrome(.immersive) + layoutMetrics.usesTopTabStrip
+    alt compact（iPhone）
+        Img->>Sys: .defersSystemGestures(on: .bottom)
+        Note right of Sys: 首次上滑仅唤出指示器，二次才返回主屏
+    end
+    Img->>Sys: .persistentSystemOverlays(.hidden) 自动隐藏
+    Sys-->>Img: 系统"可能"不采纳；用户触摸即恢复（HIG 要求）
 
-    Note over Root: 旋转 / 分屏 / Stage Manager 拖宽
-    Geo->>Scope: onChange(proxy.size)（尺寸真变才写）
-    Scope->>M: 重建 LayoutMetrics
-    M-->>Root: pageTier 变化
-    Root->>Page: 切档（rail <-> single），滚动位置由 scrollPositions 保活
+    Note over Img,Env: ③ 回前台/关闭 —— 自动恢复，不留悬挂态
+    Scope->>Scope: scenePhase → .active / 呈现态归 nil
+    Scope->>Env: higChrome 复位 .automatic
+    Img->>Sys: 移除 defer / overlays(.automatic)
+    Cover->>Root: onDismiss（既有闭包，未改动）
+
+    Note over DS: ④ Dynamic Type 与触控（定义层/组件层，零调用点改动）
+    Sys->>Typography: dynamicTypeSize 变大
+    Typography-->>DS: 语义 Font 自动放大（label 逐点基线一致）
+    DS->>DS: DynamicTypeGuard 限制数字/徽标上限，防破版
+    DS->>DS: IconGlassButton 视觉 36 + .tapTarget(44) 透明命中区

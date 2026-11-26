@@ -91,4 +91,25 @@ enum Motion {
     static let shimmer = Animation.linear(duration: 1.4).repeatForever(autoreverses: false)
     /// 沉浸页 chrome 显隐偏好（HIG 迭代 T01，供后续浮层动画复用）
     static let immersiveChrome = Animation.easeInOut(duration: 0.25)
+
+    // MARK: - 5.7.0 redesign 新增（MASTER.md §7）
+
+    /// 太阳下沉 —— The one motion。界面做产品做的事：天光页让天空真的在走。
+    /// 1.2s easeInOut，太阳 y −14 → 0、亮度渐显；环境动作要慢，不能是微交互的节奏。
+    static let sunSink = Animation.easeInOut(duration: 1.2)
+
+    /// 微交互 120ms：开关、图标点按这类即时反馈。
+    static let micro = Animation.spring(response: 0.12, dampingFraction: 0.78)
+
+    /// 卡片依次入场每张卡的间隔（不是 Animation，是延迟量）。
+    static let staggerStep: Double = 0.06
+
+    /// 减弱动态时的统一降级：只留 180ms 的透明度淡入，位移/stagger 全部归零。
+    static let reduced = Animation.easeOut(duration: 0.18)
+
+    /// 按 reduceMotion 选动画：真 → 纯淡入降级；假 → 传入的完整动画。
+    /// 让每个挂载点不必各写一遍 if reduceMotion 分支。
+    static func choose(_ full: Animation, reduced: Bool) -> Animation {
+        reduced ? Self.reduced : full
+    }
 }

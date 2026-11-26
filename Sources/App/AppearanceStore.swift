@@ -90,8 +90,9 @@ final class AppearanceStore: ObservableObject {
         // 存值损坏（手改 plist / 老版本枚举名变了）→ 回落到"跟随系统"，绝不让 App 起不来
         self.stored = AppearanceMode(rawValue: raw) ?? .system
 
-        // 配色：同一个思路，认不出的 id 一律退回青柠
-        let savedTheme = defaults.string(forKey: Self.themeStorageKey) ?? Theme.Palette.lime.id
+        // 配色：5.7.0 redesign 后，从未主动选过主题的（含老用户与全新安装）走新默认暮金；
+        // 主动选过的照常读回自己的选择 —— 绝不擅自覆盖用户偏好。
+        let savedTheme = defaults.string(forKey: Self.themeStorageKey) ?? Theme.Palette.dusk.id
         self.themeId = Theme.Palette.with(id: savedTheme).id
         // 启动即生效：不等设置页被打开，首帧就是用户上次选的那套
         Theme.active = Theme.Palette.with(id: savedTheme)

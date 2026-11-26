@@ -1064,6 +1064,10 @@ struct SkyRoomView: View {
             parallax(sky: sky, phase: phase, frame: frame, parallaxY: parallaxY, haze: haze, blocked: blocked)
             // ③ 太阳：三层结构，画在山脊与地面之前，随滚动沉向地平线
             sun(sky: sky, phase: phase, frame: frame, now: now, haze: haze)
+                // 5.7.0 redesign：The one motion —— 太阳沿地平线下沉入场（1.2s）。
+                // 与下面的滚动视差 offset 叠加但互不干扰：这里是一次性入场，那里是持续滚动。
+                // reduceMotion 时太阳直接在位，只留 180ms 淡入。
+                .sunSink()
                 .offset(y: parallaxY * SkyRoomMetrics.Scroll.sunDepth)
             // ④ 地面 + 地平线光带 + 暖色辉光 + 竖纹理（地面不沉：它是"脚下"）
             ground(sky: sky, phase: phase, frame: frame)

@@ -1,0 +1,154 @@
+%% iPad 版式重做（3.8.0）· 类型与接口
+%% 来源：docs/design/2026-10-31-ipad-layout-redo.md 附录 A
+classDiagram
+  direction LR
+
+  class LayoutMetrics {
+    <<struct, Equatable>>
+    +containerSize: CGSize
+    +horizontalSizeClass: UserInterfaceSizeClass?
+    +static compact: LayoutMetrics
+    +widthClass: WidthClass
+    +canvasWidth: CGFloat
+    +pageTier: PageTier
+    +usesRail: Bool
+    +usesTopTabStrip: Bool
+    +railMainWidth: CGFloat
+    +gridColumns: Int
+    +gridColumnWidth: CGFloat
+    +contentWidth: CGFloat
+    +readingWidth: CGFloat
+    +formWidth: CGFloat
+    +cardHeight(tier: CardTier) CGFloat
+    +tabBarWidth: CGFloat
+    +allowsRailBleed: Bool
+  }
+
+  class WidthClass {
+    <<enum>>
+    compact
+    regularNarrow
+    regularWide
+  }
+
+  class PageTier {
+    <<enum>>
+    single
+    grid2
+    grid3
+    rail
+  }
+
+  class Layout {
+    <<enum, static>>
+    +canvasMaxWidth = 1080
+    +gridColumnWidth = 344
+    +gridGutter = 24
+    +mainColumnMaxWidth = 680
+    +sideColumnWidth = 368
+    +columnGap = 32
+    +grid2MinCanvas = 760
+    +grid3MinCanvas = 1020
+    +railMinCanvas = 1040
+    +tabStripHeight = 44
+    +contentMaxWidth = 720
+    +readingMaxWidth = 640
+    +formMaxWidth = 640
+    +tabBarMaxWidth = 480
+  }
+
+  class CardTier {
+    <<enum>>
+    hero
+    medium
+    tile
+    rail
+    +height: CGFloat
+    +wideHeight: CGFloat
+    +static railWidth = 140
+  }
+
+  class Typography {
+    <<enum, static>>
+    +display: Font
+    +metricL: Font
+    +metricXL: Font
+    +titleL: Font
+    +body: Font
+  }
+
+  class LayoutMetricsScope {
+    <<View>>
+    -horizontalSizeClass
+    -containerSize: CGSize
+    +init(content)
+    +body: some View
+  }
+
+  class RootView {
+    <<View>>
+    -tab: AppTab
+    -openedArticle: ArticleSummary?
+    -scrollLight: ScrollLightStore
+    -showsSettings: Bool
+    +body: some View
+    -tabSelection() Binding
+    -page(for: AppTab) some View
+  }
+
+  class WideTabStrip {
+    <<View>>
+    +tabs: [TabSpec]
+    +selection: Binding
+    -knobNamespace
+    +body: some View
+    -tabItem(TabSpec) some View
+  }
+
+  class FloatingTabBar {
+    <<View>>
+    +tabs: [TabSpec]
+    +selection: Binding
+    +body: some View
+  }
+
+  class OverviewPage {
+    <<View>>
+    +body: some View
+    -topPair: some View
+    -continueReadingSection: some View
+  }
+
+  class RailPage {
+    <<View>>
+    +body: some View
+    -pageGroups: some View
+    -sideColumn: some View
+  }
+
+  class GridPage {
+    <<View>>
+    +body: some View
+    -gridBody: some View
+  }
+
+  class RockTodayColumn {
+    <<View>>
+    +body: some View
+  }
+
+  LayoutMetrics --> WidthClass
+  LayoutMetrics --> PageTier
+  LayoutMetrics --> CardTier : cardHeight()
+  LayoutMetrics ..> Layout : 读常量
+  CardTier ..> Layout : railWidth
+  Typography ..> LayoutMetrics : 宽档取 metricXL
+  LayoutMetricsScope --> LayoutMetrics : 构造并注入
+  RootView --> LayoutMetrics : Environment
+  RootView --> WideTabStrip : usesTopTabStrip
+  RootView --> FloatingTabBar : 否则
+  WideTabStrip ..> TabSpec : 复用
+  OverviewPage --> LayoutMetrics
+  RailPage --> LayoutMetrics
+  GridPage --> LayoutMetrics
+  RailPage --> RockTodayColumn
