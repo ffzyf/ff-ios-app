@@ -103,6 +103,8 @@ enum Motion {
 
     /// 卡片依次入场每张卡的间隔（不是 Animation，是延迟量）。
     static let staggerStep: Double = 0.06
+    /// 卡片依次入场的弹簧本身（具名 token，闸门可校验；不要写 Motion.spring）。
+    static let staggerIn = Animation.spring(response: 0.35, dampingFraction: 0.82)
 
     /// 减弱动态时的统一降级：只留 180ms 的透明度淡入，位移/stagger 全部归零。
     static let reduced = Animation.easeOut(duration: 0.18)

@@ -48,7 +48,7 @@ struct StaggerInModifier: ViewModifier {
             .offset(y: reduceMotion ? 0 : (started ? 0 : 8))
             .animation(
                 Motion.choose(
-                    Motion.spring(response: 0.35, dampingFraction: 0.82)
+                    Motion.staggerIn
                         .delay(reduceMotion ? 0 : Double(index) * Motion.staggerStep),
                     reduced: reduceMotion
                 ),
