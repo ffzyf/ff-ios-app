@@ -16,11 +16,12 @@ import Foundation
 struct RuleWeekdayTable: View {
     let rules: RedstoneRules?
 
-    /// 内置兜底时刻（与服务端 `rules.times` 同值，PRD P05 要求本地有文案）
+    /// 内置兜底时刻（断网时用）。5.7.1 起展示 12-03 更新后的完整 4 场：
+    /// 周六 +19:00、周五 +21:00、周日 +21:00（与服务端 newSessions.full 同值）。
     static let fallbackTimes: [String: String] = [
-        "周五": "11:08 / 17:08 / 23:08",
-        "周六": "10:08 / 14:08 / 22:08",
-        "周日": "07:08 / 13:08 / 19:08"
+        "周五": "11:08 / 17:08 / 21:00 / 23:08",
+        "周六": "10:08 / 14:08 / 19:00 / 22:08",
+        "周日": "07:08 / 13:08 / 19:08 / 21:00"
     ]
 
     private let order = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -35,6 +36,23 @@ struct RuleWeekdayTable: View {
             Text("本周星期对应时刻")
                 .font(Typography.titleS)
                 .foregroundStyle(Theme.textPrimary)
+            if let news = rules?.newSessions, !news.effectiveFrom.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(news.label + "：周六 +19:00、周五 +21:00、周日 +21:00")
+                        .font(Typography.captionXS)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.limeInk)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: Radius.badge + 2, style: .continuous)
+                        .fill(Theme.glassTintLime.opacity(0.20))
+                }
+            }
             ForEach(rows) { row in
                 HStack(spacing: 8) {
                     Text(row.weekday)
@@ -57,7 +75,9 @@ struct RuleWeekdayTable: View {
 
     private var rows: [WeekdayRow] {
         let source: [String: String] = {
-            if let times = rules?.times, !times.isEmpty { return times }
+            // 优先用服务端下发的「12-03 生效后完整时刻」（4 场）；
+            // 老服务端无 newSessions 时退回本地兜底（同样已是 4 场文案）。
+            if let full = rules?.newSessions?.full, !full.isEmpty { return full }
             return RuleWeekdayTable.fallbackTimes
         }()
         return order.map { weekday in

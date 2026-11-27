@@ -383,7 +383,7 @@ struct RedstoneRules: Codable, Sendable, Equatable {
     let version: String
     /// 日期规律的一句话描述
     let date: String
-    /// `{"周六": "10:08 / 14:08 / 22:08", …}`
+    /// `{"周六": "10:08 / 14:08 / 22:08", …}`（基础时段；12-03 起的新时刻见 newSessions.full）
     let times: [String: String]
     /// 大池 5 个点位
     let big5: [String]
@@ -397,6 +397,8 @@ struct RedstoneRules: Codable, Sendable, Equatable {
     let anchorCount: Int
     /// `{"2027-02-07": "云野·圣岛"}` —— 玩家校准过的种子
     let seeds: [String: String]
+    /// 新增场次规则（12-03 更新后生效）。老服务端无此键 → nil，页面不显示提示（5.7.1）。
+    let newSessions: RedstoneNewSessions?
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -410,6 +412,7 @@ struct RedstoneRules: Codable, Sendable, Equatable {
         case monthEquiv
         case anchorCount
         case seeds
+        case newSessions
     }
 
     init(from decoder: Decoder) throws {
@@ -425,6 +428,7 @@ struct RedstoneRules: Codable, Sendable, Equatable {
         monthEquiv = (try? container.decode([String].self, forKey: .monthEquiv)) ?? []
         anchorCount = (try? container.decode(Int.self, forKey: .anchorCount)) ?? 0
         seeds = (try? container.decode([String: String].self, forKey: .seeds)) ?? [:]
+        newSessions = try? container.decode(RedstoneNewSessions.self, forKey: .newSessions)
     }
 
     init(
@@ -438,7 +442,8 @@ struct RedstoneRules: Codable, Sendable, Equatable {
         sundayRing: String,
         monthEquiv: [String],
         anchorCount: Int,
-        seeds: [String: String]
+        seeds: [String: String],
+        newSessions: RedstoneNewSessions? = nil
     ) {
         self.version = version
         self.date = date
@@ -451,6 +456,7 @@ struct RedstoneRules: Codable, Sendable, Equatable {
         self.monthEquiv = monthEquiv
         self.anchorCount = anchorCount
         self.seeds = seeds
+        self.newSessions = newSessions
     }
 
     /// 倍率 → 查表键。
@@ -465,5 +471,36 @@ struct RedstoneRules: Codable, Sendable, Equatable {
     static func rateText(_ rate: Double?) -> String? {
         guard let rate = rate else { return nil }
         return String(format: "%.1f", rate) + "×"
+    }
+}
+
+/// 12-03 更新后新增的场次规则（规律页用来显示「4 场」时刻表与生效提示）。
+///
+/// 字段逐字对齐服务端 `ruleSummary().newSessions`：
+///   effectiveFrom = "2026-12-03"；extra = 各星期新增时段；full = 生效后完整时段。
+/// 老服务端没有这个键时 `RedstoneRules.newSessions` 为 nil，页面退回基础 3 场展示。
+struct RedstoneNewSessions: Codable, Sendable, Equatable {
+    let effectiveFrom: String
+    let label: String
+    let extra: [String: String]
+    let full: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case effectiveFrom, label, extra, full
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        effectiveFrom = (try? container.decode(String.self, forKey: .effectiveFrom)) ?? ""
+        label = (try? container.decode(String.self, forKey: .label)) ?? ""
+        extra = (try? container.decode([String: String].self, forKey: .extra)) ?? [:]
+        full = (try? container.decode([String: String].self, forKey: .full)) ?? [:]
+    }
+
+    init(effectiveFrom: String, label: String, extra: [String: String], full: [String: String]) {
+        self.effectiveFrom = effectiveFrom
+        self.label = label
+        self.extra = extra
+        self.full = full
     }
 }

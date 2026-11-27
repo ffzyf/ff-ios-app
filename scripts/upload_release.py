@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""上传 ipa 到云控并发布为 latest。
+"""上传安装包（ios .ipa / android .apk）到云控并发布为 latest。
 
 用法：
-    python3 upload_release.py --ipa <path> --version 3.11.0 --build 19 --notes <file> --token <RELEASE_TOKEN>
+    python3 upload_release.py --ipa SkyApp.ipa --version 3.11.0 --build 19 --notes notes.txt --token "$RELEASE_TOKEN"
+    python3 upload_release.py --ipa SkyApp.apk --version 1.0.0 --build 1 --notes notes.txt --token "$TOKEN" --platform android
+
+    --platform 缺省 ios（老 CI 零改动）；传 android 时走安卓独立通道。
+    包名后缀按平台自动补：ios→.ipa / android→.apk。
 
 流程对齐 RELEASE.md：
-    1. POST /api/app/version/upload  （raw body + x-file-name）→ 拿到 KV key
-    2. POST /api/app/version         （JSON: build/version/notes/ipaKey）→ 设为 latest
+    1. POST /api/app/version/upload  （raw body + x-file-name + ?platform=）→ 拿到 KV key
+    2. POST /api/app/version         （JSON: build/version/notes/ipaKey/platform）→ 设为 latest
+    3. GET  /api/app/version?platform=  回读校验
 """
 import argparse
 import hashlib
@@ -39,23 +44,27 @@ def call(path, data=None, headers=None, method='POST', timeout=120):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--ipa', required=True)
+    ap.add_argument('--ipa', required=True, help='安装包路径（.ipa 或 .apk）')
     ap.add_argument('--version', required=True)
     ap.add_argument('--build', required=True, type=int)
     ap.add_argument('--notes', required=True, help='更新说明文件路径')
     ap.add_argument('--token', required=True)
+    ap.add_argument('--platform', choices=['ios', 'android'], default='ios',
+                    help='云控通道，缺省 ios；安卓传 android')
     args = ap.parse_args()
 
     if not os.path.isfile(args.ipa):
-        sys.exit('ipa 不存在: %s' % args.ipa)
+        sys.exit('安装包不存在: %s' % args.ipa)
     raw = open(args.ipa, 'rb').read()
     size = len(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    key_name = '%s-%d.ipa' % (args.version, args.build)
-    print('本地: %s  %.2f MB  sha256=%s' % (key_name, size / 1048576.0, digest[:16]))
+    ext = 'apk' if args.platform == 'android' else 'ipa'
+    key_name = '%s-%d.%s' % (args.version, args.build, ext)
+    print('本地: %s [%s]  %.2f MB  sha256=%s' % (
+        key_name, args.platform, size / 1048576.0, digest[:16]))
 
-    # 1. 上传字节
-    st, r = call('/api/app/version/upload', data=raw, headers={
+    # 1. 上传字节（platform 走 query；服务端也会从 .apk 后缀自动识别，双保险）
+    st, r = call('/api/app/version/upload?platform=' + args.platform, data=raw, headers={
         'x-release-token': args.token,
         'x-file-name': key_name,
         'Content-Type': 'application/octet-stream',
@@ -75,7 +84,8 @@ def main():
         'version': args.version,
         'notes': notes,
         'ipaKey': kv_key,
-        'channel': 'ios',
+        'platform': args.platform,
+        'channel': args.platform,
     }, ensure_ascii=False).encode('utf-8')
     st, r2 = call('/api/app/version', data=payload, headers={
         'x-release-token': args.token,
@@ -85,11 +95,13 @@ def main():
     if st != 200 or not isinstance(r2, dict) or not r2.get('ok'):
         sys.exit('发布失败')
 
-    # 3. 回读校验
-    st, latest = call('/api/app/version', method='GET', timeout=30)
+    # 3. 回读校验（带 platform，确认写进了正确的通道）
+    st, latest = call('/api/app/version?platform=' + args.platform, method='GET', timeout=30)
     if isinstance(latest, dict):
         lt = latest.get('latest') or {}
-        print('线上 latest: build=%s version=%s ipa=%s' % (lt.get('build'), lt.get('version'), lt.get('ipaKey') or lt.get('key')))
+        print('线上 latest [%s]: build=%s version=%s ipa=%s' % (
+            latest.get('platform') or args.platform,
+            lt.get('build'), lt.get('version'), lt.get('ipaKey') or lt.get('key')))
     print('DONE')
 
 
